@@ -21,6 +21,12 @@ dependencies:
   # Geracao de UUIDs para IDs das entidades
   uuid: ^4.5.1
 
+  # Geolocalização — posição atual do dispositivo
+  geolocator: ^13.0.2
+
+  # Notificações locais (disparo de triggers ao entrar no geofence)
+  flutter_local_notifications: ^18.0.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

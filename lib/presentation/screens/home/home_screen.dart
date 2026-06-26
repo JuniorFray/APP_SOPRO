@@ -1,5 +1,6 @@
 // Tela principal do Sopro — lista de ambientes cadastrados pelo usuário.
-// Sprint 2: consome dados reais do banco via Riverpod + Drift.
+// Sprint 3: monitoramento de geofences em foreground via geolocator.
+// Background GPS vem no Sprint 5 com flutter_background_service.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,7 +16,6 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Observa a lista de environments em tempo real
     final environmentsAsync = ref.watch(environmentsProvider);
 
     return Scaffold(
@@ -62,7 +62,6 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-// Estado vazio — exibido quando não há nenhum ambiente cadastrado
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
 

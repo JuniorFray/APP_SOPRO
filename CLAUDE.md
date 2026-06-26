@@ -42,12 +42,13 @@ SERVICE_UUID: 550e8400-e29b-41d4-a716-446655440000
 6. Privacidade antes de feature
 
 ## Sprint Atual
-Sprint: 2 - Camada de dados completa - CONCLUIDO
-Entregue: Contratos de repositório (domain), implementações (data), providers Riverpod, Home consumindo banco real com lista + empty state + dialog de criação
+Sprint: 3 - Geolocalização - CONCLUIDO
+Entregue: geolocator (stream de posição), GeofenceManager com lógica ENTER/EXIT manual, NotificationService (flutter_local_notifications), FireTriggersUseCase, AppInitializer
+Nota: geofence_service descontinuado — geofencing manual com geolocator em foreground. Background GPS planejado para Sprint 5.
 
 ## Proximo Sprint
-Sprint: 3 - Geolocalização
-Objetivo: geolocator + geofence_service, detectar entrada/saída de Environments cadastrados, disparar TriggerEntity ativa via flutter_local_notifications
+Sprint: 4 - Tela de Ambiente + Triggers
+Objetivo: Tela de detalhe do Environment, listagem e criação de Triggers, toggle ativo/inativo, vincular ao GeofenceManager via reload()
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

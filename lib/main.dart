@@ -1,7 +1,7 @@
 // Entry Point do App Sopro.
-// Inicializa o Flutter, envolve o app com ProviderScope (Riverpod)
-// e define as rotas de navegação.
-// O banco de dados é criado de forma lazy pelo databaseProvider no primeiro acesso.
+// O ProviderScope envolve todo o app — obrigatório para o Riverpod.
+// O AppInitializer inicializa serviços assíncronos (notificações, GPS)
+// dentro do escopo dos providers, sem necessidade de ProviderContainer manual.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,18 +10,23 @@ import 'core/constants/strings.dart';
 import 'core/theme/app_theme.dart';
 import 'presentation/screens/home/home_screen.dart';
 import 'presentation/screens/onboarding/onboarding_screen.dart';
+import 'presentation/widgets/app_initializer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // TODO Sprint 5: await NotificationService.initialize();
-  // TODO Sprint 6: await BLEService.initialize();
+  // TODO Sprint 6: await BLEService.preinitialize();
 
-  runApp(const ProviderScope(child: SoproApp()));
+  runApp(
+    const ProviderScope(
+      child: AppInitializer(
+        child: SoproApp(),
+      ),
+    ),
+  );
 }
 
 // Widget raiz do Sopro.
-// ProviderScope é obrigatório para o Riverpod funcionar.
 class SoproApp extends ConsumerWidget {
   const SoproApp({super.key});
 

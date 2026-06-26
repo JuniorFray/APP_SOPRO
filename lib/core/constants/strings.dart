@@ -36,4 +36,5 @@ class AppStrings {
       'Excluir este ambiente e todos os seus gatilhos?';
   static const triggers = 'gatilhos';
   static const noTriggers = 'sem gatilhos';
+
 }
