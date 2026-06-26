@@ -11,10 +11,24 @@ dependencies:
     sdk: flutter
   flutter_riverpod: ^2.6.1
 
+  # Banco de dados local criptografado
+  drift: ^2.22.1
+  drift_flutter: ^0.2.4
+
+  # Necessario para localizar o diretorio do banco no dispositivo
+  path_provider: ^2.1.5
+
+  # Geracao de UUIDs para IDs das entidades
+  uuid: ^4.5.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+
+  # Gerador de codigo do Drift (tabelas, DAOs, etc.)
+  drift_dev: ^2.22.1
+  build_runner: ^2.4.13
 
 flutter:
   uses-material-design: true
