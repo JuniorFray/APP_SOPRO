@@ -1,4 +1,4 @@
-﻿name: sopro
+name: sopro
 description: "O sussurro certo. No lugar certo."
 publish_to: "none"
 version: 0.1.0+1
@@ -16,7 +16,7 @@ dependencies:
   sqlcipher_flutter_libs: ^0.5.4
   sqlite3_flutter_libs: ^0.5.20
   geolocator: ^13.0.1
-  geofence_service: ^5.0.2
+  geofence_service: ^6.0.0+1
   flutter_local_notifications: ^17.2.2
   flutter_background_service: ^5.0.10
   flutter_blue_plus: ^1.33.1
