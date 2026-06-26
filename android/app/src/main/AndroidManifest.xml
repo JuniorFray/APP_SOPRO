@@ -1,5 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Acesso à internet para carregar tiles do OpenStreetMap -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Localização precisa em primeiro plano -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>

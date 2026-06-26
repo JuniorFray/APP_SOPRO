@@ -9,7 +9,7 @@ import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/environment_providers.dart';
 import '../../widgets/environment_card.dart';
-import 'add_environment_dialog.dart';
+import '../environment/add_environment_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -49,9 +49,9 @@ class HomeScreen extends ConsumerWidget {
               ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => showDialog(
-          context: context,
-          builder: (_) => const AddEnvironmentDialog(),
+        onPressed: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const AddEnvironmentScreen()),
         ),
         backgroundColor: AppTheme.accent,
         foregroundColor: Colors.white,

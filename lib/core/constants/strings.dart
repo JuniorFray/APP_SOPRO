@@ -37,4 +37,9 @@ class AppStrings {
   static const triggers = 'gatilhos';
   static const noTriggers = 'sem gatilhos';
 
+  // Mapa de seleção de local
+  static const mapTapInstruction = 'Toque no mapa para definir o local';
+  static const useCurrentLocation = 'Usar localização atual';
+  static const locationComingSoon =
+      'GPS será habilitado no Sprint 5 (aguarda upgrade do Flutter SDK)';
 }

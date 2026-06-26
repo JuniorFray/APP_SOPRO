@@ -1,4 +1,8 @@
 import 'package:flutter/foundation.dart';
+// latlong2 já está no pubspec (Sprint 4). Sprint 5 usa:
+// import 'package:latlong2/latlong.dart';
+// const _dist = Distance();
+// final m = _dist.as(LengthUnit.Meter, LatLng(posLat, posLng), LatLng(env.latitude, env.longitude));
 
 import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/usecases/fire_triggers_use_case.dart';
