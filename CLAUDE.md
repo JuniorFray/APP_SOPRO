@@ -42,12 +42,12 @@ SERVICE_UUID: 550e8400-e29b-41d4-a716-446655440000
 6. Privacidade antes de feature
 
 ## Sprint Atual
-Sprint: 1 - Banco de dados - CONCLUIDO
-Entregue: Drift + SQLite, tabelas Trigger/Environment/ContextCard, DAOs com CRUD + streams reativos
+Sprint: 2 - Camada de dados completa - CONCLUIDO
+Entregue: Contratos de repositório (domain), implementações (data), providers Riverpod, Home consumindo banco real com lista + empty state + dialog de criação
 
 ## Proximo Sprint
-Sprint: 2 - Camada de dados completa
-Objetivo: Repositórios (contratos domain + implementações data), providers Riverpod para o banco, tela Home consumindo dados reais
+Sprint: 3 - Geolocalização
+Objetivo: geolocator + geofence_service, detectar entrada/saída de Environments cadastrados, disparar TriggerEntity ativa via flutter_local_notifications
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

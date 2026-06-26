@@ -1,57 +1,94 @@
-﻿// home_screen.dart - Tela Principal do Sopro
-// Sprint 0: placeholder para o app compilar.
-// Implementacao completa: Sprint 8.
+// Tela principal do Sopro — lista de ambientes cadastrados pelo usuário.
+// Sprint 2: consome dados reais do banco via Riverpod + Drift.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/theme/app_theme.dart';
 
-/// Tela principal do Sopro.
+import '../../../core/constants/strings.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../providers/environment_providers.dart';
+import '../../widgets/environment_card.dart';
+import 'add_environment_dialog.dart';
+
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Observa a lista de environments em tempo real
+    final environmentsAsync = ref.watch(environmentsProvider);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sopro'),
+        title: const Text(AppStrings.homeTitle),
         actions: [
           IconButton(
             onPressed: () {},
             icon: const Icon(Icons.person_outline),
-            tooltip: 'Perfil',
+            tooltip: AppStrings.profileTooltip,
           ),
         ],
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.air, size: 80, color: AppTheme.accent),
-            const SizedBox(height: 24),
-            Text(
-              'Sprint 0 - Setup Completo!',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: AppTheme.success,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '"O sussurro certo. No lugar certo."',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-            ),
-          ],
+      body: environmentsAsync.when(
+        loading: () => const Center(
+          child: CircularProgressIndicator(color: AppTheme.accent),
         ),
+        error: (e, _) => const Center(
+          child: Text(
+            AppStrings.errorGeneric,
+            style: TextStyle(color: AppTheme.textSecondary),
+          ),
+        ),
+        data: (environments) => environments.isEmpty
+            ? const _EmptyState()
+            : ListView.builder(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                itemCount: environments.length,
+                itemBuilder: (_, i) =>
+                    EnvironmentCard(environment: environments[i]),
+              ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {},
+        onPressed: () => showDialog(
+          context: context,
+          builder: (_) => const AddEnvironmentDialog(),
+        ),
         backgroundColor: AppTheme.accent,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
-        label: const Text('Novo Ambiente'),
+        label: const Text(AppStrings.newEnvironment),
+      ),
+    );
+  }
+}
+
+// Estado vazio — exibido quando não há nenhum ambiente cadastrado
+class _EmptyState extends StatelessWidget {
+  const _EmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.air, size: 80, color: AppTheme.accent),
+          SizedBox(height: 24),
+          Text(
+            AppStrings.homeEmptyTitle,
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            AppStrings.homeEmptySubtitle,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppTheme.textSecondary),
+          ),
+        ],
       ),
     );
   }
