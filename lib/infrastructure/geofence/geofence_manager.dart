@@ -1,100 +1,39 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
-import 'package:geolocator/geolocator.dart';
 
 import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/usecases/fire_triggers_use_case.dart';
 
-// Implementação de geofencing usando geolocator com lógica manual de distância.
+// STUB — GPS desativado temporariamente.
 //
-// Por que não geofence_service: o pacote foi descontinuado (v6 removida do pub.dev).
-// O substituto recomendado (geofencing_api) será adotado no Sprint 5 junto com
-// flutter_background_service para suporte a background real.
+// Motivo: geolocator ^13.x é incompatível com Android SDK 36 e
+// geolocator ^14.x requer Dart SDK >=3.10.0 (versão atual: 3.5.4).
 //
-// Sprint 3 foca em foreground: o stream de posição roda enquanto o app está aberto.
+// Plano: Sprint 5 integra flutter_background_service + upgrade do Flutter/Dart SDK,
+// momento em que este stub será substituído pela implementação real com
+// Geolocator.getPositionStream() e lógica ENTER/EXIT por distanceBetween.
+//
+// A interface pública (start, stop, isRunning) já está no formato final
+// para que a troca seja feita sem alterar providers ou callers.
 class GeofenceManager {
+  // Dependências mantidas para não quebrar os providers e facilitar a troca
+  // ignore: unused_field
   final IEnvironmentRepository _envRepo;
+  // ignore: unused_field
   final FireTriggersUseCase _fireTriggers;
 
-  StreamSubscription<Position>? _positionSub;
-
-  // Conjunto de IDs de environments em que o usuário está atualmente dentro.
-  // Evita disparar o evento ENTER repetidamente enquanto permanece no local.
-  final _insideEnvironments = <String>{};
+  bool _running = false;
 
   GeofenceManager(this._envRepo, this._fireTriggers);
 
-  // Verifica e solicita permissões de localização, depois inicia o stream de posição.
   Future<void> start() async {
-    final permission = await _ensurePermission();
-    if (!permission) {
-      debugPrint('[GeofenceManager] Permissão de localização negada.');
-      return;
-    }
-
-    // distanceFilter: só notifica quando o dispositivo mover pelo menos 10m,
-    // reduzindo chamadas ao banco sem sacrificar precisão para raios >= 50m
-    const settings = LocationSettings(
-      accuracy: LocationAccuracy.high,
-      distanceFilter: 10,
-    );
-
-    _positionSub = Geolocator.getPositionStream(locationSettings: settings)
-        .listen(_onPosition, onError: _onError);
+    // GPS desativado neste sprint — não faz nada
+    debugPrint('[GeofenceManager] GPS stub: monitoramento não iniciado (Sprint 5).');
+    _running = false;
   }
 
-  // Para o stream e limpa o estado interno.
   Future<void> stop() async {
-    await _positionSub?.cancel();
-    _positionSub = null;
-    _insideEnvironments.clear();
+    _running = false;
   }
 
-  // Retorna true se o stream de posição está ativo.
-  bool get isRunning => _positionSub != null;
-
-  // Chamado a cada nova posição do GPS.
-  // Compara a distância com cada ambiente e dispara ENTER/EXIT conforme necessário.
-  Future<void> _onPosition(Position position) async {
-    final environments = await _envRepo.getAll();
-
-    for (final env in environments) {
-      final distance = Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        env.latitude,
-        env.longitude,
-      );
-
-      final wasInside = _insideEnvironments.contains(env.id);
-      final isNowInside = distance <= env.radiusMeters;
-
-      if (isNowInside && !wasInside) {
-        // Evento ENTER: usuário acabou de entrar no raio do ambiente
-        _insideEnvironments.add(env.id);
-        await _fireTriggers(env.id, env.name);
-      } else if (!isNowInside && wasInside) {
-        // Evento EXIT: usuário saiu do raio
-        _insideEnvironments.remove(env.id);
-      }
-    }
-  }
-
-  void _onError(Object error) {
-    debugPrint('[GeofenceManager] Erro no stream de posição: $error');
-  }
-
-  // Verifica se temos permissão; solicita se necessário.
-  // Retorna false se negada permanentemente ou o usuário recusar.
-  Future<bool> _ensurePermission() async {
-    var permission = await Geolocator.checkPermission();
-
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-    }
-
-    return permission == LocationPermission.always ||
-        permission == LocationPermission.whileInUse;
-  }
+  bool get isRunning => _running;
 }

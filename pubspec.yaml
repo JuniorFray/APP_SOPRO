@@ -21,8 +21,9 @@ dependencies:
   # Geracao de UUIDs para IDs das entidades
   uuid: ^4.5.1
 
-  # Geolocalização — posição atual do dispositivo
-  geolocator: ^13.0.2
+  # geolocator removido temporariamente: v13.x incompatível com Android SDK 36,
+  # v14.x requer Dart 3.10+ (atual: 3.5.4). GPS real integrado no Sprint 5
+  # junto com flutter_background_service e upgrade do Flutter SDK.
 
   # Notificações locais (disparo de triggers ao entrar no geofence)
   flutter_local_notifications: ^18.0.1
