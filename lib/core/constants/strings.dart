@@ -146,4 +146,30 @@ class AppStrings {
       'Permissão de localização negada. Habilite nas configurações do dispositivo.';
   static const locationError =
       'Não foi possível obter sua localização. Tente novamente.';
+
+  // Tela de Configurações
+  static const settingsTitle          = 'Configurações';
+  static const settingsTooltip        = 'Configurações';
+  static const settingsBleSection     = 'Bluetooth Social';
+  static const settingsBleVisible     = 'Visível para outros';
+  static const settingsBleVisibleDesc =
+      'Outros usuários Sopro próximos podem ver seu cartão via Bluetooth';
+  static const settingsNotifSection     = 'Notificações';
+  static const settingsNotifEnabled     = 'Notificações de gatilhos';
+  static const settingsNotifEnabledDesc =
+      'Receber sussurros ao entrar nos seus ambientes';
+  static const settingsDataSection    = 'Dados';
+  static const settingsMyProfile      = 'Meu perfil';
+  static const settingsMyEncounters   = 'Encontros BLE';
+  static const settingsAboutSection   = 'Sobre o Sopro';
+  static const settingsVersion        = 'Versão';
+  static const settingsAppVersion     = '0.1.0';
+  static const settingsSourceCode     = 'github.com/JuniorFray/APP_SOPRO';
+  static const settingsAppDesc        =
+      '"O sussurro certo. No lugar certo." — memória física contextual, 100% on-device.';
+
+  // Edição de ambiente e gatilho
+  static const editEnvironmentTitle = 'Editar Ambiente';
+  static const editTriggerTitle     = 'Editar Gatilho';
+  static const editTooltip          = 'Editar';
 }

@@ -12,12 +12,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
+import '../../../core/navigation/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../widgets/environment_card.dart';
 import '../ble/people_nearby_screen.dart';
 import '../environment/add_environment_screen.dart';
+import '../settings/settings_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -83,10 +85,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         actions: [
           // Abre a tela de BLE Social ("Pessoas Aqui")
           IconButton(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const PeopleNearbyScreen()),
-            ),
+            onPressed: () => pushScreen(context, const PeopleNearbyScreen()),
             icon: const Icon(Icons.people_outline),
             tooltip: AppStrings.peopleNearby,
           ),
@@ -95,6 +94,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             onPressed: () => Navigator.pushNamed(context, '/profile'),
             icon: const Icon(Icons.person_outline),
             tooltip: AppStrings.profileTooltip,
+          ),
+          // Abre a tela de configurações
+          IconButton(
+            onPressed: () => pushScreen(context, const SettingsScreen()),
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: AppStrings.settingsTooltip,
           ),
         ],
       ),
@@ -118,10 +123,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const AddEnvironmentScreen()),
-        ),
+        onPressed: () => pushScreen(context, const AddEnvironmentScreen()),
         backgroundColor: AppTheme.accent,
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),

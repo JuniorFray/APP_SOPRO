@@ -13,6 +13,7 @@ import 'presentation/screens/environment/environment_loader_screen.dart';
 import 'presentation/screens/home/home_screen.dart';
 import 'presentation/screens/onboarding/onboarding_screen.dart';
 import 'presentation/screens/profile/profile_screen.dart';
+import 'presentation/screens/settings/settings_screen.dart';
 import 'presentation/widgets/app_initializer.dart';
 
 Future<void> main() async {
@@ -53,6 +54,7 @@ class SoproApp extends ConsumerWidget {
         '/home':       (_) => const HomeScreen(),
         '/onboarding': (_) => const OnboardingScreen(),
         '/profile':    (_) => const ProfileScreen(),
+        '/settings':   (_) => const SettingsScreen(),
 
         // Rota de deep-link para notificações de trigger.
         // O argumento é o ID do ambiente (String); a tela carrega a entidade

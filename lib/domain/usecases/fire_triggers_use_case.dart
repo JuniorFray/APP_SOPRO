@@ -5,17 +5,27 @@ import '../../infrastructure/notifications/notification_service.dart';
 // busca todos os triggers ATIVOS daquele ambiente e dispara uma
 // notificação para cada um — o "sussurro" do Sopro.
 //
-// Separado da infra de geofence para que o teste unitário possa verificar
-// o comportamento sem depender de GPS ou notificações reais.
+// [_notificationsEnabled] é um callback avaliado no momento da execução,
+// permitindo que o toggle de notificações nas Configurações desative os
+// sussurros sem recriar o use case.
 class FireTriggersUseCase {
   final ITriggerRepository _triggerRepo;
   final NotificationService _notifications;
+  final bool Function() _notificationsEnabled;
 
-  FireTriggersUseCase(this._triggerRepo, this._notifications);
+  FireTriggersUseCase(
+    this._triggerRepo,
+    this._notifications,
+    this._notificationsEnabled,
+  );
 
   // Dispara as notificações dos triggers ativos do ambiente [environmentId].
   // [environmentName] é exibido no título da notificação como contexto.
+  // Retorna silenciosamente sem fazer nada se notificações estiverem desativadas.
   Future<void> call(String environmentId, String environmentName) async {
+    // Respeita o toggle de notificações configurado pelo usuário
+    if (!_notificationsEnabled()) return;
+
     final triggers = await _triggerRepo.getActiveByEnvironment(environmentId);
 
     for (var i = 0; i < triggers.length; i++) {

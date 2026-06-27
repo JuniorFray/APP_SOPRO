@@ -9,11 +9,19 @@ import '../../../domain/entities/environment_entity.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
 
-// Tela de criação de Environment com mapa interativo.
+// Tela de criação OU edição de Environment com mapa interativo.
+//
+// Modo criação: [environment] == null — campos em branco, submit gera UUID novo.
+// Modo edição:  [environment] != null — campos pré-preenchidos, mapa centrado
+//   na localização existente, submit faz upsert com o mesmo ID (atualização).
+//
 // O usuário toca no mapa para posicionar o pin ou usa "Localização atual"
-// para centrar o mapa na posição GPS real (via MethodChannel nativo — Sprint 5).
+// para centrar o mapa na posição GPS real (via MethodChannel nativo).
 class AddEnvironmentScreen extends ConsumerStatefulWidget {
-  const AddEnvironmentScreen({super.key});
+  // null = criação de novo ambiente; não-null = edição de ambiente existente
+  final EnvironmentEntity? environment;
+
+  const AddEnvironmentScreen({super.key, this.environment});
 
   @override
   ConsumerState<AddEnvironmentScreen> createState() =>
@@ -22,13 +30,12 @@ class AddEnvironmentScreen extends ConsumerStatefulWidget {
 
 class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
-  final _radiusController =
-      TextEditingController(text: AppStrings.radiusDefault);
+  late final TextEditingController _nameController;
+  late final TextEditingController _radiusController;
 
   // Ponto selecionado pelo usuário no mapa; null enquanto nenhum foi tocado
   LatLng? _selectedPoint;
-  bool _isSaving = false;
+  bool _isSaving        = false;
   bool _loadingLocation = false;
 
   // Controlador do mapa — permite mover o centro programaticamente (ex: GPS)
@@ -36,6 +43,33 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
 
   // Centro inicial do mapa: São Paulo (referência urbana padrão para o Brasil)
   static const _defaultCenter = LatLng(-23.5505, -46.6333);
+
+  bool get _isEditing => widget.environment != null;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pré-preenche com os dados do ambiente ao editar; vazio ao criar
+    _nameController = TextEditingController(
+      text: widget.environment?.name ?? '',
+    );
+    _radiusController = TextEditingController(
+      text: widget.environment != null
+          ? widget.environment!.radiusMeters.toStringAsFixed(0)
+          : AppStrings.radiusDefault,
+    );
+    if (widget.environment != null) {
+      // Posiciona o pin na localização existente
+      _selectedPoint = LatLng(
+        widget.environment!.latitude,
+        widget.environment!.longitude,
+      );
+      // Centraliza o mapa após o primeiro frame (MapController não está pronto no initState)
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _mapController.move(_selectedPoint!, 15.0);
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -49,7 +83,12 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
-        title: const Text(AppStrings.addEnvironmentTitle),
+        // Título diferente conforme o modo de uso
+        title: Text(
+          _isEditing
+              ? AppStrings.editEnvironmentTitle
+              : AppStrings.addEnvironmentTitle,
+        ),
         actions: [
           _isSaving
               ? const Padding(
@@ -267,12 +306,15 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     setState(() => _isSaving = true);
 
     final entity = EnvironmentEntity(
-      id: '', // repositório gera o UUID
+      // Ao editar: mantém o ID original para fazer upsert (atualização)
+      // Ao criar: string vazia → repositório gera UUID novo
+      id: widget.environment?.id ?? '',
       name: _nameController.text.trim(),
       latitude: _selectedPoint!.latitude,
       longitude: _selectedPoint!.longitude,
       radiusMeters: double.parse(_radiusController.text),
-      createdAt: DateTime.now(),
+      // Ao editar: preserva a data de criação original
+      createdAt: widget.environment?.createdAt ?? DateTime.now(),
     );
 
     await ref.read(environmentRepositoryProvider).save(entity);

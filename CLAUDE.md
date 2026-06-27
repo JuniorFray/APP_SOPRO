@@ -74,39 +74,56 @@ Entregue:
   apenas se onboarding_done=true (evita notificacao persistente no 1o acesso).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 10 - Triggers em Segundo Plano - CONCLUIDO
 Entregue:
-- NotificationService: showTrigger() agora aceita payload (environmentId)
-  passado ao plugin via flutter_local_notifications para deep-link.
-- NotificationService: static _onTap callback registrado via setOnTapCallback().
-  onDidReceiveNotificationResponse chama _onTap(payload) ao toque na notificacao.
-- NotificationService: checkLaunchFromNotification() detecta cold start
-  (app reaberto pelo toque, processo estava encerrado).
+- NotificationService: showTrigger() com payload (environmentId) para deep-link.
+- NotificationService: static _onTap callback + checkLaunchFromNotification().
 - FireTriggersUseCase: passa environmentId como payload em cada showTrigger().
-- lib/core/navigation/app_router.dart: GlobalKey<NavigatorState> navigatorKey
-  para navegar de fora da arvore de widgets.
-- MaterialApp.navigatorKey = navigatorKey (em main.dart).
-- Rota /environment adicionada em main.dart; argumento = environmentId (String).
-- EnvironmentLoaderScreen: carrega EnvironmentEntity pelo ID via
-  environmentByIdProvider e exibe EnvironmentDetailScreen. Se ID inexistente,
-  volta para a tela anterior com pop().
-- AppInitializer: sequencia de _init() atualizada:
-  1. setOnTapCallback(_openEnvironment) antes de initialize()
-  2. initialize() — registra handler de toque e cria canais
-  3. checkLaunchFromNotification() — cold start navigates via postFrameCallback
-  4. BackgroundServiceManager.start() se onboarding_done=true
-- Fluxo completo: entra no geofence -> FireTriggersUseCase -> showTrigger()
-  com payload -> usuario toca -> _onTap -> navigatorKey.pushNamed('/environment')
-  -> EnvironmentLoaderScreen -> EnvironmentDetailScreen.
-- Funciona com app minimizado (foreground service mantem processo vivo,
-  main engine continua rodando, GPS EventChannel continua disparando).
+- lib/core/navigation/app_router.dart: GlobalKey<NavigatorState> navigatorKey.
+- Rota /environment em main.dart; EnvironmentLoaderScreen para deep-link.
+- AppInitializer: sequencia _init() com setOnTapCallback -> initialize()
+  -> checkLaunchFromNotification -> BackgroundServiceManager.start().
+- Funciona com app minimizado (foreground service ativo).
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Sprint Atual
+Sprint: 11 - Configuracoes e UX Polish - CONCLUIDO
+Entregue:
+- SettingsScreen (lib/presentation/screens/settings/settings_screen.dart):
+  toggle BLE visivel/invisivel (bleVisibleProvider), toggle notificacoes
+  (notificationsEnabledProvider + SharedPreferences), navegacao para perfil
+  e encontros BLE, secao "Sobre" com versao (0.1.0) e URL do repositorio.
+- notificationsEnabledProvider (settings_providers.dart): StateProvider<bool>
+  persistido em SharedPreferences 'notifications_enabled'.
+- FireTriggersUseCase: aceita bool Function() _notificationsEnabled — callback
+  avaliado no momento do disparo, respeitando o toggle sem recriar o provider.
+- location_providers.dart: passa () => ref.read(notificationsEnabledProvider)
+  ao FireTriggersUseCase; importa settings_providers.dart.
+- AppInitializer: carrega 'notifications_enabled' de SharedPreferences no _init()
+  e restaura notificationsEnabledProvider antes de iniciar o app.
+- pushScreen<T>() em app_router.dart: navegacao com slide + fade (280 ms),
+  substitui MaterialPageRoute em todas as telas.
+- AddEnvironmentScreen: aceita EnvironmentEntity? environment — modo edicao com
+  pre-preenchimento de campos e centralizacao do mapa na posicao existente.
+- EnvironmentDetailScreen: botao de editar ambiente no AppBar (pushScreen para
+  AddEnvironmentScreen com ambiente atual); observa environmentByIdProvider
+  (stream) para refletir edicoes sem recarregar; _TriggerTile com botao de
+  editar (pencil icon) + HapticFeedback.mediumImpact() ao ativar/desativar.
+- _TriggerSheet (renomeado de _AddTriggerSheet): aceita TriggerEntity?
+  existingTrigger para modo edicao com pre-preenchimento.
+- environmentByIdProvider: atualizado de async* generator para stream.map()
+  sobre watchAll() — atualiza automaticamente ao editar ambiente.
+- HomeScreen: icone de configuracoes no AppBar; usa pushScreen para todas as
+  navegacoes push; importa SettingsScreen.
+- EnvironmentCard: usa pushScreen para navegar ao EnvironmentDetailScreen.
+- main.dart: rota /settings adicionada (SettingsScreen).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
 ## Proximo Sprint
-Sprint: 11 - Configuracoes + UX polish
-Possivelmente: tela de configuracoes (toggle background service, limpar dados),
-tema claro/escuro, exportacao de dados, widget de ambiente na home melhorado.
+Sprint: 12 - Polimento avanado e exportacao
+Possivelmente: tema claro/escuro, exportacao de dados, estatisticas de uso,
+widget Android de ambiente na home, icone de categoria para ambientes.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

@@ -6,6 +6,7 @@ import '../../core/navigation/app_router.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/notifications/notification_service.dart';
 import '../providers/location_providers.dart';
+import '../providers/settings_providers.dart';
 
 // Widget que inicializa serviços assíncronos dentro do ProviderScope.
 // Deve ser o primeiro widget construído depois do ProviderScope para que o
@@ -56,9 +57,17 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
       });
     }
 
-    // 4. Inicia o foreground service apenas se o onboarding já foi concluído.
-    //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
     final prefs = await SharedPreferences.getInstance();
+
+    // 4. Restaura a preferência de notificações salva pelo usuário nas Configurações.
+    //    O default (true) já está no provider; só atualiza se o usuário desativou.
+    final notifEnabled = prefs.getBool('notifications_enabled') ?? true;
+    if (!notifEnabled) {
+      ref.read(notificationsEnabledProvider.notifier).state = false;
+    }
+
+    // 5. Inicia o foreground service apenas se o onboarding já foi concluído.
+    //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
     if (prefs.getBool('onboarding_done') ?? false) {
       await BackgroundServiceManager.start();
     }

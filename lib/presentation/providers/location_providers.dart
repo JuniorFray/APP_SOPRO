@@ -5,6 +5,7 @@ import '../../infrastructure/geofence/geofence_manager.dart';
 import '../../infrastructure/location/native_location_service.dart';
 import '../../infrastructure/notifications/notification_service.dart';
 import 'database_provider.dart';
+import 'settings_providers.dart';
 
 // Provider do NotificationService — singleton criado uma vez por sessão.
 final notificationServiceProvider = Provider<NotificationService>((ref) {
@@ -18,15 +19,21 @@ final nativeLocationServiceProvider = Provider<NativeLocationService>((ref) {
 });
 
 // Provider do GeofenceManager — injeta repositórios, use case e serviço de GPS.
-// O manager é criado mas não iniciado aqui; AppInitializer chama .start().
+// O manager é criado mas não iniciado aqui; HomeScreen chama .start().
 final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
-  final envRepo = ref.watch(environmentRepositoryProvider);
-  final triggerRepo = ref.watch(triggerRepositoryProvider);
-  final notifications = ref.watch(notificationServiceProvider);
+  final envRepo        = ref.watch(environmentRepositoryProvider);
+  final triggerRepo    = ref.watch(triggerRepositoryProvider);
+  final notifications  = ref.watch(notificationServiceProvider);
   final locationService = ref.watch(nativeLocationServiceProvider);
 
-  // FireTriggersUseCase não tem estado próprio — criado aqui sem provider dedicado
-  final fireTriggers = FireTriggersUseCase(triggerRepo, notifications);
+  // FireTriggersUseCase recebe um callback que lê o toggle de notificações
+  // no momento em que um geofence é acionado — assim a preferência do usuário
+  // é respeitada sem recriar o GeofenceManager.
+  final fireTriggers = FireTriggersUseCase(
+    triggerRepo,
+    notifications,
+    () => ref.read(notificationsEnabledProvider),
+  );
 
   final manager = GeofenceManager(envRepo, fireTriggers, locationService);
 

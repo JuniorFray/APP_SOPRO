@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/strings.dart';
+import '../../core/navigation/app_router.dart';
 import '../../core/theme/app_theme.dart';
 import '../../domain/entities/environment_entity.dart';
 import '../providers/database_provider.dart';
@@ -58,12 +59,9 @@ class EnvironmentCard extends ConsumerWidget {
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
           // Navega para a tela de detalhe com a lista de triggers
-          onTap: () => Navigator.push(
+          onTap: () => pushScreen(
             context,
-            MaterialPageRoute(
-              builder: (_) =>
-                  EnvironmentDetailScreen(environment: environment),
-            ),
+            EnvironmentDetailScreen(environment: environment),
           ),
           trailing: triggersAsync.when(
             data: (triggers) => _TriggerCountBadge(count: triggers.length),

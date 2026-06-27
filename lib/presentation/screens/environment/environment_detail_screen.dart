@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/strings.dart';
+import '../../../core/navigation/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
 import '../../providers/database_provider.dart';
+import '../../providers/environment_providers.dart';
 import '../../providers/trigger_providers.dart';
+import 'add_environment_screen.dart';
 
 // Tela de detalhe de um Environment.
 // Exibe as informações do ambiente e a lista de Triggers associados.
-// Permite adicionar, ativar/desativar e excluir triggers inline.
+// Permite adicionar, editar, ativar/desativar e excluir triggers inline.
+// O ambiente é observado via stream (environmentByIdProvider) para refletir
+// edições feitas na AddEnvironmentScreen sem necessidade de recarregar.
 class EnvironmentDetailScreen extends ConsumerWidget {
   final EnvironmentEntity environment;
 
@@ -21,16 +27,29 @@ class EnvironmentDetailScreen extends ConsumerWidget {
     final triggersAsync =
         ref.watch(triggersByEnvironmentProvider(environment.id));
 
+    // Observa o ambiente em tempo real; se editado, reflete o novo nome e raio
+    final envLive = ref.watch(environmentByIdProvider(environment.id));
+    final currentEnv = envLive.valueOrNull ?? environment;
+
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
-        title: Text(environment.name),
+        title: Text(currentEnv.name),
         actions: [
+          // Botão para editar o ambiente (nome, raio, localização)
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            tooltip: AppStrings.editTooltip,
+            onPressed: () => pushScreen(
+              context,
+              AddEnvironmentScreen(environment: currentEnv),
+            ),
+          ),
           // Botão para adicionar novo trigger
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: AppStrings.addTrigger,
-            onPressed: () => _showAddSheet(context),
+            onPressed: () => _showTriggerSheet(context),
           ),
         ],
       ),
@@ -38,7 +57,7 @@ class EnvironmentDetailScreen extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Card com informações geográficas do ambiente
-          _EnvironmentInfoCard(environment: environment),
+          _EnvironmentInfoCard(environment: currentEnv),
 
           // Cabeçalho da seção de triggers com contagem dinâmica
           Padding(
@@ -92,8 +111,9 @@ class EnvironmentDetailScreen extends ConsumerWidget {
     );
   }
 
-  // Abre o bottom sheet para criação de um novo trigger
-  void _showAddSheet(BuildContext context) {
+  // Abre o bottom sheet para criação de um novo trigger (sem trigger existente)
+  // ou para edição de um trigger já existente (passando [existingTrigger]).
+  void _showTriggerSheet(BuildContext context, {TriggerEntity? existingTrigger}) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -101,7 +121,10 @@ class EnvironmentDetailScreen extends ConsumerWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => _AddTriggerSheet(environmentId: environment.id),
+      builder: (_) => _TriggerSheet(
+        environmentId: environment.id,
+        existingTrigger: existingTrigger,
+      ),
     );
   }
 }
@@ -162,7 +185,9 @@ class _EnvironmentInfoCard extends StatelessWidget {
   }
 }
 
-// Tile de um trigger com switch de ativo/inativo e swipe para excluir
+// Tile de um trigger com switch de ativo/inativo, botão de edição e swipe para excluir.
+// Toque no botão de lápis abre o sheet de edição do trigger.
+// Feedback háptico ao ativar/desativar o trigger.
 class _TriggerTile extends ConsumerWidget {
   final TriggerEntity trigger;
 
@@ -173,7 +198,7 @@ class _TriggerTile extends ConsumerWidget {
     return Dismissible(
       key: ValueKey(trigger.id),
       direction: DismissDirection.endToStart,
-      // Confirmação antes de excluir
+      // Confirmação antes de excluir para evitar exclusão acidental
       confirmDismiss: (_) => _confirmDelete(context),
       onDismissed: (_) =>
           ref.read(triggerRepositoryProvider).delete(trigger.id),
@@ -183,9 +208,9 @@ class _TriggerTile extends ConsumerWidget {
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               // Conteúdo textual do trigger
               Expanded(
@@ -218,18 +243,48 @@ class _TriggerTile extends ConsumerWidget {
                 ),
               ),
 
-              // Switch de ativo/inativo
+              // Botão de edição: abre o sheet pré-preenchido com os dados do trigger
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                color: AppTheme.textDisabled,
+                tooltip: AppStrings.editTooltip,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                onPressed: () => _showEditSheet(context),
+              ),
+
+              // Switch de ativo/inativo com feedback háptico
               Switch(
                 value: trigger.isActive,
-                onChanged: (active) => ref
-                    .read(triggerRepositoryProvider)
-                    .setActive(trigger.id, active: active),
+                onChanged: (active) {
+                  // Vibração sutil ao resolver ou suspender um trigger
+                  HapticFeedback.mediumImpact();
+                  ref
+                      .read(triggerRepositoryProvider)
+                      .setActive(trigger.id, active: active);
+                },
                 activeColor: AppTheme.accent,
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  // Abre o sheet de edição do trigger pré-preenchido com os dados atuais
+  void _showEditSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.backgroundElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _TriggerSheet(
+        environmentId: trigger.environmentId,
+        existingTrigger: trigger,
       ),
     );
   }
@@ -316,21 +371,40 @@ class _EmptyTriggersState extends StatelessWidget {
   }
 }
 
-// Bottom sheet para criação de um novo trigger
-class _AddTriggerSheet extends ConsumerStatefulWidget {
+// Bottom sheet para criação OU edição de um trigger.
+//
+// Modo criação: [existingTrigger] == null — campos em branco, título "Novo Gatilho".
+// Modo edição:  [existingTrigger] != null — campos pré-preenchidos, título "Editar Gatilho",
+//   submit faz upsert com o mesmo ID (atualização do trigger existente).
+class _TriggerSheet extends ConsumerStatefulWidget {
   final String environmentId;
+  // null = criação de novo trigger; não-null = edição de trigger existente
+  final TriggerEntity? existingTrigger;
 
-  const _AddTriggerSheet({required this.environmentId});
+  const _TriggerSheet({
+    required this.environmentId,
+    this.existingTrigger,
+  });
 
   @override
-  ConsumerState<_AddTriggerSheet> createState() => _AddTriggerSheetState();
+  ConsumerState<_TriggerSheet> createState() => _TriggerSheetState();
 }
 
-class _AddTriggerSheetState extends ConsumerState<_AddTriggerSheet> {
-  final _formKey        = GlobalKey<FormState>();
-  final _titleCtrl      = TextEditingController();
-  final _contentCtrl    = TextEditingController();
-  bool  _isSaving       = false;
+class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
+  final _formKey     = GlobalKey<FormState>();
+  late final TextEditingController _titleCtrl;
+  late final TextEditingController _contentCtrl;
+  bool _isSaving     = false;
+
+  bool get _isEditing => widget.existingTrigger != null;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pré-preenche com os dados do trigger existente ao editar; vazio ao criar
+    _titleCtrl   = TextEditingController(text: widget.existingTrigger?.title ?? '');
+    _contentCtrl = TextEditingController(text: widget.existingTrigger?.content ?? '');
+  }
 
   @override
   void dispose() {
@@ -365,9 +439,10 @@ class _AddTriggerSheetState extends ConsumerState<_AddTriggerSheet> {
               ),
             ),
 
-            const Text(
-              AppStrings.addTrigger,
-              style: TextStyle(
+            // Título diferente conforme o modo de uso
+            Text(
+              _isEditing ? AppStrings.editTriggerTitle : AppStrings.addTrigger,
+              style: const TextStyle(
                 color: AppTheme.textPrimary,
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -447,12 +522,16 @@ class _AddTriggerSheetState extends ConsumerState<_AddTriggerSheet> {
     setState(() => _isSaving = true);
 
     final entity = TriggerEntity(
-      id: '',    // repositório gera o UUID
+      // Ao editar: mantém o ID original para fazer upsert (atualização)
+      // Ao criar: string vazia → repositório gera UUID novo
+      id: widget.existingTrigger?.id ?? '',
       environmentId: widget.environmentId,
       title: _titleCtrl.text.trim(),
       content: _contentCtrl.text.trim(),
-      isActive: true,
-      createdAt: DateTime.now(),
+      // Ao editar: preserva o estado ativo original
+      isActive: widget.existingTrigger?.isActive ?? true,
+      // Ao editar: preserva a data de criação original
+      createdAt: widget.existingTrigger?.createdAt ?? DateTime.now(),
     );
 
     await ref.read(triggerRepositoryProvider).save(entity);
