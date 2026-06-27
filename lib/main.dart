@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/constants/strings.dart';
 import 'core/theme/app_theme.dart';
-import 'infrastructure/background/background_service_manager.dart';
 import 'presentation/screens/home/home_screen.dart';
 import 'presentation/screens/onboarding/onboarding_screen.dart';
 import 'presentation/widgets/app_initializer.dart';
@@ -16,10 +15,10 @@ import 'presentation/widgets/app_initializer.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Configura o foreground service antes de iniciar o app.
-  // configure() deve ser chamado antes de runApp() — registra o entry point
-  // do isolate de background para que o OS possa iniciá-lo corretamente.
-  await BackgroundServiceManager.configure();
+  // TODO Sprint 7: await BackgroundServiceManager.configure();
+  // Desativado até o Sprint dedicado ao background service (requer canal de
+  // notificação pré-criado e upgrade do Flutter SDK para evitar o erro
+  // "Bad notification for startForeground").
 
   runApp(
     const ProviderScope(
