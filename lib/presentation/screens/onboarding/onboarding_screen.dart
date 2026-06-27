@@ -6,11 +6,21 @@
 //   2. Notificações     — sussurros discretos, sem marketing
 //   3. Bluetooth        — troca de ContextCard diretamente entre dispositivos
 //
-// Após o passo 3, o usuário vai para ProfileScreen criar seu ContextCard.
-// Exibida pelo HomeScreen quando nenhum ContextCard existe no banco.
+// NAVEGAÇÃO:
+//   Todas as saídas do onboarding (botão primário no último passo, "Pular",
+//   "Ir para o app") chamam _goHome(), que:
+//     1. Persiste 'onboarding_done = true' no SharedPreferences
+//     2. Chama pushReplacementNamed('/home')
+//
+//   Isso garante que, nas próximas aberturas, o HomeScreen vá direto para a
+//   tela principal sem reapresentar o onboarding.
+//
+//   O perfil (ContextCard) é criado voluntariamente a partir do ícone na AppBar
+//   do HomeScreen — não é obrigatório para acessar o app.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
@@ -32,7 +42,7 @@ class _Step {
   });
 }
 
-// Conteúdo dos 4 passos — definido como constante para evitar recriação
+// Conteúdo dos 4 passos — constante para evitar recriação a cada rebuild
 const _steps = [
   _Step(
     icon: Icons.air,
@@ -42,7 +52,7 @@ const _steps = [
   ),
   _Step(
     icon: Icons.location_on_outlined,
-    iconColor: Color(0xFF4CAF50), // verde — transmite segurança de localização
+    iconColor: Color(0xFF4CAF50), // verde — segurança de localização
     title: AppStrings.obLocationTitle,
     body: AppStrings.obLocationBody,
   ),
@@ -70,7 +80,8 @@ class OnboardingScreen extends ConsumerStatefulWidget {
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _pageController = PageController();
   int _currentStep = 0;
-  bool _actionInProgress = false; // true enquanto aguarda resposta do sistema de permissão
+  bool _actionInProgress = false; // true enquanto aguarda resposta do SO de permissão
+  bool _finishing = false;        // true enquanto salva SharedPreferences antes de navegar
 
   @override
   void dispose() {
@@ -78,7 +89,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     super.dispose();
   }
 
-  // Avança para o próximo passo com animação
+  // Avança para o próximo passo (ou conclui o onboarding no último)
   void _nextPage() {
     if (_currentStep < _steps.length - 1) {
       _pageController.nextPage(
@@ -86,13 +97,27 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         curve: Curves.easeInOut,
       );
     } else {
-      _goToProfile();
+      _goHome();
     }
   }
 
-  // Substitui o onboarding pela tela de perfil (flag arguments=true indica primeiro acesso)
-  void _goToProfile() {
-    Navigator.pushReplacementNamed(context, '/profile', arguments: true);
+  // Ponto único de saída do onboarding — chamado por TODAS as rotas de conclusão/pular.
+  //
+  // Persiste o flag antes de navegar para garantir que não volte ao onboarding
+  // mesmo se o usuário fechar o app no meio da transição.
+  Future<void> _goHome() async {
+    if (_finishing) return; // evita chamadas duplicadas (double-tap)
+    setState(() => _finishing = true);
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('onboarding_done', true);
+    } finally {
+      if (mounted) {
+        // pushReplacement impede que o botão "voltar" retorne ao onboarding
+        Navigator.pushReplacementNamed(context, '/home');
+      }
+    }
   }
 
   // Solicita permissão de localização → avança independentemente do resultado
@@ -121,7 +146,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
-  // Solicita permissões BLE → vai para o perfil independentemente do resultado
+  // Solicita permissões BLE → conclui o onboarding independentemente do resultado
   Future<void> _requestBle() async {
     setState(() => _actionInProgress = true);
     try {
@@ -129,12 +154,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     } finally {
       if (mounted) {
         setState(() => _actionInProgress = false);
-        _goToProfile();
+        _goHome();
       }
     }
   }
 
-  // Texto do botão primário muda conforme o passo atual
+  // Texto do botão primário muda conforme o passo
   String get _primaryLabel {
     switch (_currentStep) {
       case 1:  return AppStrings.obLocationBtn;
@@ -144,9 +169,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
-  // Callback do botão primário — null durante loading bloqueia o botão
+  // Callback do botão primário — null durante loading bloqueia interação
   VoidCallback? get _primaryAction {
-    if (_actionInProgress) return null;
+    if (_actionInProgress || _finishing) return null;
     switch (_currentStep) {
       case 0:  return _nextPage;
       case 1:  return _requestLocation;
@@ -156,7 +181,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
-  // Texto do botão secundário (pular ou configurar perfil no último passo)
+  // Botão secundário: "Pular" nos passos 1-2, "Ir para o app" no passo 3
   String get _secondaryLabel =>
       _currentStep == _steps.length - 1 ? AppStrings.obFinish : AppStrings.obSkip;
 
@@ -167,14 +192,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Botão "Pular tudo" no canto superior direito (passos 1-3)
+            // Botão "Pular tudo" no canto superior direito (visível nos passos 1-3)
             SizedBox(
               height: 48,
               child: _currentStep > 0
                   ? Align(
                       alignment: Alignment.topRight,
                       child: TextButton(
-                        onPressed: _actionInProgress ? null : _goToProfile,
+                        onPressed: (_actionInProgress || _finishing) ? null : _goHome,
                         child: const Text(
                           AppStrings.obSkip,
                           style: TextStyle(color: AppTheme.textSecondary),
@@ -184,11 +209,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   : null,
             ),
 
-            // PageView com conteúdo de cada passo
+            // PageView com o conteúdo de cada passo
             Expanded(
               child: PageView.builder(
                 controller: _pageController,
-                // Navegação apenas pelos botões — evita gestos acidentais
+                // Só os botões navegam — evita gestos acidentais
                 physics: const NeverScrollableScrollPhysics(),
                 onPageChanged: (i) => setState(() => _currentStep = i),
                 itemCount: _steps.length,
@@ -202,7 +227,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Indicadores de passo (bolinha expandida = passo atual)
+                  // Indicadores de passo animados (bolinha larga = passo atual)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: List.generate(
@@ -223,12 +248,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Botão primário (ação do passo)
+                  // Botão primário (ação específica do passo)
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
                       onPressed: _primaryAction,
-                      child: _actionInProgress
+                      child: (_actionInProgress || _finishing)
                           ? const SizedBox(
                               width: 20,
                               height: 20,
@@ -241,11 +266,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     ),
                   ),
 
-                  // Botão secundário nos passos de permissão (pular ou terminar)
+                  // Botão secundário nos passos de permissão (pular / ir para o app)
                   if (_currentStep > 0) ...[
                     const SizedBox(height: 4),
                     TextButton(
-                      onPressed: _actionInProgress ? null : _nextPage,
+                      // Nos passos 1-2: avança sem pedir permissão
+                      // No passo 3: conclui o onboarding e vai para /home
+                      onPressed: (_actionInProgress || _finishing) ? null : _nextPage,
                       child: Text(
                         _secondaryLabel,
                         style: const TextStyle(color: AppTheme.textSecondary),
@@ -299,7 +326,7 @@ class _StepPage extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
-          // Corpo explicando o valor — lido antes de ver o diálogo de permissão do SO
+          // Corpo — lido ANTES do diálogo de permissão do SO aparecer
           Text(
             step.body,
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(

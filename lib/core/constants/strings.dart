@@ -76,7 +76,7 @@ class AppStrings {
   // Onboarding — 4 passos que explicam o valor antes de pedir cada permissão
   static const obSkip   = 'Pular';
   static const obNext   = 'Próximo';
-  static const obFinish = 'Configurar meu perfil';
+  static const obFinish = 'Ir para o app';
 
   // Passo 0: Boas-vindas
   static const obWelcomeTitle = 'Bem-vindo ao Sopro';

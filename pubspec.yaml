@@ -21,6 +21,9 @@ dependencies:
   # Geracao de UUIDs para IDs das entidades
   uuid: ^4.5.1
 
+  # Armazena preferências simples (flag onboarding_done) sem banco de dados
+  shared_preferences: ^2.3.0
+
   # Mapa interativo (OpenStreetMap, sem API key) para seleção de local
   flutter_map: ^7.0.1
 

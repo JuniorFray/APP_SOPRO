@@ -1,17 +1,18 @@
 // HomeScreen — Tela principal do Sopro.
 //
 // Responsabilidades:
-//   1. Verificar primeiro acesso: se não há ContextCard no banco → onboarding
-//   2. Iniciar geofences após confirmar que o perfil existe
-//   3. Listar ambientes cadastrados pelo usuário
-//   4. Navegar para PeopleNearbyScreen e ProfileScreen
+//   1. Verificar primeiro acesso via SharedPreferences ('onboarding_done'):
+//      - false → pushReplacementNamed('/onboarding') — sem await, sem recursão
+//      - true  → inicia geofences e exibe a tela normalmente
+//   2. Listar ambientes cadastrados pelo usuário
+//   3. Navegar para PeopleNearbyScreen e ProfileScreen
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../widgets/environment_card.dart';
@@ -26,41 +27,43 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
-  // false enquanto verifica se o onboarding já foi concluído
+  // false enquanto verifica o flag de onboarding e inicia serviços
   bool _ready = false;
 
   @override
   void initState() {
     super.initState();
-    // Executa depois do primeiro frame para que o Navigator já esteja disponível
+    // Executa depois do primeiro frame para que o Navigator esteja disponível
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkOnboarding());
   }
 
-  // Verifica se o usuário já criou um ContextCard (= onboarding concluído).
-  // Se não → redireciona para onboarding.
-  // Se sim → inicia geofences e mostra a tela normalmente.
+  // Verifica se o onboarding já foi concluído pelo usuário.
+  //
+  // Usa SharedPreferences em vez de checar a existência do ContextCard no banco,
+  // evitando o loop de navegação causado pelo pushReplacement do onboarding
+  // (que completava o Future do pushNamed e re-disparava este método).
   Future<void> _checkOnboarding() async {
-    final card = await ref.read(contextCardRepositoryProvider).getActive();
+    final prefs = await SharedPreferences.getInstance();
+    final onboardingDone = prefs.getBool('onboarding_done') ?? false;
     if (!mounted) return;
 
-    if (card == null) {
-      // Primeiro acesso: vai para o onboarding e aguarda a conclusão.
-      // O onboarding termina com pushNamedAndRemoveUntil('/home'), criando
-      // um novo HomeScreen que já encontrará o card e seguirá o caminho normal.
-      await Navigator.pushNamed(context, '/onboarding');
-      // Se o usuário saiu do onboarding sem criar perfil (back), tenta de novo
-      if (mounted) _checkOnboarding();
+    if (!onboardingDone) {
+      // Primeiro acesso: SUBSTITUI o HomeScreen pelo onboarding.
+      // pushReplacementNamed (sem await) evita que HomeScreen aguarde retorno
+      // e evita a re-verificação recursiva que causava o loop.
+      // Pressionar "voltar" no onboarding fecha o app (comportamento correto).
+      Navigator.pushReplacementNamed(context, '/onboarding');
       return;
     }
 
-    // Perfil existe: inicia o monitoramento de geofences com permissões já concedidas
+    // Onboarding concluído: inicia geofences com permissões já concedidas
     await ref.read(geofenceManagerProvider).start();
     if (mounted) setState(() => _ready = true);
   }
 
   @override
   Widget build(BuildContext context) {
-    // Exibe loading enquanto verifica o estado de onboarding
+    // Exibe loading enquanto verifica SharedPreferences / inicia geofences
     if (!_ready) {
       return const Scaffold(
         backgroundColor: AppTheme.backgroundPrimary,

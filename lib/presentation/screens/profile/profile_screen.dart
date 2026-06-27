@@ -9,9 +9,8 @@
 //   - Nota pessoal (bio, texto livre)
 //   - Toggle: Visível para outros (bleVisibleProvider)
 //
-// Navegação:
-//   - Vinda do Onboarding (arguments == true): após salvar vai para /home limpando a pilha
-//   - Vinda do HomeScreen (sem arguments): após salvar fecha com Navigator.pop()
+// Navegação: sempre acessado via pushNamed('/profile') do HomeScreen.
+// Após salvar → Navigator.pop() retorna ao HomeScreen.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,10 +41,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   ContextCardEntity? _existingCard; // preenchido ao carregar o card ativo do banco
   bool _loaded  = false; // true após carregar dados do banco
   bool _saving  = false; // true enquanto persiste no banco
-
-  // true se a tela foi aberta pelo Onboarding (argumento da rota)
-  bool get _isOnboarding =>
-      (ModalRoute.of(context)?.settings.arguments as bool?) ?? false;
 
   @override
   void didChangeDependencies() {
@@ -107,13 +102,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         ),
       );
 
-      // Onboarding: limpa toda a pilha e vai para /home (novo HomeScreen)
-      // Edição: volta para a tela anterior
-      if (_isOnboarding) {
-        Navigator.pushNamedAndRemoveUntil(context, '/home', (_) => false);
-      } else {
-        Navigator.pop(context);
-      }
+      // Volta ao HomeScreen (sempre empilhado abaixo via pushNamed)
+      Navigator.pop(context);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -137,8 +127,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       appBar: AppBar(
         title: const Text(AppStrings.profileTitle),
         backgroundColor: AppTheme.backgroundSurface,
-        // Onboarding: sem botão de voltar (não há para onde voltar)
-        automaticallyImplyLeading: !_isOnboarding,
       ),
       body: _loaded ? _buildForm(isVisible) : _buildLoading(),
     );
