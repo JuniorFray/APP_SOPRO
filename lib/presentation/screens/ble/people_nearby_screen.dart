@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../domain/entities/ble_encounter_entity.dart';
 import '../../../domain/entities/context_card_entity.dart';
 import '../../../infrastructure/ble/discovered_sopro_user.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
+import '../encounters/encounters_screen.dart';
 
 // PeopleNearbyScreen — "Pessoas Aqui"
 //
@@ -148,12 +150,33 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
 
     if (updated.card != null) {
       _showCardSheet(updated.card!);
+      // Persiste o encontro no banco (upsert por deviceId)
+      _saveEncounter(user.deviceId, updated.card!);
     } else {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text(AppStrings.bleCardError)),
         );
       }
+    }
+  }
+
+  // Persiste o encontro no banco de forma silenciosa (não bloqueia a UI)
+  Future<void> _saveEncounter(String deviceId, ContextCardEntity card) async {
+    try {
+      await ref.read(bleEncounterRepositoryProvider).save(
+            BleEncounterEntity(
+              deviceId:     deviceId,
+              displayName:  card.displayName,
+              role:         card.role,
+              company:      card.company,
+              bio:          card.bio,
+              tags:         card.tags,
+              encounteredAt: DateTime.now(),
+            ),
+          );
+    } catch (e) {
+      debugPrint('[PeopleNearby] Falha ao salvar encontro: $e');
     }
   }
 
@@ -179,9 +202,18 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
         title: const Text(AppStrings.peopleNearby),
         backgroundColor: AppTheme.backgroundSurface,
         actions: [
+          // Histórico de encontros BLE
+          IconButton(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const EncountersScreen()),
+            ),
+            icon: const Icon(Icons.history),
+            tooltip: AppStrings.encountersTitle,
+          ),
           // Indicador de visibilidade (advertising ativo ou não)
           Padding(
-            padding: const EdgeInsets.only(right: 16),
+            padding: const EdgeInsets.only(right: 8),
             child: _AdvertisingChip(isAdvertising: isAdvertising),
           ),
         ],

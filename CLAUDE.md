@@ -34,9 +34,11 @@ exatamente quando ele precisa. O app faz o mesmo com informacoes do dia a dia.
 SERVICE_UUID: 550e8400-e29b-41d4-a716-446655440000
 CONTEXT_CARD_CHAR_UUID: 550e8401-e29b-41d4-a716-446655440000
 
-## ContextCard Schema (schemaVersion = 2)
-Campos: id (UUID), displayName, role (cargo), company (empresa),
+## ContextCard Schema (schemaVersion = 3)
+Campos ContextCards: id (UUID), displayName, role (cargo), company (empresa),
 bio (nota pessoal), tags (interesses), createdAt, updatedAt.
+Campos BleEncounters: deviceId (PK=MAC BLE), displayName, role, company,
+bio, tags, encounteredAt. Upsert por deviceId (uma linha por dispositivo).
 BLE JSON payload: {id, n=displayName, r=role, c=company, b=bio, t=tags}
 
 ## Regras Invioaveis
@@ -48,29 +50,35 @@ BLE JSON payload: {id, n=displayName, r=role, c=company, b=bio, t=tags}
 6. Privacidade antes de feature
 
 ## Sprint Atual
-Sprint: 8 - UI Completa - CONCLUIDO
+Sprint: 9 - BLEEncounters DB + Background Service fix - CONCLUIDO
 Entregue:
-- OnboardingScreen (4 passos: boas-vindas, localizacao, notificacoes, BLE)
-  cada passo explica o valor antes de pedir a permissao; PageView com
-  indicadores de progresso; botao "Pular" em cada passo de permissao.
-- ProfileScreen (editor do ContextCard: nome, cargo, empresa, interesses,
-  nota pessoal, toggle visivel/invisivel via bleVisibleProvider).
-- Persistencia: ContextCard salvo no Drift (schemaVersion 1->2 com migracao
-  que adiciona colunas role e company em instalacoes existentes).
-- Navegacao completa: HomeScreen verifica onboarding (card == null ->
-  /onboarding -> /profile -> /home); perfil acessivel pelo icone da AppBar.
-- bleVisibleProvider: preferencia de visibilidade BLE, respeitada pela
-  PeopleNearbyScreen antes de iniciar advertising.
-- AppInitializer simplificado: apenas initialize() sem requestPermission()
-  (permissoes pedidas no onboarding com contexto explicativo).
-- Geofences iniciados pelo HomeScreen apos confirmar que o perfil existe.
+- Tabela BleEncounters no Drift (schemaVersion 2->3): upsert por deviceId
+  (MAC BLE), campos displayName/role/company/bio/tags/encounteredAt.
+  Migracao automatica em instalacoes existentes (createTable bleEncounters).
+- BleEncountersDao + IBleEncounterRepository + BleEncounterRepository:
+  watchAll() (stream), save() (upsert), delete(deviceId), deleteAll().
+- bleEncounterRepositoryProvider em database_provider.dart.
+- encountersStreamProvider (StreamProvider) em encounter_providers.dart.
+- EncountersScreen: lista de encontros com swipe-to-delete, botao individual
+  de remocao, "Limpar historico" no AppBar. Acessivel pelo icone history
+  na AppBar da PeopleNearbyScreen.
+- PeopleNearbyScreen: chama _saveEncounter() apos fetchContextCard com sucesso,
+  persiste o encontro silenciosamente (nao bloqueia UI).
+- Background Service fix: NotificationService.initialize() agora cria dois
+  canais Android: 'sopro_triggers' (alta prioridade) e 'sopro_background'
+  (baixa prioridade, sem som). O canal 'sopro_background' deve existir
+  ANTES de BackgroundServiceManager.start() para evitar o erro
+  "Bad notification for startForeground" no Android 8+.
+- main.dart: BackgroundServiceManager.configure() ativado antes do runApp().
+- AppInitializer: apos initialize(), inicia BackgroundServiceManager.start()
+  apenas se onboarding_done=true (evita notificacao persistente no 1o acesso).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
 ## Proximo Sprint
-Sprint: 9 - BLEEncounters DB + Background Service fix
-Objetivo: tabela BleEncounters no Drift para persistir encontros BLE,
-corrigir flutter_background_service (pre-criar canal de notificacao antes
-do startForeground), integrar geofence + BLE em segundo plano.
+Sprint: 10 - Triggers em Segundo Plano
+Objetivo: GeofenceManager continua funcionando com app minimizado
+(background service ativo), disparando triggers via NotificationService.
+Possivelmente: tela de configuracoes, tema claro/escuro, exportacao de dados.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

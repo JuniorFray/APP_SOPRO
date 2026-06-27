@@ -1136,23 +1136,411 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
   }
 }
 
+class $BleEncountersTable extends BleEncounters
+    with TableInfo<$BleEncountersTable, BleEncounter> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $BleEncountersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _deviceIdMeta =
+      const VerificationMeta('deviceId');
+  @override
+  late final GeneratedColumn<String> deviceId = GeneratedColumn<String>(
+      'device_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _displayNameMeta =
+      const VerificationMeta('displayName');
+  @override
+  late final GeneratedColumn<String> displayName = GeneratedColumn<String>(
+      'display_name', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _roleMeta = const VerificationMeta('role');
+  @override
+  late final GeneratedColumn<String> role = GeneratedColumn<String>(
+      'role', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _companyMeta =
+      const VerificationMeta('company');
+  @override
+  late final GeneratedColumn<String> company = GeneratedColumn<String>(
+      'company', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _bioMeta = const VerificationMeta('bio');
+  @override
+  late final GeneratedColumn<String> bio = GeneratedColumn<String>(
+      'bio', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _tagsMeta = const VerificationMeta('tags');
+  @override
+  late final GeneratedColumn<String> tags = GeneratedColumn<String>(
+      'tags', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _encounteredAtMeta =
+      const VerificationMeta('encounteredAt');
+  @override
+  late final GeneratedColumn<DateTime> encounteredAt =
+      GeneratedColumn<DateTime>('encountered_at', aliasedName, false,
+          type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [deviceId, displayName, role, company, bio, tags, encounteredAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'ble_encounters';
+  @override
+  VerificationContext validateIntegrity(Insertable<BleEncounter> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('device_id')) {
+      context.handle(_deviceIdMeta,
+          deviceId.isAcceptableOrUnknown(data['device_id']!, _deviceIdMeta));
+    } else if (isInserting) {
+      context.missing(_deviceIdMeta);
+    }
+    if (data.containsKey('display_name')) {
+      context.handle(
+          _displayNameMeta,
+          displayName.isAcceptableOrUnknown(
+              data['display_name']!, _displayNameMeta));
+    }
+    if (data.containsKey('role')) {
+      context.handle(
+          _roleMeta, role.isAcceptableOrUnknown(data['role']!, _roleMeta));
+    }
+    if (data.containsKey('company')) {
+      context.handle(_companyMeta,
+          company.isAcceptableOrUnknown(data['company']!, _companyMeta));
+    }
+    if (data.containsKey('bio')) {
+      context.handle(
+          _bioMeta, bio.isAcceptableOrUnknown(data['bio']!, _bioMeta));
+    }
+    if (data.containsKey('tags')) {
+      context.handle(
+          _tagsMeta, tags.isAcceptableOrUnknown(data['tags']!, _tagsMeta));
+    }
+    if (data.containsKey('encountered_at')) {
+      context.handle(
+          _encounteredAtMeta,
+          encounteredAt.isAcceptableOrUnknown(
+              data['encountered_at']!, _encounteredAtMeta));
+    } else if (isInserting) {
+      context.missing(_encounteredAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {deviceId};
+  @override
+  BleEncounter map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return BleEncounter(
+      deviceId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}device_id'])!,
+      displayName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}display_name'])!,
+      role: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}role'])!,
+      company: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}company'])!,
+      bio: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}bio'])!,
+      tags: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}tags'])!,
+      encounteredAt: attachedDatabase.typeMapping.read(
+          DriftSqlType.dateTime, data['${effectivePrefix}encountered_at'])!,
+    );
+  }
+
+  @override
+  $BleEncountersTable createAlias(String alias) {
+    return $BleEncountersTable(attachedDatabase, alias);
+  }
+}
+
+class BleEncounter extends DataClass implements Insertable<BleEncounter> {
+  final String deviceId;
+  final String displayName;
+  final String role;
+  final String company;
+  final String bio;
+  final String tags;
+  final DateTime encounteredAt;
+  const BleEncounter(
+      {required this.deviceId,
+      required this.displayName,
+      required this.role,
+      required this.company,
+      required this.bio,
+      required this.tags,
+      required this.encounteredAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['device_id'] = Variable<String>(deviceId);
+    map['display_name'] = Variable<String>(displayName);
+    map['role'] = Variable<String>(role);
+    map['company'] = Variable<String>(company);
+    map['bio'] = Variable<String>(bio);
+    map['tags'] = Variable<String>(tags);
+    map['encountered_at'] = Variable<DateTime>(encounteredAt);
+    return map;
+  }
+
+  BleEncountersCompanion toCompanion(bool nullToAbsent) {
+    return BleEncountersCompanion(
+      deviceId: Value(deviceId),
+      displayName: Value(displayName),
+      role: Value(role),
+      company: Value(company),
+      bio: Value(bio),
+      tags: Value(tags),
+      encounteredAt: Value(encounteredAt),
+    );
+  }
+
+  factory BleEncounter.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return BleEncounter(
+      deviceId: serializer.fromJson<String>(json['deviceId']),
+      displayName: serializer.fromJson<String>(json['displayName']),
+      role: serializer.fromJson<String>(json['role']),
+      company: serializer.fromJson<String>(json['company']),
+      bio: serializer.fromJson<String>(json['bio']),
+      tags: serializer.fromJson<String>(json['tags']),
+      encounteredAt: serializer.fromJson<DateTime>(json['encounteredAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'deviceId': serializer.toJson<String>(deviceId),
+      'displayName': serializer.toJson<String>(displayName),
+      'role': serializer.toJson<String>(role),
+      'company': serializer.toJson<String>(company),
+      'bio': serializer.toJson<String>(bio),
+      'tags': serializer.toJson<String>(tags),
+      'encounteredAt': serializer.toJson<DateTime>(encounteredAt),
+    };
+  }
+
+  BleEncounter copyWith(
+          {String? deviceId,
+          String? displayName,
+          String? role,
+          String? company,
+          String? bio,
+          String? tags,
+          DateTime? encounteredAt}) =>
+      BleEncounter(
+        deviceId: deviceId ?? this.deviceId,
+        displayName: displayName ?? this.displayName,
+        role: role ?? this.role,
+        company: company ?? this.company,
+        bio: bio ?? this.bio,
+        tags: tags ?? this.tags,
+        encounteredAt: encounteredAt ?? this.encounteredAt,
+      );
+  BleEncounter copyWithCompanion(BleEncountersCompanion data) {
+    return BleEncounter(
+      deviceId: data.deviceId.present ? data.deviceId.value : this.deviceId,
+      displayName:
+          data.displayName.present ? data.displayName.value : this.displayName,
+      role: data.role.present ? data.role.value : this.role,
+      company: data.company.present ? data.company.value : this.company,
+      bio: data.bio.present ? data.bio.value : this.bio,
+      tags: data.tags.present ? data.tags.value : this.tags,
+      encounteredAt: data.encounteredAt.present
+          ? data.encounteredAt.value
+          : this.encounteredAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('BleEncounter(')
+          ..write('deviceId: $deviceId, ')
+          ..write('displayName: $displayName, ')
+          ..write('role: $role, ')
+          ..write('company: $company, ')
+          ..write('bio: $bio, ')
+          ..write('tags: $tags, ')
+          ..write('encounteredAt: $encounteredAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      deviceId, displayName, role, company, bio, tags, encounteredAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is BleEncounter &&
+          other.deviceId == this.deviceId &&
+          other.displayName == this.displayName &&
+          other.role == this.role &&
+          other.company == this.company &&
+          other.bio == this.bio &&
+          other.tags == this.tags &&
+          other.encounteredAt == this.encounteredAt);
+}
+
+class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
+  final Value<String> deviceId;
+  final Value<String> displayName;
+  final Value<String> role;
+  final Value<String> company;
+  final Value<String> bio;
+  final Value<String> tags;
+  final Value<DateTime> encounteredAt;
+  final Value<int> rowid;
+  const BleEncountersCompanion({
+    this.deviceId = const Value.absent(),
+    this.displayName = const Value.absent(),
+    this.role = const Value.absent(),
+    this.company = const Value.absent(),
+    this.bio = const Value.absent(),
+    this.tags = const Value.absent(),
+    this.encounteredAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  BleEncountersCompanion.insert({
+    required String deviceId,
+    this.displayName = const Value.absent(),
+    this.role = const Value.absent(),
+    this.company = const Value.absent(),
+    this.bio = const Value.absent(),
+    this.tags = const Value.absent(),
+    required DateTime encounteredAt,
+    this.rowid = const Value.absent(),
+  })  : deviceId = Value(deviceId),
+        encounteredAt = Value(encounteredAt);
+  static Insertable<BleEncounter> custom({
+    Expression<String>? deviceId,
+    Expression<String>? displayName,
+    Expression<String>? role,
+    Expression<String>? company,
+    Expression<String>? bio,
+    Expression<String>? tags,
+    Expression<DateTime>? encounteredAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (deviceId != null) 'device_id': deviceId,
+      if (displayName != null) 'display_name': displayName,
+      if (role != null) 'role': role,
+      if (company != null) 'company': company,
+      if (bio != null) 'bio': bio,
+      if (tags != null) 'tags': tags,
+      if (encounteredAt != null) 'encountered_at': encounteredAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  BleEncountersCompanion copyWith(
+      {Value<String>? deviceId,
+      Value<String>? displayName,
+      Value<String>? role,
+      Value<String>? company,
+      Value<String>? bio,
+      Value<String>? tags,
+      Value<DateTime>? encounteredAt,
+      Value<int>? rowid}) {
+    return BleEncountersCompanion(
+      deviceId: deviceId ?? this.deviceId,
+      displayName: displayName ?? this.displayName,
+      role: role ?? this.role,
+      company: company ?? this.company,
+      bio: bio ?? this.bio,
+      tags: tags ?? this.tags,
+      encounteredAt: encounteredAt ?? this.encounteredAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (deviceId.present) {
+      map['device_id'] = Variable<String>(deviceId.value);
+    }
+    if (displayName.present) {
+      map['display_name'] = Variable<String>(displayName.value);
+    }
+    if (role.present) {
+      map['role'] = Variable<String>(role.value);
+    }
+    if (company.present) {
+      map['company'] = Variable<String>(company.value);
+    }
+    if (bio.present) {
+      map['bio'] = Variable<String>(bio.value);
+    }
+    if (tags.present) {
+      map['tags'] = Variable<String>(tags.value);
+    }
+    if (encounteredAt.present) {
+      map['encountered_at'] = Variable<DateTime>(encounteredAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('BleEncountersCompanion(')
+          ..write('deviceId: $deviceId, ')
+          ..write('displayName: $displayName, ')
+          ..write('role: $role, ')
+          ..write('company: $company, ')
+          ..write('bio: $bio, ')
+          ..write('tags: $tags, ')
+          ..write('encounteredAt: $encounteredAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$SoproDatabase extends GeneratedDatabase {
   _$SoproDatabase(QueryExecutor e) : super(e);
   $SoproDatabaseManager get managers => $SoproDatabaseManager(this);
   late final $EnvironmentsTable environments = $EnvironmentsTable(this);
   late final $TriggersTable triggers = $TriggersTable(this);
   late final $ContextCardsTable contextCards = $ContextCardsTable(this);
+  late final $BleEncountersTable bleEncounters = $BleEncountersTable(this);
   late final EnvironmentsDao environmentsDao =
       EnvironmentsDao(this as SoproDatabase);
   late final TriggersDao triggersDao = TriggersDao(this as SoproDatabase);
   late final ContextCardsDao contextCardsDao =
       ContextCardsDao(this as SoproDatabase);
+  late final BleEncountersDao bleEncountersDao =
+      BleEncountersDao(this as SoproDatabase);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
   List<DatabaseSchemaEntity> get allSchemaEntities =>
-      [environments, triggers, contextCards];
+      [environments, triggers, contextCards, bleEncounters];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
         [
@@ -1939,6 +2327,211 @@ typedef $$ContextCardsTableProcessedTableManager = ProcessedTableManager<
     ),
     ContextCard,
     PrefetchHooks Function()>;
+typedef $$BleEncountersTableCreateCompanionBuilder = BleEncountersCompanion
+    Function({
+  required String deviceId,
+  Value<String> displayName,
+  Value<String> role,
+  Value<String> company,
+  Value<String> bio,
+  Value<String> tags,
+  required DateTime encounteredAt,
+  Value<int> rowid,
+});
+typedef $$BleEncountersTableUpdateCompanionBuilder = BleEncountersCompanion
+    Function({
+  Value<String> deviceId,
+  Value<String> displayName,
+  Value<String> role,
+  Value<String> company,
+  Value<String> bio,
+  Value<String> tags,
+  Value<DateTime> encounteredAt,
+  Value<int> rowid,
+});
+
+class $$BleEncountersTableFilterComposer
+    extends Composer<_$SoproDatabase, $BleEncountersTable> {
+  $$BleEncountersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get deviceId => $composableBuilder(
+      column: $table.deviceId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get role => $composableBuilder(
+      column: $table.role, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get company => $composableBuilder(
+      column: $table.company, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get bio => $composableBuilder(
+      column: $table.bio, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get tags => $composableBuilder(
+      column: $table.tags, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get encounteredAt => $composableBuilder(
+      column: $table.encounteredAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$BleEncountersTableOrderingComposer
+    extends Composer<_$SoproDatabase, $BleEncountersTable> {
+  $$BleEncountersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get deviceId => $composableBuilder(
+      column: $table.deviceId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get role => $composableBuilder(
+      column: $table.role, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get company => $composableBuilder(
+      column: $table.company, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get bio => $composableBuilder(
+      column: $table.bio, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get tags => $composableBuilder(
+      column: $table.tags, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get encounteredAt => $composableBuilder(
+      column: $table.encounteredAt,
+      builder: (column) => ColumnOrderings(column));
+}
+
+class $$BleEncountersTableAnnotationComposer
+    extends Composer<_$SoproDatabase, $BleEncountersTable> {
+  $$BleEncountersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get deviceId =>
+      $composableBuilder(column: $table.deviceId, builder: (column) => column);
+
+  GeneratedColumn<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => column);
+
+  GeneratedColumn<String> get role =>
+      $composableBuilder(column: $table.role, builder: (column) => column);
+
+  GeneratedColumn<String> get company =>
+      $composableBuilder(column: $table.company, builder: (column) => column);
+
+  GeneratedColumn<String> get bio =>
+      $composableBuilder(column: $table.bio, builder: (column) => column);
+
+  GeneratedColumn<String> get tags =>
+      $composableBuilder(column: $table.tags, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get encounteredAt => $composableBuilder(
+      column: $table.encounteredAt, builder: (column) => column);
+}
+
+class $$BleEncountersTableTableManager extends RootTableManager<
+    _$SoproDatabase,
+    $BleEncountersTable,
+    BleEncounter,
+    $$BleEncountersTableFilterComposer,
+    $$BleEncountersTableOrderingComposer,
+    $$BleEncountersTableAnnotationComposer,
+    $$BleEncountersTableCreateCompanionBuilder,
+    $$BleEncountersTableUpdateCompanionBuilder,
+    (
+      BleEncounter,
+      BaseReferences<_$SoproDatabase, $BleEncountersTable, BleEncounter>
+    ),
+    BleEncounter,
+    PrefetchHooks Function()> {
+  $$BleEncountersTableTableManager(
+      _$SoproDatabase db, $BleEncountersTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$BleEncountersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$BleEncountersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$BleEncountersTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> deviceId = const Value.absent(),
+            Value<String> displayName = const Value.absent(),
+            Value<String> role = const Value.absent(),
+            Value<String> company = const Value.absent(),
+            Value<String> bio = const Value.absent(),
+            Value<String> tags = const Value.absent(),
+            Value<DateTime> encounteredAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              BleEncountersCompanion(
+            deviceId: deviceId,
+            displayName: displayName,
+            role: role,
+            company: company,
+            bio: bio,
+            tags: tags,
+            encounteredAt: encounteredAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String deviceId,
+            Value<String> displayName = const Value.absent(),
+            Value<String> role = const Value.absent(),
+            Value<String> company = const Value.absent(),
+            Value<String> bio = const Value.absent(),
+            Value<String> tags = const Value.absent(),
+            required DateTime encounteredAt,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              BleEncountersCompanion.insert(
+            deviceId: deviceId,
+            displayName: displayName,
+            role: role,
+            company: company,
+            bio: bio,
+            tags: tags,
+            encounteredAt: encounteredAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$BleEncountersTableProcessedTableManager = ProcessedTableManager<
+    _$SoproDatabase,
+    $BleEncountersTable,
+    BleEncounter,
+    $$BleEncountersTableFilterComposer,
+    $$BleEncountersTableOrderingComposer,
+    $$BleEncountersTableAnnotationComposer,
+    $$BleEncountersTableCreateCompanionBuilder,
+    $$BleEncountersTableUpdateCompanionBuilder,
+    (
+      BleEncounter,
+      BaseReferences<_$SoproDatabase, $BleEncountersTable, BleEncounter>
+    ),
+    BleEncounter,
+    PrefetchHooks Function()>;
 
 class $SoproDatabaseManager {
   final _$SoproDatabase _db;
@@ -1949,4 +2542,6 @@ class $SoproDatabaseManager {
       $$TriggersTableTableManager(_db, _db.triggers);
   $$ContextCardsTableTableManager get contextCards =>
       $$ContextCardsTableTableManager(_db, _db.contextCards);
+  $$BleEncountersTableTableManager get bleEncounters =>
+      $$BleEncountersTableTableManager(_db, _db.bleEncounters);
 }

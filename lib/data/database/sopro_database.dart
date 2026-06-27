@@ -1,9 +1,11 @@
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
+import 'daos/ble_encounters_dao.dart';
 import 'daos/context_cards_dao.dart';
 import 'daos/environments_dao.dart';
 import 'daos/triggers_dao.dart';
+import 'tables/ble_encounters_table.dart';
 import 'tables/context_cards_table.dart';
 import 'tables/environments_table.dart';
 import 'tables/triggers_table.dart';
@@ -21,16 +23,19 @@ part 'sopro_database.g.dart';
 // Histórico de versões:
 //   v1 (Sprint 1): criação das tabelas Environments, Triggers, ContextCards
 //   v2 (Sprint 8): adição de role + company na tabela ContextCards
+//   v3 (Sprint 9): nova tabela BleEncounters — histórico de encontros BLE
 @DriftDatabase(
   tables: [
     Environments,
     Triggers,
     ContextCards,
+    BleEncounters,
   ],
   daos: [
     EnvironmentsDao,
     TriggersDao,
     ContextCardsDao,
+    BleEncountersDao,
   ],
 )
 class SoproDatabase extends _$SoproDatabase {
@@ -40,7 +45,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -51,9 +56,13 @@ class SoproDatabase extends _$SoproDatabase {
         // onUpgrade: chamado quando schemaVersion aumenta em instalações existentes
         onUpgrade: (m, from, to) async {
           if (from < 2) {
-            // Sprint 8: novos campos de cargo e empresa no perfil BLE
+            // Sprint 8: campos de cargo e empresa no perfil BLE
             await m.addColumn(contextCards, contextCards.role);
             await m.addColumn(contextCards, contextCards.company);
+          }
+          if (from < 3) {
+            // Sprint 9: tabela de histórico de encontros BLE
+            await m.createTable(bleEncounters);
           }
         },
       );

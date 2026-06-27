@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/constants/strings.dart';
 import 'core/theme/app_theme.dart';
+import 'infrastructure/background/background_service_manager.dart';
 import 'presentation/screens/home/home_screen.dart';
 import 'presentation/screens/onboarding/onboarding_screen.dart';
 import 'presentation/screens/profile/profile_screen.dart';
@@ -15,8 +16,10 @@ import 'presentation/widgets/app_initializer.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // TODO Sprint 9: await BackgroundServiceManager.configure();
-  // Desativado até sprint dedicado (requer canal de notificação pré-criado).
+  // Registra o entry-point do foreground service ANTES do runApp().
+  // O canal de notificação é criado no AppInitializer._init() (após initialize()),
+  // garantindo que exista antes de BackgroundServiceManager.start().
+  await BackgroundServiceManager.configure();
 
   runApp(
     const ProviderScope(

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../infrastructure/background/background_service_manager.dart';
 import '../providers/location_providers.dart';
 
 // Widget que inicializa serviços assíncronos dentro do ProviderScope.
@@ -28,9 +30,16 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
   }
 
   Future<void> _init() async {
-    // Inicializa o plugin de notificações e cria o canal Android.
-    // NÃO pede permissão aqui — o Onboarding explica e pede na ordem certa.
+    // 1. Cria os dois canais Android (triggers + background service).
+    //    O canal 'sopro_background' deve existir antes de startService().
     await ref.read(notificationServiceProvider).initialize();
+
+    // 2. Inicia o foreground service apenas se o onboarding já foi concluído.
+    //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('onboarding_done') ?? false) {
+      await BackgroundServiceManager.start();
+    }
   }
 
   @override

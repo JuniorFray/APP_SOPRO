@@ -130,6 +130,15 @@ class AppStrings {
   static const profileSectionContext    = 'Contexto';
   static const profileSectionPrivacy    = 'Privacidade';
 
+  // Histórico de encontros BLE
+  static const encountersTitle       = 'Encontros';
+  static const encountersEmpty       = 'Nenhum encontro registrado';
+  static const encountersEmptyHint   =
+      'Usuários Sopro com quem você trocar cartões aparecem aqui';
+  static const encounterDeleteBtn    = 'Remover';
+  static const encounterClearAll     = 'Limpar histórico';
+  static const encounterClearConfirm = 'Remover todos os encontros do histórico?';
+
   // Mapa de seleção de local
   static const mapTapInstruction = 'Toque no mapa para definir o local';
   static const useCurrentLocation = 'Usar localização atual';

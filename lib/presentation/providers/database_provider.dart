@@ -1,9 +1,11 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/database/sopro_database.dart';
+import '../../data/repositories/ble_encounter_repository.dart';
 import '../../data/repositories/context_card_repository.dart';
 import '../../data/repositories/environment_repository.dart';
 import '../../data/repositories/trigger_repository.dart';
+import '../../domain/repositories/i_ble_encounter_repository.dart';
 import '../../domain/repositories/i_context_card_repository.dart';
 import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/repositories/i_trigger_repository.dart';
@@ -29,4 +31,8 @@ final triggerRepositoryProvider = Provider<ITriggerRepository>((ref) {
 
 final contextCardRepositoryProvider = Provider<IContextCardRepository>((ref) {
   return ContextCardRepository(ref.watch(databaseProvider).contextCardsDao);
+});
+
+final bleEncounterRepositoryProvider = Provider<IBleEncounterRepository>((ref) {
+  return BleEncounterRepository(ref.watch(databaseProvider).bleEncountersDao);
 });
