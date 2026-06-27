@@ -5,6 +5,7 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import androidx.core.app.ActivityCompat
@@ -16,26 +17,28 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.util.UUID
 
-// MainActivity expõe dois grupos de canais nativos ao Flutter:
+// MainActivity expõe GPS e BLE Social ao Flutter via canais nativos.
 //
 // ── GPS (Sprint 5) ──────────────────────────────────────────────────────────
 // MethodChannel "com.sopro.sopro/location":
-//   checkPermission()       → Boolean
-//   requestPermission()     → Boolean (aguarda diálogo do sistema)
-//   getCurrentPosition()    → Map {latitude, longitude, accuracy}
+//   checkPermission / requestPermission / getCurrentPosition
 // EventChannel "com.sopro.sopro/location_stream":
-//   Emite Map {latitude, longitude, accuracy} a cada 5s / 10m
+//   Stream de posição a cada 5s / 10m
 //
 // ── BLE Social (Sprint 7) ───────────────────────────────────────────────────
 // MethodChannel "com.sopro.sopro/ble":
-//   checkPermissions()                   → Boolean
-//   requestPermissions()                 → Boolean
-//   startAdvertising({cardJson:String})  → Boolean
-//   stopAdvertising()                    → void
+//   checkPermissions / requestPermissions
+//   startAdvertising({cardJson}) / stopAdvertising
+//   getAdapterState → "on" | "off" | "unavailable"
+//   connectAndReadCard({deviceId}) → String (cardJson) ou erro
 //
-// O advertising ativa BluetoothLeAdvertiser com o SERVICE_UUID Sopro.
-// Um BluetoothGattServer expõe a characteristic CONTEXT_CARD_CHAR_UUID,
-// que retorna o ContextCard do usuário em JSON UTF-8 para quem conectar.
+// EventChannel "com.sopro.sopro/ble_scan":
+//   onListen  → inicia scan filtrado pelo SERVICE_UUID Sopro
+//   Eventos   → Map {deviceId, deviceName, rssi}
+//   onCancel  → para scan
+//
+// Peripheral role: BluetoothLeAdvertiser + BluetoothGattServer
+// Central role:    BluetoothLeScanner + BluetoothGatt (GATT client)
 class MainActivity : FlutterActivity() {
 
     companion object {
@@ -46,24 +49,37 @@ class MainActivity : FlutterActivity() {
 
         // ── BLE ───────────────────────────────────────────────────────────────
         private const val BLE_CHANNEL       = "com.sopro.sopro/ble"
+        private const val BLE_SCAN_CHANNEL  = "com.sopro.sopro/ble_scan"
         private const val PERM_REQUEST_BLE  = 1002
 
-        // UUIDs do serviço Sopro — FIXOS (nunca alterar; identificam o app na rede BLE)
+        // UUIDs Sopro — FIXOS (nunca alterar; identificam o app na rede BLE)
         private val SERVICE_UUID           = ParcelUuid.fromString("550e8400-e29b-41d4-a716-446655440000")
         private val CONTEXT_CARD_CHAR_UUID = UUID.fromString("550e8401-e29b-41d4-a716-446655440000")
+
+        // Timeout para conexão GATT ao buscar ContextCard de outro dispositivo
+        private const val GATT_TIMEOUT_MS  = 10_000L
     }
 
-    // ── Campos GPS ────────────────────────────────────────────────────────────
+    // ── GPS ───────────────────────────────────────────────────────────────────
     private var fusedClient: FusedLocationProviderClient? = null
     private var locationCallback: LocationCallback? = null
-    private var eventSink: EventChannel.EventSink? = null
+    private var locationEventSink: EventChannel.EventSink? = null
     private var pendingLocPermResult: MethodChannel.Result? = null
 
-    // ── Campos BLE ────────────────────────────────────────────────────────────
+    // ── BLE peripheral (advertising + GATT server) ────────────────────────────
     private var advertiser: BluetoothLeAdvertiser? = null
     private var gattServer: BluetoothGattServer? = null
     private var currentCardJson: String = "{}"
     private var pendingBlePermResult: MethodChannel.Result? = null
+
+    // ── BLE central (scan + GATT client) ─────────────────────────────────────
+    private var scanner: BluetoothLeScanner? = null
+    private var scanCallback: ScanCallback? = null
+    private var scanEventSink: EventChannel.EventSink? = null
+    private val activeGatts = mutableListOf<BluetoothGatt>()
+
+    // Handler da main thread usado em callbacks GATT (que chegam em threads de fundo)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // ═════════════════════════════════════════════════════════════════════════
     // Inicialização dos canais Flutter ↔ Native
@@ -88,12 +104,12 @@ class MainActivity : FlutterActivity() {
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, STREAM_CHANNEL)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(args: Any?, events: EventChannel.EventSink?) {
-                    eventSink = events
+                    locationEventSink = events
                     startLocationStream()
                 }
                 override fun onCancel(args: Any?) {
                     stopLocationStream()
-                    eventSink = null
+                    locationEventSink = null
                 }
             })
 
@@ -101,20 +117,39 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "checkPermissions"   -> result.success(hasBluetoothPermissions())
-                    "requestPermissions" -> requestBluetoothPermissions(result)
-                    "startAdvertising"   -> {
+                    "checkPermissions"    -> result.success(hasBluetoothPermissions())
+                    "requestPermissions"  -> requestBluetoothPermissions(result)
+                    "startAdvertising"    -> {
                         val cardJson = call.argument<String>("cardJson") ?: "{}"
                         startBleAdvertising(cardJson, result)
                     }
-                    "stopAdvertising"    -> { stopBleAdvertising(); result.success(null) }
-                    else                 -> result.notImplemented()
+                    "stopAdvertising"     -> { stopBleAdvertising(); result.success(null) }
+                    "getAdapterState"     -> result.success(getAdapterState())
+                    "connectAndReadCard"  -> {
+                        val deviceId = call.argument<String>("deviceId") ?: ""
+                        connectAndReadCard(deviceId, result)
+                    }
+                    else -> result.notImplemented()
                 }
             }
+
+        // ── BLE: EventChannel (stream de resultados do scan) ──────────────────
+        // Padrão espelhando o GPS stream: onListen inicia o scan, onCancel o para.
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_SCAN_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, events: EventChannel.EventSink?) {
+                    scanEventSink = events
+                    startBleScan()
+                }
+                override fun onCancel(args: Any?) {
+                    stopBleScan()
+                    scanEventSink = null
+                }
+            })
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // GPS — permissão
+    // GPS — permissão + posição pontual + stream
     // ═════════════════════════════════════════════════════════════════════════
 
     private fun hasLocationPermission(): Boolean =
@@ -129,26 +164,18 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    // ═════════════════════════════════════════════════════════════════════════
-    // GPS — posição pontual e stream
-    // ═════════════════════════════════════════════════════════════════════════
-
     private fun getCurrentPosition(result: MethodChannel.Result) {
         if (!hasLocationPermission()) {
-            result.error("PERMISSION_DENIED", "Location permission not granted", null)
-            return
+            result.error("PERMISSION_DENIED", "Location permission not granted", null); return
         }
         fusedClient?.lastLocation
             ?.addOnSuccessListener { loc ->
                 if (loc != null) result.success(locationMap(loc))
                 else requestFreshLocation(result)
             }
-            ?.addOnFailureListener { e ->
-                result.error("LOCATION_ERROR", e.message, null)
-            }
+            ?.addOnFailureListener { e -> result.error("LOCATION_ERROR", e.message, null) }
     }
 
-    // Solicita leitura fresca quando lastLocation é null (dispositivo recém-ligado)
     private fun requestFreshLocation(result: MethodChannel.Result) {
         val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 0L)
             .setMaxUpdates(1).build()
@@ -171,7 +198,7 @@ class MainActivity : FlutterActivity() {
             .setMinUpdateDistanceMeters(10f).build()
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(lr: LocationResult) {
-                lr.lastLocation?.let { eventSink?.success(locationMap(it)) }
+                lr.lastLocation?.let { locationEventSink?.success(locationMap(it)) }
             }
         }
         fusedClient?.requestLocationUpdates(req, locationCallback!!, Looper.getMainLooper())
@@ -189,20 +216,17 @@ class MainActivity : FlutterActivity() {
     )
 
     // ═════════════════════════════════════════════════════════════════════════
-    // BLE — permissões
+    // BLE — permissões + estado do adaptador
     // ═════════════════════════════════════════════════════════════════════════
 
-    private fun hasBluetoothPermissions(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            // Android 12+ (API 31+): cada operação BLE requer permissão própria
+    private fun hasBluetoothPermissions(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)      == PackageManager.PERMISSION_GRANTED &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)   == PackageManager.PERMISSION_GRANTED &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
         } else {
-            // Android < 12: ACCESS_FINE_LOCATION é suficiente para BLE scan/advertising
             hasLocationPermission()
         }
-    }
 
     private fun requestBluetoothPermissions(result: MethodChannel.Result) {
         if (hasBluetoothPermissions()) { result.success(true); return }
@@ -214,47 +238,46 @@ class MainActivity : FlutterActivity() {
                 Manifest.permission.BLUETOOTH_ADVERTISE
             ), PERM_REQUEST_BLE)
         } else {
-            // Em versões antigas, localização já cobre o BLE
             requestLocationPermission(result)
         }
     }
 
+    // Retorna estado legível do adaptador Bluetooth para o Dart
+    private fun getAdapterState(): String {
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = btManager?.adapter ?: return "unavailable"
+        return if (adapter.isEnabled) "on" else "off"
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
-    // BLE — advertising + GATT server
+    // BLE Peripheral — advertising + GATT server (expõe ContextCard)
     // ═════════════════════════════════════════════════════════════════════════
 
     private fun startBleAdvertising(cardJson: String, result: MethodChannel.Result) {
         if (!hasBluetoothPermissions()) {
-            result.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null)
-            return
+            result.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null); return
         }
         val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
         val btAdapter = btManager?.adapter
         if (btAdapter == null || !btAdapter.isEnabled) {
-            result.error("BT_DISABLED", "Bluetooth is not enabled", null)
-            return
+            result.error("BT_DISABLED", "Bluetooth is not enabled", null); return
         }
 
-        // Prepara o GATT server antes de iniciar o advertising para que dispositivos
-        // que conectarem imediatamente já encontrem o serviço disponível
         currentCardJson = cardJson
         setupGattServer(btManager)
 
         advertiser = btAdapter.bluetoothLeAdvertiser
         if (advertiser == null) {
-            result.error("NO_ADVERTISER", "Device does not support BLE advertising", null)
-            return
+            result.error("NO_ADVERTISER", "Device does not support BLE advertising", null); return
         }
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
-            .setConnectable(true)   // conectável para permitir leitura GATT do ContextCard
-            .setTimeout(0)          // fica ativo até stopAdvertising() ser chamado
+            .setConnectable(true)
+            .setTimeout(0)
             .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
             .build()
 
-        // Pacote de advertising: apenas o SERVICE_UUID Sopro.
-        // O ContextCard completo é transferido via GATT após a conexão do dispositivo curioso.
         val data = AdvertiseData.Builder()
             .addServiceUuid(SERVICE_UUID)
             .setIncludeDeviceName(false)
@@ -266,8 +289,7 @@ class MainActivity : FlutterActivity() {
                 if (!responded) { responded = true; result.success(true) }
             }
             override fun onStartFailure(errorCode: Int) {
-                if (!responded) {
-                    responded = true
+                if (!responded) { responded = true
                     result.error("ADVERTISE_FAILED", "Error code: $errorCode", null)
                 }
             }
@@ -281,18 +303,14 @@ class MainActivity : FlutterActivity() {
         gattServer = null
     }
 
-    // Abre um BluetoothGattServer com o serviço Sopro.
-    // Quando outro dispositivo conecta e lê CONTEXT_CARD_CHAR_UUID, recebe o
-    // ContextCard do usuário em JSON UTF-8.
-    // Suporta Long Read (offset incremental) para payloads maiores que o MTU.
+    // GATT server: responde leituras da characteristic de ContextCard.
+    // Suporta Long Read (offset incremental) para payloads maiores que o MTU negociado.
     private fun setupGattServer(btManager: BluetoothManager) {
         try { gattServer?.close() } catch (_: Exception) {}
 
         gattServer = btManager.openGattServer(this, object : BluetoothGattServerCallback() {
             override fun onCharacteristicReadRequest(
-                device: BluetoothDevice,
-                requestId: Int,
-                offset: Int,
+                device: BluetoothDevice, requestId: Int, offset: Int,
                 characteristic: BluetoothGattCharacteristic
             ) {
                 if (characteristic.uuid != CONTEXT_CARD_CHAR_UUID) {
@@ -301,44 +319,228 @@ class MainActivity : FlutterActivity() {
                 }
                 val bytes = currentCardJson.toByteArray(Charsets.UTF_8)
                 if (offset > bytes.size) {
-                    gattServer?.sendResponse(device, requestId,
-                        BluetoothGatt.GATT_INVALID_OFFSET, 0, null)
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, 0, null)
                     return
                 }
-                // Envia o trecho a partir do offset (suporte a múltiplos Read Long)
-                val chunk = bytes.copyOfRange(offset, bytes.size)
-                gattServer?.sendResponse(device, requestId,
-                    BluetoothGatt.GATT_SUCCESS, offset, chunk)
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS,
+                    offset, bytes.copyOfRange(offset, bytes.size))
             }
-
-            override fun onConnectionStateChange(
-                device: BluetoothDevice, status: Int, newState: Int
-            ) {
-                // Sprint 7: sem estado adicional de conexão necessário
-            }
+            override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {}
         })
 
         val service = BluetoothGattService(
             UUID.fromString("550e8400-e29b-41d4-a716-446655440000"),
             BluetoothGattService.SERVICE_TYPE_PRIMARY
         )
-        val characteristic = BluetoothGattCharacteristic(
+        val char = BluetoothGattCharacteristic(
             CONTEXT_CARD_CHAR_UUID,
             BluetoothGattCharacteristic.PROPERTY_READ,
             BluetoothGattCharacteristic.PERMISSION_READ
         )
-        service.addCharacteristic(characteristic)
+        service.addCharacteristic(char)
         gattServer?.addService(service)
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // Permissões — callback unificado (requestCode distingue GPS de BLE)
+    // BLE Central — scan (EventChannel) + GATT client (connectAndReadCard)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // Inicia scan BLE filtrando apenas dispositivos com o SERVICE_UUID Sopro.
+    // Resultados são emitidos via scanEventSink (EventChannel) para o Dart.
+    private fun startBleScan() {
+        if (!hasBluetoothPermissions()) {
+            scanEventSink?.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null)
+            return
+        }
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val btAdapter = btManager?.adapter
+        if (btAdapter == null || !btAdapter.isEnabled) {
+            scanEventSink?.error("BT_DISABLED", "Bluetooth is not enabled", null)
+            return
+        }
+
+        scanner = btAdapter.bluetoothLeScanner
+        if (scanner == null) {
+            scanEventSink?.error("NO_SCANNER", "BLE scanner unavailable", null)
+            return
+        }
+
+        val filter = ScanFilter.Builder()
+            .setServiceUuid(SERVICE_UUID)
+            .build()
+
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+
+        scanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                // Nome preferido: scanRecord contém o nome do advertisement
+                val name = result.scanRecord?.deviceName
+                    ?: result.device.name
+                    ?: ""
+                val info = mapOf(
+                    "deviceId"   to result.device.address,
+                    "deviceName" to name,
+                    "rssi"       to result.rssi
+                )
+                // ScanCallback pode ser chamado de thread de fundo — garante main thread
+                mainHandler.post { scanEventSink?.success(info) }
+            }
+            override fun onScanFailed(errorCode: Int) {
+                mainHandler.post {
+                    scanEventSink?.error("SCAN_FAILED", "Error code: $errorCode", null)
+                }
+            }
+        }
+
+        scanner?.startScan(listOf(filter), settings, scanCallback!!)
+    }
+
+    private fun stopBleScan() {
+        try { scanCallback?.let { scanner?.stopScan(it) } } catch (_: Exception) {}
+        scanCallback = null
+        scanner = null
+    }
+
+    // Conecta ao dispositivo como cliente GATT, lê o ContextCard e desconecta.
+    // Retorna o JSON do ContextCard via MethodChannel result.
+    // Timeout de GATT_TIMEOUT_MS para evitar que a Promise fique pendente para sempre.
+    private fun connectAndReadCard(deviceId: String, result: MethodChannel.Result) {
+        if (!hasBluetoothPermissions()) {
+            result.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null); return
+        }
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val btAdapter = btManager?.adapter
+        if (btAdapter == null || !btAdapter.isEnabled) {
+            result.error("BT_DISABLED", "Bluetooth is not enabled", null); return
+        }
+
+        val device = try {
+            btAdapter.getRemoteDevice(deviceId)
+        } catch (e: IllegalArgumentException) {
+            result.error("INVALID_ID", "Invalid device ID: $deviceId", null); return
+        }
+
+        var responded = false
+        var activeGatt: BluetoothGatt? = null
+
+        // Garante que result seja chamado exatamente uma vez
+        fun respond(block: () -> Unit) {
+            if (!responded) {
+                responded = true
+                mainHandler.post(block)
+            }
+        }
+
+        fun cleanup(gatt: BluetoothGatt) {
+            try { gatt.disconnect() } catch (_: Exception) {}
+            mainHandler.postDelayed({
+                try { gatt.close() } catch (_: Exception) {}
+                activeGatts.remove(gatt)
+            }, 500L) // pequeno delay para que o disconnect seja processado
+        }
+
+        // Timeout: se nenhuma resposta chegar em GATT_TIMEOUT_MS, falha graciosamente
+        val timeoutRunnable = Runnable {
+            respond { result.error("TIMEOUT", "GATT connection timed out", null) }
+            activeGatt?.let { cleanup(it) }
+        }
+        mainHandler.postDelayed(timeoutRunnable, GATT_TIMEOUT_MS)
+
+        val gattCallback = object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                when (newState) {
+                    BluetoothProfile.STATE_CONNECTED -> {
+                        // Solicita MTU maior para suportar ContextCards de até 512 bytes
+                        gatt.requestMtu(512)
+                    }
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        mainHandler.removeCallbacks(timeoutRunnable)
+                        respond { result.error("DISCONNECTED", "Device disconnected (status=$status)", null) }
+                        try { gatt.close() } catch (_: Exception) {}
+                        activeGatts.remove(gatt)
+                    }
+                }
+            }
+
+            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                // Inicia descoberta de serviços após negociar MTU
+                gatt.discoverServices()
+            }
+
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    respond { result.error("DISCOVERY_FAILED", "Service discovery failed: $status", null) }
+                    cleanup(gatt); return
+                }
+                val service = gatt.getService(UUID.fromString("550e8400-e29b-41d4-a716-446655440000"))
+                if (service == null) {
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    respond { result.error("NO_SERVICE", "Sopro service not found", null) }
+                    cleanup(gatt); return
+                }
+                val char = service.getCharacteristic(CONTEXT_CARD_CHAR_UUID)
+                if (char == null) {
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    respond { result.error("NO_CHAR", "ContextCard characteristic not found", null) }
+                    cleanup(gatt); return
+                }
+                gatt.readCharacteristic(char)
+            }
+
+            // Callback legado (Android < 13) — suprimido pois ainda é chamado em < API 33
+            @Suppress("DEPRECATION")
+            override fun onCharacteristicRead(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int
+            ) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                    onReadResult(gatt, characteristic.value, status, result, timeoutRunnable)
+                }
+            }
+
+            // Callback moderno (Android 13+)
+            override fun onCharacteristicRead(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                value: ByteArray,
+                status: Int
+            ) {
+                onReadResult(gatt, value, status, result, timeoutRunnable)
+            }
+
+            private fun onReadResult(
+                gatt: BluetoothGatt,
+                value: ByteArray,
+                status: Int,
+                res: MethodChannel.Result,
+                timeout: Runnable
+            ) {
+                mainHandler.removeCallbacks(timeout)
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    val cardJson = String(value, Charsets.UTF_8)
+                    respond { res.success(cardJson) }
+                } else {
+                    respond { res.error("READ_FAILED", "Characteristic read failed: $status", null) }
+                }
+                cleanup(gatt)
+            }
+        }
+
+        // Conecta com preferência por BLE (TRANSPORT_LE) — disponível a partir do API 23
+        activeGatt = device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+        activeGatts.add(activeGatt)
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Permissões — callback unificado GPS (1001) e BLE (1002)
     // ═════════════════════════════════════════════════════════════════════════
 
     override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<String>,
-        grantResults: IntArray
+        requestCode: Int, permissions: Array<String>, grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         when (requestCode) {
@@ -347,8 +549,7 @@ class MainActivity : FlutterActivity() {
                               grantResults[0] == PackageManager.PERMISSION_GRANTED
                 pendingLocPermResult?.success(granted)
                 pendingLocPermResult = null
-                // Reinicia o stream de GPS caso tenha ficado aguardando permissão
-                if (granted && eventSink != null) startLocationStream()
+                if (granted && locationEventSink != null) startLocationStream()
             }
             PERM_REQUEST_BLE -> {
                 val granted = grantResults.isNotEmpty() &&
@@ -362,6 +563,11 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         stopLocationStream()
         stopBleAdvertising()
+        stopBleScan()
+        // Fecha todos os GATTs ativos para evitar leak de conexões
+        activeGatts.forEach { try { it.disconnect(); it.close() } catch (_: Exception) {} }
+        activeGatts.clear()
+        mainHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 }

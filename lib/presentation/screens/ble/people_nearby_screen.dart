@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/strings.dart';
@@ -64,9 +63,9 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
       return;
     }
 
-    // 2. Verifica se o Bluetooth está ligado
-    final adapterState = await FlutterBluePlus.adapterState.first;
-    if (adapterState != BluetoothAdapterState.on) {
+    // 2. Verifica se o Bluetooth está ligado via MethodChannel nativo
+    final isBtOn = await service.isBluetoothOn();
+    if (!isBtOn) {
       if (mounted) {
         setState(() {
           _isStarting = false;
