@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Acesso à internet para carregar tiles do OpenStreetMap -->
     <uses-permission android:name="android.permission.INTERNET"/>
@@ -42,10 +43,13 @@
         <!-- Foreground service do flutter_background_service.
              foregroundServiceType="location" exigido pelo Android 10+ para
              serviços que acessam GPS em segundo plano. -->
+        <!-- tools:replace resolve o conflito com o manifest interno do
+             flutter_background_service que também declara android:exported -->
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:foregroundServiceType="location"
-            android:exported="false"/>
+            android:exported="false"
+            tools:replace="android:exported"/>
 
         <meta-data
             android:name="flutterEmbedding"
