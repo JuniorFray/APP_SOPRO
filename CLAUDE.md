@@ -15,7 +15,7 @@ exatamente quando ele precisa. O app faz o mesmo com informacoes do dia a dia.
 - BLE Social: MethodChannel + EventChannel nativos (sem pacote externo)
 - ML On-Device: google_mlkit_text_recognition
 - Notificacoes: flutter_local_notifications
-- Background: flutter_background_service (desativado, Sprint 9)
+- Background: flutter_background_service (foreground service ativo, Sprint 9)
 - Backend (sync): Supabase (opcional)
 
 ## Arquitetura (Clean Architecture simplificada)
@@ -49,7 +49,7 @@ BLE JSON payload: {id, n=displayName, r=role, c=company, b=bio, t=tags}
 5. Sem setState em telas complexas - usar Riverpod
 6. Privacidade antes de feature
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 9 - BLEEncounters DB + Background Service fix - CONCLUIDO
 Entregue:
 - Tabela BleEncounters no Drift (schemaVersion 2->3): upsert por deviceId
@@ -74,11 +74,39 @@ Entregue:
   apenas se onboarding_done=true (evita notificacao persistente no 1o acesso).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: 10 - Triggers em Segundo Plano - CONCLUIDO
+Entregue:
+- NotificationService: showTrigger() agora aceita payload (environmentId)
+  passado ao plugin via flutter_local_notifications para deep-link.
+- NotificationService: static _onTap callback registrado via setOnTapCallback().
+  onDidReceiveNotificationResponse chama _onTap(payload) ao toque na notificacao.
+- NotificationService: checkLaunchFromNotification() detecta cold start
+  (app reaberto pelo toque, processo estava encerrado).
+- FireTriggersUseCase: passa environmentId como payload em cada showTrigger().
+- lib/core/navigation/app_router.dart: GlobalKey<NavigatorState> navigatorKey
+  para navegar de fora da arvore de widgets.
+- MaterialApp.navigatorKey = navigatorKey (em main.dart).
+- Rota /environment adicionada em main.dart; argumento = environmentId (String).
+- EnvironmentLoaderScreen: carrega EnvironmentEntity pelo ID via
+  environmentByIdProvider e exibe EnvironmentDetailScreen. Se ID inexistente,
+  volta para a tela anterior com pop().
+- AppInitializer: sequencia de _init() atualizada:
+  1. setOnTapCallback(_openEnvironment) antes de initialize()
+  2. initialize() — registra handler de toque e cria canais
+  3. checkLaunchFromNotification() — cold start navigates via postFrameCallback
+  4. BackgroundServiceManager.start() se onboarding_done=true
+- Fluxo completo: entra no geofence -> FireTriggersUseCase -> showTrigger()
+  com payload -> usuario toca -> _onTap -> navigatorKey.pushNamed('/environment')
+  -> EnvironmentLoaderScreen -> EnvironmentDetailScreen.
+- Funciona com app minimizado (foreground service mantem processo vivo,
+  main engine continua rodando, GPS EventChannel continua disparando).
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Proximo Sprint
-Sprint: 10 - Triggers em Segundo Plano
-Objetivo: GeofenceManager continua funcionando com app minimizado
-(background service ativo), disparando triggers via NotificationService.
-Possivelmente: tela de configuracoes, tema claro/escuro, exportacao de dados.
+Sprint: 11 - Configuracoes + UX polish
+Possivelmente: tela de configuracoes (toggle background service, limpar dados),
+tema claro/escuro, exportacao de dados, widget de ambiente na home melhorado.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

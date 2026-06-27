@@ -6,8 +6,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/constants/strings.dart';
+import 'core/navigation/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'infrastructure/background/background_service_manager.dart';
+import 'presentation/screens/environment/environment_loader_screen.dart';
 import 'presentation/screens/home/home_screen.dart';
 import 'presentation/screens/onboarding/onboarding_screen.dart';
 import 'presentation/screens/profile/profile_screen.dart';
@@ -40,12 +42,26 @@ class SoproApp extends ConsumerWidget {
       title: AppStrings.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
+
+      // navigatorKey global permite navegar de fora da árvore de widgets.
+      // Usado pelo NotificationService ao tratar toques em notificações de trigger.
+      navigatorKey: navigatorKey,
+
       // HomeScreen verifica o onboarding e redireciona se necessário
       home: const HomeScreen(),
       routes: {
         '/home':       (_) => const HomeScreen(),
         '/onboarding': (_) => const OnboardingScreen(),
         '/profile':    (_) => const ProfileScreen(),
+
+        // Rota de deep-link para notificações de trigger.
+        // O argumento é o ID do ambiente (String); a tela carrega a entidade
+        // pelo ID e exibe EnvironmentDetailScreen ao receber o dado.
+        '/environment': (ctx) {
+          final id = ModalRoute.of(ctx)?.settings.arguments as String?;
+          if (id == null) return const HomeScreen();
+          return EnvironmentLoaderScreen(environmentId: id);
+        },
       },
     );
   }

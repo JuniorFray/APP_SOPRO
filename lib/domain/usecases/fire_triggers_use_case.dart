@@ -27,6 +27,9 @@ class FireTriggersUseCase {
         // Título mostra o nome do ambiente para contextualizar o sussurro
         title: '${trigger.title} • $environmentName',
         body: trigger.content,
+        // Payload = ID do ambiente: ao tocar na notificação, o app navega
+        // diretamente para a EnvironmentDetailScreen deste ambiente
+        payload: environmentId,
       );
     }
   }
