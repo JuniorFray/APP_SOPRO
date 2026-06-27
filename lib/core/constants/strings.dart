@@ -54,6 +54,25 @@ class AppStrings {
   static const backgroundServiceTitle   = 'Sopro ativo';
   static const backgroundServiceContent = 'Monitorando seus ambientes em segundo plano';
 
+  // BLE Social — "Pessoas Aqui"
+  static const peopleNearby            = 'Pessoas Aqui';
+  static const bleScanning             = 'Procurando usuários Sopro próximos...';
+  static const bleNoUsers              = 'Ninguém por aqui ainda';
+  static const bleNoUsersHint          = 'Outros usuários Sopro aparecerão aqui';
+  static const blePermissionDenied     = 'Permissão Bluetooth negada. Habilite nas configurações.';
+  static const bleNotSupported         = 'Bluetooth não disponível neste dispositivo.';
+  static const bleCardLoading          = 'Carregando cartão...';
+  static const bleCardError            = 'Não foi possível carregar o cartão deste usuário.';
+  static const bleUserLabel            = 'Usuário Sopro';
+  static const bleAdvertising          = 'Visível para outros';
+  static const bleNotAdvertising       = 'Invisível';
+  static const bleSignalStrong         = 'Perto';
+  static const bleSignalMedium         = 'Médio';
+  static const bleSignalWeak           = 'Longe';
+  static const bleNoProfileWarning     = 'Configure seu perfil para ser visto por outros';
+  static const bleViewCard             = 'Ver cartão';
+  static const bleClose                = 'Fechar';
+
   // Mapa de seleção de local
   static const mapTapInstruction = 'Toque no mapa para definir o local';
   static const useCurrentLocation = 'Usar localização atual';

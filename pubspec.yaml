@@ -38,6 +38,11 @@ dependencies:
   # permitindo que o GPS e o geofencing continuem funcionando em segundo plano.
   flutter_background_service: ^5.0.0
 
+  # BLE Social: escaneamento e conexão GATT (central role).
+  # Advertising/peripheral role implementado via MethodChannel nativo (MainActivity.kt).
+  # Versão 2.3.9 testada e compatível com Android SDK 36.
+  flutter_blue_plus: ^2.3.9
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

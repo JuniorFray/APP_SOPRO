@@ -9,6 +9,7 @@ import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/environment_providers.dart';
 import '../../widgets/environment_card.dart';
+import '../ble/people_nearby_screen.dart';
 import '../environment/add_environment_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
@@ -22,6 +23,15 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text(AppStrings.homeTitle),
         actions: [
+          // Botão "Pessoas Aqui" — abre a tela de BLE Social
+          IconButton(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const PeopleNearbyScreen()),
+            ),
+            icon: const Icon(Icons.people_outline),
+            tooltip: AppStrings.peopleNearby,
+          ),
           IconButton(
             onPressed: () {},
             icon: const Icon(Icons.person_outline),

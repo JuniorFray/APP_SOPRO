@@ -16,6 +16,24 @@
     <!-- Permite reiniciar o serviço após reboot do dispositivo -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
+    <!-- ── BLE Social (Sprint 7) ─────────────────────────────────────────── -->
+    <!-- Android 12+ (API 31+): permissões granulares por operação BLE.
+         neverForLocation = não usamos BLE scan para inferir localização (privacidade). -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
+
+    <!-- Android < 12: permissões legacy necessárias para BLE.
+         maxSdkVersion="30" garante que não conflitem com as novas em Android 12+. -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30"/>
+
+    <!-- Declara que o app usa BLE como funcionalidade principal -->
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="true"/>
+
     <application
         android:label="sopro"
         android:name="${applicationName}"

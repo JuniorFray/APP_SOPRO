@@ -42,15 +42,19 @@ SERVICE_UUID: 550e8400-e29b-41d4-a716-446655440000
 6. Privacidade antes de feature
 
 ## Sprint Atual
-Sprint: 6 - Background service + Triggers CRUD - CONCLUIDO
-Entregue: flutter_background_service 5.1.0 (foreground service mantém processo vivo),
-EnvironmentDetailScreen com listagem/add/toggle/delete de Triggers inline,
-EnvironmentCard tappable → navega para detalhe.
+Sprint: 7 - BLE Social - CONCLUIDO
+Entregue: flutter_blue_plus 2.3.9 (central role: scan + GATT read),
+MainActivity.kt com BluetoothLeAdvertiser + BluetoothGattServer (peripheral role),
+BleService.dart (scan/advertising/fetchContextCard), PeopleNearbyScreen ("Pessoas Aqui"),
+botão no HomeScreen AppBar, permissões BLE no AndroidManifest.
+UUIDs Sopro: Service=550e8400-..., ContextCard char=550e8401-...
+license: License.nonprofit (FlutterBluePlus License — uso pessoal/educacional).
 
 ## Proximo Sprint
-Sprint: 7 - BLE Social (ContextCard)
-Objetivo: flutter_blue_plus para escanear dispositivos próximos, troca de ContextCard
-via BLE Advertisement, registro de BLEEncounters no banco.
+Sprint: 8 - BLEEncounters DB + Background Service fix
+Objetivo: tabela BleEncounters no Drift para persistir encontros BLE,
+corrigir flutter_background_service (pré-criar canal de notificação antes do startForeground),
+integrar geofence + BLE em segundo plano.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
