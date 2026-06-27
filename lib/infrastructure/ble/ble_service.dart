@@ -123,6 +123,8 @@ class BleService {
       final payload = jsonEncode({
         'id': card.id,
         'n': card.displayName,
+        'r': card.role,    // cargo
+        'c': card.company, // empresa
         'b': card.bio.substring(0, min(card.bio.length, 120)),
         't': card.tags,
       });
@@ -160,6 +162,8 @@ class BleService {
       final card = ContextCardEntity(
         id: (map['id'] as String?) ?? user.deviceId,
         displayName: (map['n'] as String?) ?? user.deviceName,
+        role: (map['r'] as String?) ?? '',
+        company: (map['c'] as String?) ?? '',
         bio: (map['b'] as String?) ?? '',
         tags: (map['t'] as String?) ?? '',
         createdAt: DateTime.now(),

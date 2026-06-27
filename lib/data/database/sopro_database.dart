@@ -18,8 +18,9 @@ part 'sopro_database.g.dart';
 // dados do app (getApplicationDocumentsDirectory). Em produção será substituído
 // por SQLCipher para criptografia em repouso (privacidade antes de feature).
 //
-// Versão atual: 1
-// Histórico de migrações fica em _migration abaixo.
+// Histórico de versões:
+//   v1 (Sprint 1): criação das tabelas Environments, Triggers, ContextCards
+//   v2 (Sprint 8): adição de role + company na tabela ContextCards
 @DriftDatabase(
   tables: [
     Environments,
@@ -39,19 +40,21 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        // onCreate é chamado apenas na primeira vez que o banco é criado
+        // onCreate: chamado apenas na primeira criação do banco (instalação limpa)
         onCreate: (m) async {
           await m.createAll();
         },
-        // onUpgrade é chamado quando schemaVersion aumenta
+        // onUpgrade: chamado quando schemaVersion aumenta em instalações existentes
         onUpgrade: (m, from, to) async {
-          // Sprint 1: versão inicial, sem migrações necessárias ainda.
-          // Quando chegar Sprint N com nova coluna/tabela, adicionar aqui:
-          // if (from < 2) { await m.addColumn(...); }
+          if (from < 2) {
+            // Sprint 8: novos campos de cargo e empresa no perfil BLE
+            await m.addColumn(contextCards, contextCards.role);
+            await m.addColumn(contextCards, contextCards.company);
+          }
         },
       );
 }

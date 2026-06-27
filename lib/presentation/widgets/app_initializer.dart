@@ -4,9 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/location_providers.dart';
 
 // Widget que inicializa serviços assíncronos dentro do ProviderScope.
-// Deve ser o primeiro widget construído depois do ProviderScope para
-// garantir que NotificationService, GeofenceManager e BackgroundService
-// sejam preparados antes da primeira tela ser exibida ao usuário.
+// Deve ser o primeiro widget construído depois do ProviderScope para que o
+// NotificationService seja configurado antes da primeira tela ser exibida.
+//
+// INTENCIONALMENTE não solicita permissões aqui:
+//   - Permissões (localização, notificações, BLE) são solicitadas no Onboarding,
+//     mostrando o valor antes de pedir cada permissão.
+//   - Geofences são iniciados pelo HomeScreen após confirmar que o perfil existe.
 class AppInitializer extends ConsumerStatefulWidget {
   final Widget child;
 
@@ -24,16 +28,9 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
   }
 
   Future<void> _init() async {
-    // 1. Inicializa o canal de notificações no Android
-    final notifications = ref.read(notificationServiceProvider);
-    await notifications.initialize();
-    await notifications.requestPermission();
-
-    // 2. Solicita permissão de GPS e inicia monitoramento de geofences
-    await ref.read(geofenceManagerProvider).start();
-
-    // TODO Sprint 7: iniciar BackgroundServiceManager.start() aqui.
-    // Desativado até sprint dedicado (requer canal de notificação pré-criado).
+    // Inicializa o plugin de notificações e cria o canal Android.
+    // NÃO pede permissão aqui — o Onboarding explica e pede na ordem certa.
+    await ref.read(notificationServiceProvider).initialize();
   }
 
   @override

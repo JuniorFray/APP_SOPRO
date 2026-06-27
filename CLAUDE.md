@@ -1,4 +1,4 @@
-﻿# Sopro - Contexto do Projeto para Claude Code
+# Sopro - Contexto do Projeto para Claude Code
 
 ## O Que E Este Projeto
 Sopro e um app Flutter (Android-first, iOS-ready) de memoria fisica contextual.
@@ -11,11 +11,11 @@ exatamente quando ele precisa. O app faz o mesmo com informacoes do dia a dia.
 - Framework: Flutter 3.x (Dart)
 - State Management: Riverpod 2.x
 - Banco local: Drift + SQLCipher (criptografado)
-- Localizacao: geolocator + geofence_service
-- BLE Social: flutter_blue_plus
+- Localizacao: GPS nativo via MethodChannel (FusedLocationProviderClient)
+- BLE Social: MethodChannel + EventChannel nativos (sem pacote externo)
 - ML On-Device: google_mlkit_text_recognition
 - Notificacoes: flutter_local_notifications
-- Background: flutter_background_service
+- Background: flutter_background_service (desativado, Sprint 9)
 - Backend (sync): Supabase (opcional)
 
 ## Arquitetura (Clean Architecture simplificada)
@@ -32,6 +32,12 @@ exatamente quando ele precisa. O app faz o mesmo com informacoes do dia a dia.
 
 ## BLE UUID Sopro (FIXO - nao alterar)
 SERVICE_UUID: 550e8400-e29b-41d4-a716-446655440000
+CONTEXT_CARD_CHAR_UUID: 550e8401-e29b-41d4-a716-446655440000
+
+## ContextCard Schema (schemaVersion = 2)
+Campos: id (UUID), displayName, role (cargo), company (empresa),
+bio (nota pessoal), tags (interesses), createdAt, updatedAt.
+BLE JSON payload: {id, n=displayName, r=role, c=company, b=bio, t=tags}
 
 ## Regras Invioaveis
 1. TODO codigo deve ter comentarios explicativos
@@ -42,19 +48,29 @@ SERVICE_UUID: 550e8400-e29b-41d4-a716-446655440000
 6. Privacidade antes de feature
 
 ## Sprint Atual
-Sprint: 7 - BLE Social - CONCLUIDO
-Entregue: flutter_blue_plus 2.3.9 (central role: scan + GATT read),
-MainActivity.kt com BluetoothLeAdvertiser + BluetoothGattServer (peripheral role),
-BleService.dart (scan/advertising/fetchContextCard), PeopleNearbyScreen ("Pessoas Aqui"),
-botão no HomeScreen AppBar, permissões BLE no AndroidManifest.
-UUIDs Sopro: Service=550e8400-..., ContextCard char=550e8401-...
-license: License.nonprofit (FlutterBluePlus License — uso pessoal/educacional).
+Sprint: 8 - UI Completa - CONCLUIDO
+Entregue:
+- OnboardingScreen (4 passos: boas-vindas, localizacao, notificacoes, BLE)
+  cada passo explica o valor antes de pedir a permissao; PageView com
+  indicadores de progresso; botao "Pular" em cada passo de permissao.
+- ProfileScreen (editor do ContextCard: nome, cargo, empresa, interesses,
+  nota pessoal, toggle visivel/invisivel via bleVisibleProvider).
+- Persistencia: ContextCard salvo no Drift (schemaVersion 1->2 com migracao
+  que adiciona colunas role e company em instalacoes existentes).
+- Navegacao completa: HomeScreen verifica onboarding (card == null ->
+  /onboarding -> /profile -> /home); perfil acessivel pelo icone da AppBar.
+- bleVisibleProvider: preferencia de visibilidade BLE, respeitada pela
+  PeopleNearbyScreen antes de iniciar advertising.
+- AppInitializer simplificado: apenas initialize() sem requestPermission()
+  (permissoes pedidas no onboarding com contexto explicativo).
+- Geofences iniciados pelo HomeScreen apos confirmar que o perfil existe.
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
 ## Proximo Sprint
-Sprint: 8 - BLEEncounters DB + Background Service fix
+Sprint: 9 - BLEEncounters DB + Background Service fix
 Objetivo: tabela BleEncounters no Drift para persistir encontros BLE,
-corrigir flutter_background_service (pré-criar canal de notificação antes do startForeground),
-integrar geofence + BLE em segundo plano.
+corrigir flutter_background_service (pre-criar canal de notificacao antes
+do startForeground), integrar geofence + BLE em segundo plano.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

@@ -19,6 +19,11 @@ final nearbyUsersProvider = StreamProvider<List<DiscoveredSoproUser>>((ref) {
   return ref.watch(bleServiceProvider).devicesStream;
 });
 
-// Estado do advertising: true = visível para outros usuários Sopro.
-// Alterado pelo toggle na PeopleNearbyScreen.
+// Estado do advertising: true = BLE advertising atualmente ativo.
+// Gerenciado pela PeopleNearbyScreen ao iniciar/parar o advertising.
 final bleAdvertisingProvider = StateProvider<bool>((ref) => false);
+
+// Preferência de visibilidade do usuário: true = quer ser visto por outros.
+// Configurado na tela de Perfil. Respeitado pela PeopleNearbyScreen antes de iniciar advertising.
+// Padrão: true (usuário visível quando abre "Pessoas Aqui").
+final bleVisibleProvider = StateProvider<bool>((ref) => true);

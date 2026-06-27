@@ -73,6 +73,63 @@ class AppStrings {
   static const bleViewCard             = 'Ver cartão';
   static const bleClose                = 'Fechar';
 
+  // Onboarding — 4 passos que explicam o valor antes de pedir cada permissão
+  static const obSkip   = 'Pular';
+  static const obNext   = 'Próximo';
+  static const obFinish = 'Configurar meu perfil';
+
+  // Passo 0: Boas-vindas
+  static const obWelcomeTitle = 'Bem-vindo ao Sopro';
+  static const obWelcomeBody  =
+      'Imagine ter alguém que sussurra exatamente o que você precisa saber '
+      'no momento em que você chega num lugar. É isso que o Sopro faz.';
+
+  // Passo 1: Localização
+  static const obLocationTitle = 'Memória de lugar';
+  static const obLocationBody  =
+      'Sopro detecta quando você entra num local salvo e aciona seus lembretes '
+      'automaticamente. Seu GPS é usado apenas para geofences locais — '
+      'nenhuma posição é enviada para servidores.';
+  static const obLocationBtn   = 'Permitir localização';
+
+  // Passo 2: Notificações
+  static const obNotifTitle = 'Sussurros discretos';
+  static const obNotifBody  =
+      'As notificações são o meio pelo qual o Sopro fala com você — '
+      'sem precisar abrir o app. Apenas seus lembretes. '
+      'Nenhuma notificação de marketing.';
+  static const obNotifBtn   = 'Permitir notificações';
+
+  // Passo 3: Bluetooth
+  static const obBleTitle = 'Pessoas ao redor';
+  static const obBleBody  =
+      'Detecta outros usuários Sopro próximos via Bluetooth e permite trocar '
+      'cartões de contexto diretamente entre dispositivos — '
+      'nada é enviado pela internet.';
+  static const obBleBtn   = 'Permitir Bluetooth';
+
+  // Tela de Perfil
+  static const profileTitle          = 'Meu Perfil';
+  static const profileName           = 'Nome';
+  static const profileNameHint       = 'Como você quer ser chamado';
+  static const profileRole           = 'Cargo';
+  static const profileRoleHint       = 'Ex: Desenvolvedor, Designer, Estudante';
+  static const profileCompany        = 'Empresa / Organização';
+  static const profileCompanyHint    = 'Ex: Google, USP, Freelancer';
+  static const profileInterests      = 'Interesses';
+  static const profileInterestsHint  = 'Ex: tecnologia, música, café';
+  static const profileNote           = 'Nota pessoal';
+  static const profileNoteHint       = 'O que você está fazendo aqui? O que busca?';
+  static const profileVisible        = 'Visível para outros';
+  static const profileVisibleDesc    =
+      'Outros usuários Sopro próximos poderão ver seu cartão via Bluetooth.';
+  static const profileSave           = 'Salvar perfil';
+  static const profileSaved          = 'Perfil salvo com sucesso!';
+  static const profileNameRequired   = 'Informe pelo menos um nome';
+  static const profileSectionIdentity   = 'Identidade';
+  static const profileSectionContext    = 'Contexto';
+  static const profileSectionPrivacy    = 'Privacidade';
+
   // Mapa de seleção de local
   static const mapTapInstruction = 'Toque no mapa para definir o local';
   static const useCurrentLocation = 'Usar localização atual';

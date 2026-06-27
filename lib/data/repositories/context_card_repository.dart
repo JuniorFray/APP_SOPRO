@@ -26,12 +26,13 @@ class ContextCardRepository implements IContextCardRepository {
   @override
   Future<void> save(ContextCardEntity entity) {
     final id = entity.id.isEmpty ? _uuid.v4() : entity.id;
-    // updatedAt é sempre atualizado para DateTime.now() em cada save,
-    // garantindo que o receptor BLE possa detectar versões mais recentes
+    // updatedAt é sempre DateTime.now() para que receptores BLE detectem a versão mais recente
     return _dao.upsert(
       ContextCardsCompanion(
         id: Value(id),
         displayName: Value(entity.displayName),
+        role: Value(entity.role),
+        company: Value(entity.company),
         bio: Value(entity.bio),
         tags: Value(entity.tags),
         createdAt: Value(entity.createdAt),
@@ -48,6 +49,8 @@ class ContextCardRepository implements IContextCardRepository {
   ContextCardEntity _toEntity(ContextCard row) => ContextCardEntity(
         id: row.id,
         displayName: row.displayName,
+        role: row.role,
+        company: row.company,
         bio: row.bio,
         tags: row.tags,
         createdAt: row.createdAt,

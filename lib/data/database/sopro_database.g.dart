@@ -733,6 +733,21 @@ class $ContextCardsTable extends ContextCards
           GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 50),
       type: DriftSqlType.string,
       requiredDuringInsert: true);
+  static const VerificationMeta _roleMeta = const VerificationMeta('role');
+  @override
+  late final GeneratedColumn<String> role = GeneratedColumn<String>(
+      'role', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _companyMeta =
+      const VerificationMeta('company');
+  @override
+  late final GeneratedColumn<String> company = GeneratedColumn<String>(
+      'company', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
   static const VerificationMeta _bioMeta = const VerificationMeta('bio');
   @override
   late final GeneratedColumn<String> bio = GeneratedColumn<String>(
@@ -761,7 +776,7 @@ class $ContextCardsTable extends ContextCards
       type: DriftSqlType.dateTime, requiredDuringInsert: true);
   @override
   List<GeneratedColumn> get $columns =>
-      [id, displayName, bio, tags, createdAt, updatedAt];
+      [id, displayName, role, company, bio, tags, createdAt, updatedAt];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -784,6 +799,14 @@ class $ContextCardsTable extends ContextCards
               data['display_name']!, _displayNameMeta));
     } else if (isInserting) {
       context.missing(_displayNameMeta);
+    }
+    if (data.containsKey('role')) {
+      context.handle(
+          _roleMeta, role.isAcceptableOrUnknown(data['role']!, _roleMeta));
+    }
+    if (data.containsKey('company')) {
+      context.handle(_companyMeta,
+          company.isAcceptableOrUnknown(data['company']!, _companyMeta));
     }
     if (data.containsKey('bio')) {
       context.handle(
@@ -820,6 +843,10 @@ class $ContextCardsTable extends ContextCards
           .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
       displayName: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}display_name'])!,
+      role: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}role'])!,
+      company: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}company'])!,
       bio: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}bio'])!,
       tags: attachedDatabase.typeMapping
@@ -840,6 +867,8 @@ class $ContextCardsTable extends ContextCards
 class ContextCard extends DataClass implements Insertable<ContextCard> {
   final String id;
   final String displayName;
+  final String role;
+  final String company;
   final String bio;
   final String tags;
   final DateTime createdAt;
@@ -847,6 +876,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
   const ContextCard(
       {required this.id,
       required this.displayName,
+      required this.role,
+      required this.company,
       required this.bio,
       required this.tags,
       required this.createdAt,
@@ -856,6 +887,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['display_name'] = Variable<String>(displayName);
+    map['role'] = Variable<String>(role);
+    map['company'] = Variable<String>(company);
     map['bio'] = Variable<String>(bio);
     map['tags'] = Variable<String>(tags);
     map['created_at'] = Variable<DateTime>(createdAt);
@@ -867,6 +900,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
     return ContextCardsCompanion(
       id: Value(id),
       displayName: Value(displayName),
+      role: Value(role),
+      company: Value(company),
       bio: Value(bio),
       tags: Value(tags),
       createdAt: Value(createdAt),
@@ -880,6 +915,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
     return ContextCard(
       id: serializer.fromJson<String>(json['id']),
       displayName: serializer.fromJson<String>(json['displayName']),
+      role: serializer.fromJson<String>(json['role']),
+      company: serializer.fromJson<String>(json['company']),
       bio: serializer.fromJson<String>(json['bio']),
       tags: serializer.fromJson<String>(json['tags']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -892,6 +929,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'displayName': serializer.toJson<String>(displayName),
+      'role': serializer.toJson<String>(role),
+      'company': serializer.toJson<String>(company),
       'bio': serializer.toJson<String>(bio),
       'tags': serializer.toJson<String>(tags),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -902,6 +941,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
   ContextCard copyWith(
           {String? id,
           String? displayName,
+          String? role,
+          String? company,
           String? bio,
           String? tags,
           DateTime? createdAt,
@@ -909,6 +950,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
       ContextCard(
         id: id ?? this.id,
         displayName: displayName ?? this.displayName,
+        role: role ?? this.role,
+        company: company ?? this.company,
         bio: bio ?? this.bio,
         tags: tags ?? this.tags,
         createdAt: createdAt ?? this.createdAt,
@@ -919,6 +962,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
       id: data.id.present ? data.id.value : this.id,
       displayName:
           data.displayName.present ? data.displayName.value : this.displayName,
+      role: data.role.present ? data.role.value : this.role,
+      company: data.company.present ? data.company.value : this.company,
       bio: data.bio.present ? data.bio.value : this.bio,
       tags: data.tags.present ? data.tags.value : this.tags,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
@@ -931,6 +976,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
     return (StringBuffer('ContextCard(')
           ..write('id: $id, ')
           ..write('displayName: $displayName, ')
+          ..write('role: $role, ')
+          ..write('company: $company, ')
           ..write('bio: $bio, ')
           ..write('tags: $tags, ')
           ..write('createdAt: $createdAt, ')
@@ -940,14 +987,16 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, displayName, bio, tags, createdAt, updatedAt);
+  int get hashCode => Object.hash(
+      id, displayName, role, company, bio, tags, createdAt, updatedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is ContextCard &&
           other.id == this.id &&
           other.displayName == this.displayName &&
+          other.role == this.role &&
+          other.company == this.company &&
           other.bio == this.bio &&
           other.tags == this.tags &&
           other.createdAt == this.createdAt &&
@@ -957,6 +1006,8 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
 class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
   final Value<String> id;
   final Value<String> displayName;
+  final Value<String> role;
+  final Value<String> company;
   final Value<String> bio;
   final Value<String> tags;
   final Value<DateTime> createdAt;
@@ -965,6 +1016,8 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
   const ContextCardsCompanion({
     this.id = const Value.absent(),
     this.displayName = const Value.absent(),
+    this.role = const Value.absent(),
+    this.company = const Value.absent(),
     this.bio = const Value.absent(),
     this.tags = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -974,6 +1027,8 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
   ContextCardsCompanion.insert({
     required String id,
     required String displayName,
+    this.role = const Value.absent(),
+    this.company = const Value.absent(),
     required String bio,
     this.tags = const Value.absent(),
     required DateTime createdAt,
@@ -987,6 +1042,8 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
   static Insertable<ContextCard> custom({
     Expression<String>? id,
     Expression<String>? displayName,
+    Expression<String>? role,
+    Expression<String>? company,
     Expression<String>? bio,
     Expression<String>? tags,
     Expression<DateTime>? createdAt,
@@ -996,6 +1053,8 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (displayName != null) 'display_name': displayName,
+      if (role != null) 'role': role,
+      if (company != null) 'company': company,
       if (bio != null) 'bio': bio,
       if (tags != null) 'tags': tags,
       if (createdAt != null) 'created_at': createdAt,
@@ -1007,6 +1066,8 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
   ContextCardsCompanion copyWith(
       {Value<String>? id,
       Value<String>? displayName,
+      Value<String>? role,
+      Value<String>? company,
       Value<String>? bio,
       Value<String>? tags,
       Value<DateTime>? createdAt,
@@ -1015,6 +1076,8 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
     return ContextCardsCompanion(
       id: id ?? this.id,
       displayName: displayName ?? this.displayName,
+      role: role ?? this.role,
+      company: company ?? this.company,
       bio: bio ?? this.bio,
       tags: tags ?? this.tags,
       createdAt: createdAt ?? this.createdAt,
@@ -1031,6 +1094,12 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
     }
     if (displayName.present) {
       map['display_name'] = Variable<String>(displayName.value);
+    }
+    if (role.present) {
+      map['role'] = Variable<String>(role.value);
+    }
+    if (company.present) {
+      map['company'] = Variable<String>(company.value);
     }
     if (bio.present) {
       map['bio'] = Variable<String>(bio.value);
@@ -1055,6 +1124,8 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
     return (StringBuffer('ContextCardsCompanion(')
           ..write('id: $id, ')
           ..write('displayName: $displayName, ')
+          ..write('role: $role, ')
+          ..write('company: $company, ')
           ..write('bio: $bio, ')
           ..write('tags: $tags, ')
           ..write('createdAt: $createdAt, ')
@@ -1654,6 +1725,8 @@ typedef $$ContextCardsTableCreateCompanionBuilder = ContextCardsCompanion
     Function({
   required String id,
   required String displayName,
+  Value<String> role,
+  Value<String> company,
   required String bio,
   Value<String> tags,
   required DateTime createdAt,
@@ -1664,6 +1737,8 @@ typedef $$ContextCardsTableUpdateCompanionBuilder = ContextCardsCompanion
     Function({
   Value<String> id,
   Value<String> displayName,
+  Value<String> role,
+  Value<String> company,
   Value<String> bio,
   Value<String> tags,
   Value<DateTime> createdAt,
@@ -1685,6 +1760,12 @@ class $$ContextCardsTableFilterComposer
 
   ColumnFilters<String> get displayName => $composableBuilder(
       column: $table.displayName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get role => $composableBuilder(
+      column: $table.role, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get company => $composableBuilder(
+      column: $table.company, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get bio => $composableBuilder(
       column: $table.bio, builder: (column) => ColumnFilters(column));
@@ -1714,6 +1795,12 @@ class $$ContextCardsTableOrderingComposer
   ColumnOrderings<String> get displayName => $composableBuilder(
       column: $table.displayName, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get role => $composableBuilder(
+      column: $table.role, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get company => $composableBuilder(
+      column: $table.company, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get bio => $composableBuilder(
       column: $table.bio, builder: (column) => ColumnOrderings(column));
 
@@ -1741,6 +1828,12 @@ class $$ContextCardsTableAnnotationComposer
 
   GeneratedColumn<String> get displayName => $composableBuilder(
       column: $table.displayName, builder: (column) => column);
+
+  GeneratedColumn<String> get role =>
+      $composableBuilder(column: $table.role, builder: (column) => column);
+
+  GeneratedColumn<String> get company =>
+      $composableBuilder(column: $table.company, builder: (column) => column);
 
   GeneratedColumn<String> get bio =>
       $composableBuilder(column: $table.bio, builder: (column) => column);
@@ -1783,6 +1876,8 @@ class $$ContextCardsTableTableManager extends RootTableManager<
           updateCompanionCallback: ({
             Value<String> id = const Value.absent(),
             Value<String> displayName = const Value.absent(),
+            Value<String> role = const Value.absent(),
+            Value<String> company = const Value.absent(),
             Value<String> bio = const Value.absent(),
             Value<String> tags = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
@@ -1792,6 +1887,8 @@ class $$ContextCardsTableTableManager extends RootTableManager<
               ContextCardsCompanion(
             id: id,
             displayName: displayName,
+            role: role,
+            company: company,
             bio: bio,
             tags: tags,
             createdAt: createdAt,
@@ -1801,6 +1898,8 @@ class $$ContextCardsTableTableManager extends RootTableManager<
           createCompanionCallback: ({
             required String id,
             required String displayName,
+            Value<String> role = const Value.absent(),
+            Value<String> company = const Value.absent(),
             required String bio,
             Value<String> tags = const Value.absent(),
             required DateTime createdAt,
@@ -1810,6 +1909,8 @@ class $$ContextCardsTableTableManager extends RootTableManager<
               ContextCardsCompanion.insert(
             id: id,
             displayName: displayName,
+            role: role,
+            company: company,
             bio: bio,
             tags: tags,
             createdAt: createdAt,

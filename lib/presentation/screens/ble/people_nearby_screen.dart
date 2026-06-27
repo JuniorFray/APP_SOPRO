@@ -75,18 +75,20 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
       return;
     }
 
-    // 3. Se o usuário tem um ContextCard, ativa o advertising para ser visível
-    try {
-      final card = await ref.read(contextCardRepositoryProvider).getActive();
-      if (card != null) {
-        final advertised = await service.startAdvertising(card);
-        if (mounted) {
-          ref.read(bleAdvertisingProvider.notifier).state = advertised;
+    // 3. Ativa advertising se o usuário tem perfil E quer ser visível (preferência do Perfil)
+    if (ref.read(bleVisibleProvider)) {
+      try {
+        final card = await ref.read(contextCardRepositoryProvider).getActive();
+        if (card != null) {
+          final advertised = await service.startAdvertising(card);
+          if (mounted) {
+            ref.read(bleAdvertisingProvider.notifier).state = advertised;
+          }
         }
+      } catch (e) {
+        // Advertising é desejável mas não bloqueador — scan continua sem ele
+        debugPrint('[PeopleNearby] Advertising falhou: $e');
       }
-    } catch (e) {
-      // Advertising é desejável mas não bloqueador — continua sem ele
-      debugPrint('[PeopleNearby] Advertising falhou: $e');
     }
 
     // 4. Inicia o scan BLE filtrado pelo SERVICE_UUID Sopro
@@ -503,11 +505,20 @@ class _ContextCardSheet extends StatelessWidget {
                         fontWeight: FontWeight.bold,
                       ),
                     ),
-                    if (card.tags.isNotEmpty)
+                    // Mostra cargo/empresa se disponíveis; caso contrário, tags
+                    if (card.occupationLine.isNotEmpty)
+                      Text(
+                        card.occupationLine,
+                        style: const TextStyle(
+                          color: AppTheme.accent,
+                          fontSize: 13,
+                        ),
+                      )
+                    else if (card.tags.isNotEmpty)
                       Text(
                         card.tags,
                         style: const TextStyle(
-                          color: AppTheme.accent,
+                          color: AppTheme.textSecondary,
                           fontSize: 13,
                         ),
                       ),
