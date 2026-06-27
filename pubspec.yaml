@@ -34,6 +34,10 @@ dependencies:
   # Notificações locais (disparo de triggers ao entrar no geofence)
   flutter_local_notifications: ^18.0.1
 
+  # Foreground service que mantém o processo vivo quando o app é minimizado,
+  # permitindo que o GPS e o geofencing continuem funcionando em segundo plano.
+  flutter_background_service: ^5.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

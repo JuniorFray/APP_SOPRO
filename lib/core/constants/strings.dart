@@ -37,6 +37,23 @@ class AppStrings {
   static const triggers = 'gatilhos';
   static const noTriggers = 'sem gatilhos';
 
+  // Triggers CRUD
+  static const addTrigger            = 'Novo Gatilho';
+  static const triggerTitleLabel     = 'Título do gatilho';
+  static const triggerTitleHint      = 'Ex: Levar documento, Comprar leite';
+  static const triggerContentLabel   = 'Conteúdo';
+  static const triggerContentHint    = 'Detalhe o que você precisa lembrar...';
+  static const triggerTitleRequired  = 'Informe o título do gatilho';
+  static const triggerContentRequired = 'Informe o conteúdo do gatilho';
+  static const triggerDeleteConfirm  = 'Excluir este gatilho?';
+  static const triggersSection       = 'Gatilhos';
+  static const noTriggersYet         = 'Sem gatilhos ainda';
+  static const noTriggersHint        = 'Toque em + para adicionar o primeiro';
+
+  // Background service
+  static const backgroundServiceTitle   = 'Sopro ativo';
+  static const backgroundServiceContent = 'Monitorando seus ambientes em segundo plano';
+
   // Mapa de seleção de local
   static const mapTapInstruction = 'Toque no mapa para definir o local';
   static const useCurrentLocation = 'Usar localização atual';

@@ -8,8 +8,12 @@
     <!-- Notificações de trigger visíveis ao usuário (Android 13+/API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
-    <!-- Sprint 5: adicionar ACCESS_BACKGROUND_LOCATION, FOREGROUND_SERVICE e
-         FOREGROUND_SERVICE_LOCATION quando flutter_background_service for integrado -->
+    <!-- Foreground service para manter o processo vivo quando o app é minimizado -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- Tipo específico "location" exigido pelo Android 14+ para serviços com GPS -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <!-- Permite reiniciar o serviço após reboot do dispositivo -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
     <application
         android:label="sopro"
@@ -34,6 +38,14 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+
+        <!-- Foreground service do flutter_background_service.
+             foregroundServiceType="location" exigido pelo Android 10+ para
+             serviços que acessam GPS em segundo plano. -->
+        <service
+            android:name="id.flutter.flutter_background_service.BackgroundService"
+            android:foregroundServiceType="location"
+            android:exported="false"/>
 
         <meta-data
             android:name="flutterEmbedding"

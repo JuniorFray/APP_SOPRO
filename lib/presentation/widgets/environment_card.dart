@@ -6,6 +6,7 @@ import '../../core/theme/app_theme.dart';
 import '../../domain/entities/environment_entity.dart';
 import '../providers/database_provider.dart';
 import '../providers/trigger_providers.dart';
+import '../screens/environment/environment_detail_screen.dart';
 
 // Card que representa um Environment na lista da Home.
 // Exibe nome, raio e contagem de triggers. Permite excluir via swipe.
@@ -55,6 +56,14 @@ class EnvironmentCard extends ConsumerWidget {
           subtitle: Text(
             '${environment.radiusMeters.toStringAsFixed(0)}m de raio',
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+          ),
+          // Navega para a tela de detalhe com a lista de triggers
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) =>
+                  EnvironmentDetailScreen(environment: environment),
+            ),
           ),
           trailing: triggersAsync.when(
             data: (triggers) => _TriggerCountBadge(count: triggers.length),

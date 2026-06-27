@@ -42,16 +42,15 @@ SERVICE_UUID: 550e8400-e29b-41d4-a716-446655440000
 6. Privacidade antes de feature
 
 ## Sprint Atual
-Sprint: 5 - GPS real via MethodChannel nativo - CONCLUIDO
-Entregue: MainActivity.kt com FusedLocationProviderClient (MethodChannel + EventChannel),
-NativeLocationService.dart (wrapper Dart), GeofenceManager real com latlong2 (ENTER/EXIT),
-botão "Localização atual" funcional em AddEnvironmentScreen.
-Sem pacotes externos de GPS — compatível com Dart 3.5.4 + Android SDK 36.
+Sprint: 6 - Background service + Triggers CRUD - CONCLUIDO
+Entregue: flutter_background_service 5.1.0 (foreground service mantém processo vivo),
+EnvironmentDetailScreen com listagem/add/toggle/delete de Triggers inline,
+EnvironmentCard tappable → navega para detalhe.
 
 ## Proximo Sprint
-Sprint: 6 - Background service + Triggers CRUD
-Objetivo: flutter_background_service para GPS em segundo plano (foreground service),
-tela de detalhe do Environment com listagem e criação de Triggers inline.
+Sprint: 7 - BLE Social (ContextCard)
+Objetivo: flutter_blue_plus para escanear dispositivos próximos, troca de ContextCard
+via BLE Advertisement, registro de BLEEncounters no banco.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
