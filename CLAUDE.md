@@ -42,14 +42,16 @@ SERVICE_UUID: 550e8400-e29b-41d4-a716-446655440000
 6. Privacidade antes de feature
 
 ## Sprint Atual
-Sprint: 4 - Mapa interativo para seleção de local - CONCLUIDO
-Entregue: flutter_map (OSM, sem API key), latlong2, AddEnvironmentScreen com tap-to-pin,
-botão "Localização atual" com snackbar (GPS no Sprint 5), dialog antigo removido.
+Sprint: 5 - GPS real via MethodChannel nativo - CONCLUIDO
+Entregue: MainActivity.kt com FusedLocationProviderClient (MethodChannel + EventChannel),
+NativeLocationService.dart (wrapper Dart), GeofenceManager real com latlong2 (ENTER/EXIT),
+botão "Localização atual" funcional em AddEnvironmentScreen.
+Sem pacotes externos de GPS — compatível com Dart 3.5.4 + Android SDK 36.
 
 ## Proximo Sprint
-Sprint: 5 - GPS real + Background service
-Objetivo: Upgrade Flutter/Dart SDK, reintegrar geolocator ^14.x, flutter_background_service,
-substituir GeofenceManager stub pela implementação real com latlong2.distanceBetween
+Sprint: 6 - Background service + Triggers CRUD
+Objetivo: flutter_background_service para GPS em segundo plano (foreground service),
+tela de detalhe do Environment com listagem e criação de Triggers inline.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

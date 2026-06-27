@@ -44,3 +44,10 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // FusedLocationProviderClient para GPS eficiente em bateria.
+    // Exposto ao Flutter via MethodChannel/EventChannel em MainActivity.kt.
+    // Versão 21.x compatível com Android SDK 29+ (minSdk do projeto).
+    implementation 'com.google.android.gms:play-services-location:21.3.0'
+}

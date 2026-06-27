@@ -1,43 +1,92 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
-// latlong2 já está no pubspec (Sprint 4). Sprint 5 usa:
-// import 'package:latlong2/latlong.dart';
-// const _dist = Distance();
-// final m = _dist.as(LengthUnit.Meter, LatLng(posLat, posLng), LatLng(env.latitude, env.longitude));
+import 'package:latlong2/latlong.dart';
 
 import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/usecases/fire_triggers_use_case.dart';
+import '../location/native_location_service.dart';
 
-// STUB — GPS desativado temporariamente.
+// Monitora a posição do usuário e dispara triggers quando ele entra num ambiente.
 //
-// Motivo: geolocator ^13.x é incompatível com Android SDK 36 e
-// geolocator ^14.x requer Dart SDK >=3.10.0 (versão atual: 3.5.4).
+// Lógica ENTER/EXIT:
+// - _insideEnvironments rastreia quais ambientes o usuário já está dentro.
+// - A cada posição recebida, a distância até cada ambiente é calculada com
+//   latlong2.Distance (haversine) e comparada com o raio do ambiente.
+// - ENTER: distância <= raio && não estava dentro → dispara FireTriggersUseCase + adiciona ao Set
+// - EXIT:  distância >  raio && estava dentro  → remove do Set (sem notificação por enquanto)
 //
-// Plano: Sprint 5 integra flutter_background_service + upgrade do Flutter/Dart SDK,
-// momento em que este stub será substituído pela implementação real com
-// Geolocator.getPositionStream() e lógica ENTER/EXIT por distanceBetween.
-//
-// A interface pública (start, stop, isRunning) já está no formato final
-// para que a troca seja feita sem alterar providers ou callers.
+// GPS via MethodChannel nativo (MainActivity.kt / FusedLocationProviderClient).
+// Não depende de nenhum pacote pub.dev de localização.
 class GeofenceManager {
-  // Dependências mantidas para não quebrar os providers e facilitar a troca
-  // ignore: unused_field
   final IEnvironmentRepository _envRepo;
-  // ignore: unused_field
   final FireTriggersUseCase _fireTriggers;
+  final NativeLocationService _locationService;
+
+  StreamSubscription<({double latitude, double longitude})>? _sub;
+
+  // IDs dos ambientes que o usuário está dentro no momento atual
+  final _inside = <String>{};
+
+  // Reutilizado a cada cálculo para evitar instâncias desnecessárias
+  static const _dist = Distance();
 
   bool _running = false;
 
-  GeofenceManager(this._envRepo, this._fireTriggers);
+  GeofenceManager(this._envRepo, this._fireTriggers, this._locationService);
 
+  /// Verifica/solicita permissão e assina o stream de posição.
   Future<void> start() async {
-    // GPS desativado neste sprint — não faz nada
-    debugPrint('[GeofenceManager] GPS stub: monitoramento não iniciado (Sprint 5).');
-    _running = false;
+    bool ok = await _locationService.checkPermission();
+    if (!ok) ok = await _locationService.requestPermission();
+
+    if (!ok) {
+      debugPrint('[GeofenceManager] Permissão de localização não concedida — monitoramento não iniciado.');
+      return;
+    }
+
+    _sub = _locationService.getPositionStream().listen(
+      _onPosition,
+      onError: (Object e) => debugPrint('[GeofenceManager] Erro no stream: $e'),
+    );
+
+    _running = true;
+    debugPrint('[GeofenceManager] Monitoramento de geofences iniciado.');
   }
 
+  /// Para o monitoramento e limpa o estado interno.
   Future<void> stop() async {
+    await _sub?.cancel();
+    _sub = null;
+    _inside.clear();
     _running = false;
+    debugPrint('[GeofenceManager] Monitoramento parado.');
   }
 
   bool get isRunning => _running;
+
+  // Callback do EventChannel — avaliado para cada posição recebida.
+  Future<void> _onPosition(({double latitude, double longitude}) pos) async {
+    final envs = await _envRepo.getAll();
+    final current = LatLng(pos.latitude, pos.longitude);
+
+    for (final env in envs) {
+      final meters = _dist.as(
+        LengthUnit.Meter,
+        current,
+        LatLng(env.latitude, env.longitude),
+      );
+
+      final wasInside = _inside.contains(env.id);
+      final isNowInside = meters <= env.radiusMeters;
+
+      if (isNowInside && !wasInside) {
+        _inside.add(env.id);
+        // Passa environmentId e nome do ambiente para o use case buscar os triggers ativos
+        await _fireTriggers(env.id, env.name);
+      } else if (!isNowInside && wasInside) {
+        _inside.remove(env.id);
+      }
+    }
+  }
 }

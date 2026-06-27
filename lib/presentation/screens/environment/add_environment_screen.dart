@@ -7,10 +7,11 @@ import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../providers/database_provider.dart';
+import '../../providers/location_providers.dart';
 
 // Tela de criação de Environment com mapa interativo.
-// O usuário toca no mapa para posicionar o pin — elimina a entrada manual
-// de latitude/longitude. Usa flutter_map (OpenStreetMap, sem API key).
+// O usuário toca no mapa para posicionar o pin ou usa "Localização atual"
+// para centrar o mapa na posição GPS real (via MethodChannel nativo — Sprint 5).
 class AddEnvironmentScreen extends ConsumerStatefulWidget {
   const AddEnvironmentScreen({super.key});
 
@@ -28,6 +29,10 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   // Ponto selecionado pelo usuário no mapa; null enquanto nenhum foi tocado
   LatLng? _selectedPoint;
   bool _isSaving = false;
+  bool _loadingLocation = false;
+
+  // Controlador do mapa — permite mover o centro programaticamente (ex: GPS)
+  final _mapController = MapController();
 
   // Centro inicial do mapa: São Paulo (referência urbana padrão para o Brasil)
   static const _defaultCenter = LatLng(-23.5505, -46.6333);
@@ -99,6 +104,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
               child: Stack(
                 children: [
                   FlutterMap(
+                    mapController: _mapController,
                     options: MapOptions(
                       initialCenter: _defaultCenter,
                       initialZoom: 12.0,
@@ -158,18 +164,27 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                       ),
                     ),
 
-                  // Botão "Localização atual" — GPS habilitado no Sprint 5
+                  // Botão "Localização atual" — usa GPS nativo via MethodChannel
                   Positioned(
                     bottom: 8,
                     right: 8,
                     child: FloatingActionButton.small(
-                      onPressed: _onLocationButtonPressed,
+                      onPressed: _loadingLocation ? null : _onLocationButtonPressed,
                       backgroundColor: AppTheme.backgroundElevated,
                       tooltip: AppStrings.useCurrentLocation,
-                      child: const Icon(
-                        Icons.my_location,
-                        color: AppTheme.textSecondary,
-                      ),
+                      child: _loadingLocation
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppTheme.textSecondary,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.my_location,
+                              color: AppTheme.textSecondary,
+                            ),
                     ),
                   ),
                 ],
@@ -200,15 +215,50 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     );
   }
 
-  // Botão de localização atual: GPS integrado no Sprint 5
-  void _onLocationButtonPressed() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(AppStrings.locationComingSoon),
-        backgroundColor: AppTheme.backgroundElevated,
-        duration: Duration(seconds: 3),
-      ),
-    );
+  // Obtém a posição real via GPS nativo e centraliza o mapa no ponto obtido.
+  // Pede permissão se ainda não foi concedida.
+  Future<void> _onLocationButtonPressed() async {
+    setState(() => _loadingLocation = true);
+
+    final service = ref.read(nativeLocationServiceProvider);
+
+    try {
+      // Verifica permissão; solicita ao sistema se necessário
+      bool hasPermission = await service.checkPermission();
+      if (!hasPermission) {
+        hasPermission = await service.requestPermission();
+      }
+
+      if (!hasPermission) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(AppStrings.locationPermissionDenied),
+            backgroundColor: AppTheme.backgroundElevated,
+          ),
+        );
+        return;
+      }
+
+      final pos = await service.getCurrentPosition();
+      if (!mounted) return;
+
+      if (pos != null) {
+        final point = LatLng(pos.latitude, pos.longitude);
+        setState(() => _selectedPoint = point);
+        // Zoom 16 mostra ~200 m de raio — adequado para criar geofences pequenos
+        _mapController.move(point, 16.0);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(AppStrings.locationError),
+            backgroundColor: AppTheme.backgroundElevated,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loadingLocation = false);
+    }
   }
 
   Future<void> _submit() async {

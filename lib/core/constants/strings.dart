@@ -40,6 +40,8 @@ class AppStrings {
   // Mapa de seleção de local
   static const mapTapInstruction = 'Toque no mapa para definir o local';
   static const useCurrentLocation = 'Usar localização atual';
-  static const locationComingSoon =
-      'GPS será habilitado no Sprint 5 (aguarda upgrade do Flutter SDK)';
+  static const locationPermissionDenied =
+      'Permissão de localização negada. Habilite nas configurações do dispositivo.';
+  static const locationError =
+      'Não foi possível obter sua localização. Tente novamente.';
 }
