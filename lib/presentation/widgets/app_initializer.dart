@@ -21,7 +21,6 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
   @override
   void initState() {
     super.initState();
-    // initState não pode ser async — delega para método auxiliar
     _init();
   }
 
@@ -32,13 +31,25 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     await notifications.requestPermission();
 
     // 2. Solicita permissão de GPS e inicia monitoramento de geofences
-    // As permissões de localização são solicitadas dentro do geofenceManager.start()
     await ref.read(geofenceManagerProvider).start();
 
-    // 3. Inicia o foreground service para manter o processo vivo em background.
-    // O serviço exibe uma notificação persistente que impede o Android de
-    // matar o processo, permitindo que o GPS continue mesmo com o app minimizado.
-    await BackgroundServiceManager.start();
+    // 3. Inicia o foreground service APÓS o primeiro frame ser renderizado.
+    // addPostFrameCallback garante que a UI já está visível antes de iniciar
+    // o serviço, evitando tela preta caso start() bloqueie ou lance exceção.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _startBackgroundService();
+    });
+  }
+
+  // Separado de _init para isolar falhas do serviço: o app nunca pode mostrar
+  // tela preta por causa do background service.
+  Future<void> _startBackgroundService() async {
+    try {
+      await BackgroundServiceManager.start();
+    } catch (e) {
+      // Falha no serviço é não-fatal: GPS em foreground continua funcionando
+      debugPrint('[AppInitializer] Background service não iniciado: $e');
+    }
   }
 
   @override
