@@ -476,7 +476,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     final uri = Uri.https('photon.komoot.io', '/api/', {
       'q':     query,
       'limit': '5',
-      'lang':  'pt',
       // Brasil: longitude oeste=-73.9, latitude sul=-33.7,
       //         longitude leste=-34.7, latitude norte=5.3
       'bbox':  '-73.9,-33.7,-34.7,5.3',
