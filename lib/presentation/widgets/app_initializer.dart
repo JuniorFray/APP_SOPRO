@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/navigation/app_router.dart';
 import '../../infrastructure/background/background_service_manager.dart';
+import '../../infrastructure/logging/app_logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
 import '../providers/location_providers.dart';
 import '../providers/settings_providers.dart';
@@ -13,14 +14,13 @@ import '../providers/settings_providers.dart';
 // NotificationService seja configurado antes da primeira tela ser exibida.
 //
 // Sequência de _init():
-//   1. Registra o callback de toque em notificação (antes de initialize(),
-//      para não perder toques em notificações já pendentes).
-//   2. Inicializa o plugin de notificações e cria os canais Android.
-//   3. Verifica cold start (app aberto por toque numa notificação).
-//   4. Inicia o foreground service se o onboarding já foi concluído.
-//
-// INTENCIONALMENTE não solicita permissões aqui:
-//   Permissões são solicitadas no Onboarding com contexto explicativo.
+//   1. Inicializa o AppLogger (gera/recupera o device UUID).
+//   2. Registra o callback de toque em notificação (antes de initialize()).
+//   3. Inicializa o plugin de notificações e cria os canais Android.
+//   4. Verifica cold start (app aberto por toque numa notificação).
+//   5. Restaura as preferências do usuário das Configurações.
+//   6. Inicia o foreground service se o onboarding já foi concluído.
+//   7. Loga o evento app_start.
 class AppInitializer extends ConsumerStatefulWidget {
   final Widget child;
 
@@ -38,20 +38,20 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
   }
 
   Future<void> _init() async {
-    // 1. Registra o callback de toque ANTES de initialize() para que notificações
+    // 1. Inicializa o logger — gera o device ID se for a primeira execução
+    await AppLogger.init();
+
+    // 2. Registra o callback de toque ANTES de initialize() para que notificações
     //    pendentes (ex: do último foreground service) sejam capturadas.
     NotificationService.setOnTapCallback(_openEnvironment);
 
-    // 2. Cria os dois canais Android e registra os handlers do plugin.
+    // 3. Cria os canais Android e registra os handlers do plugin.
     final notifications = ref.read(notificationServiceProvider);
     await notifications.initialize();
 
-    // 3. Verifica cold start: app aberto pelo toque numa notificação.
-    //    Só acontece quando o processo foi encerrado (force-stop ou reboot).
-    //    Com o foreground service ativo, o processo raramente é encerrado.
+    // 4. Verifica cold start: app aberto pelo toque numa notificação.
     final coldPayload = await notifications.checkLaunchFromNotification();
     if (coldPayload != null) {
-      // Aguarda o primeiro frame para que o Navigator esteja montado
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _openEnvironment(coldPayload);
       });
@@ -59,24 +59,35 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
 
     final prefs = await SharedPreferences.getInstance();
 
-    // 4. Restaura a preferência de notificações salva pelo usuário nas Configurações.
-    //    O default (true) já está no provider; só atualiza se o usuário desativou.
+    // 5. Restaura as preferências salvas pelo usuário nas Configurações.
+    //    Os defaults já estão nos providers; só atualiza quando diferem.
     final notifEnabled = prefs.getBool('notifications_enabled') ?? true;
     if (!notifEnabled) {
       ref.read(notificationsEnabledProvider.notifier).state = false;
     }
 
-    // 5. Inicia o foreground service apenas se o onboarding já foi concluído.
+    final soundEnabled = prefs.getBool('notification_sound_enabled') ?? true;
+    if (!soundEnabled) {
+      ref.read(notificationSoundProvider.notifier).state = false;
+    }
+
+    final cooldownMinutes = prefs.getInt('notification_cooldown_minutes') ?? 0;
+    if (cooldownMinutes != 0) {
+      ref.read(notificationCooldownMinutesProvider.notifier).state =
+          cooldownMinutes;
+    }
+
+    // 6. Inicia o foreground service apenas se o onboarding já foi concluído.
     //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
     if (prefs.getBool('onboarding_done') ?? false) {
       await BackgroundServiceManager.start();
     }
+
+    // 7. Loga a inicialização do app após tudo estar configurado
+    AppLogger.log('app_start');
   }
 
   // Navega para a tela do ambiente identificado por [environmentId].
-  // Chamado tanto pelo toque em notificação (app em segundo plano)
-  // quanto pelo cold start (app fechado).
-  //
   // Usa o navigatorKey global para navegar de fora da árvore de widgets.
   void _openEnvironment(String environmentId) {
     navigatorKey.currentState?.pushNamed(

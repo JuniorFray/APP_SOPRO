@@ -10,16 +10,18 @@ import '../../providers/settings_providers.dart';
 import '../encounters/encounters_screen.dart';
 
 // Tela de Configurações do Sopro.
-// Agrupa preferências de privacidade, conectividade e informações do app.
+// Agrupa preferências de privacidade, notificações e dados.
 // Usa Riverpod para leitura/escrita em memória e SharedPreferences para persistência.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Lê os toggles de visibilidade BLE e notificações
+    // Lê todos os toggles de configuração
     final bleVisible    = ref.watch(bleVisibleProvider);
     final notifEnabled  = ref.watch(notificationsEnabledProvider);
+    final notifSound    = ref.watch(notificationSoundProvider);
+    final notifCooldown = ref.watch(notificationCooldownMinutesProvider);
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
@@ -65,6 +67,30 @@ class SettingsScreen extends ConsumerWidget {
             },
           ),
 
+          // Toggle de som — ativo mesmo quando notificações estão desabilitadas
+          // para que o usuário pré-configure antes de reativar
+          _SwitchTile(
+            icon: Icons.volume_up_outlined,
+            title: AppStrings.settingsNotifSound,
+            subtitle: AppStrings.settingsNotifSoundDesc,
+            value: notifSound,
+            onChanged: (v) async {
+              ref.read(notificationSoundProvider.notifier).state = v;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('notification_sound_enabled', v);
+            },
+          ),
+
+          // Seletor de frequência mínima entre notificações
+          _CooldownTile(
+            value: notifCooldown,
+            onChanged: (v) async {
+              ref.read(notificationCooldownMinutesProvider.notifier).state = v;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setInt('notification_cooldown_minutes', v);
+            },
+          ),
+
           const _Divider(),
 
           // ─── Seção: Dados ──────────────────────────────────────────────────
@@ -77,7 +103,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
 
           _NavTile(
-            icon: Icons.history,
+            icon: Icons.people_outline,
             title: AppStrings.settingsMyEncounters,
             onTap: () => pushScreen(context, const EncountersScreen()),
           ),
@@ -107,79 +133,8 @@ class SettingsScreen extends ConsumerWidget {
             value: AppStrings.settingsAppVersion,
           ),
 
-          // Link para código-fonte (copiável)
-          _InfoTile(
-            icon: Icons.code,
-            title: AppStrings.settingsSourceCode,
-            value: '',
-            onTap: () => _showSourceInfo(context),
-          ),
-
           const SizedBox(height: 32),
         ],
-      ),
-    );
-  }
-
-  // Exibe o URL do repositório em um bottom sheet copiável
-  void _showSourceInfo(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppTheme.backgroundElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Alça visual do bottom sheet
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: AppTheme.textDisabled,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const Text(
-              'Código-fonte',
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            // URL do repositório em fonte monospace para destaque visual
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: AppTheme.backgroundSurface,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const SelectableText(
-                'https://${AppStrings.settingsSourceCode}',
-                style: TextStyle(
-                  color: AppTheme.accent,
-                  fontSize: 13,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Selecione e copie o link acima para abrir no navegador.',
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-            ),
-            const SizedBox(height: 16),
-          ],
-        ),
       ),
     );
   }
@@ -260,6 +215,57 @@ class _SwitchTile extends StatelessWidget {
   }
 }
 
+// Seletor de frequência de notificação com DropdownButton
+class _CooldownTile extends StatelessWidget {
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  const _CooldownTile({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppTheme.backgroundElevated,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Icon(Icons.timer_outlined, color: AppTheme.accent, size: 20),
+      ),
+      title: const Text(
+        AppStrings.settingsNotifCooldown,
+        style: TextStyle(
+          color: AppTheme.textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+      ),
+      subtitle: const Text(
+        'Intervalo mínimo entre notificações',
+        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+      ),
+      // DropdownButton integrado ao trailing do ListTile
+      trailing: DropdownButton<int>(
+        value: value,
+        dropdownColor: AppTheme.backgroundElevated,
+        underline: const SizedBox.shrink(),
+        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        items: const [
+          DropdownMenuItem(value: 0,  child: Text('Sempre')),
+          DropdownMenuItem(value: 5,  child: Text('5 min')),
+          DropdownMenuItem(value: 15, child: Text('15 min')),
+          DropdownMenuItem(value: 30, child: Text('30 min')),
+          DropdownMenuItem(value: 60, child: Text('1 hora')),
+        ],
+        onChanged: (v) => onChanged(v!),
+      ),
+    );
+  }
+}
+
 // Linha de navegação com ícone e seta
 class _NavTile extends StatelessWidget {
   final IconData icon;
@@ -307,13 +313,11 @@ class _InfoTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String value;
-  final VoidCallback? onTap;
 
   const _InfoTile({
     required this.icon,
     required this.title,
     required this.value,
-    this.onTap,
   });
 
   @override
@@ -337,23 +341,18 @@ class _InfoTile extends StatelessWidget {
           fontSize: 14,
         ),
       ),
-      trailing: value.isNotEmpty
-          ? Text(
-              value,
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 13,
-              ),
-            )
-          : onTap != null
-              ? const Icon(Icons.chevron_right, color: AppTheme.textDisabled)
-              : null,
-      onTap: onTap,
+      trailing: Text(
+        value,
+        style: const TextStyle(
+          color: AppTheme.textSecondary,
+          fontSize: 13,
+        ),
+      ),
     );
   }
 }
 
-// Separador visual entre seções
+// Linha divisória sutil entre seções
 class _Divider extends StatelessWidget {
   const _Divider();
 

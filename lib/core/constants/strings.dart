@@ -131,7 +131,7 @@ class AppStrings {
   static const profileSectionPrivacy    = 'Privacidade';
 
   // Histórico de encontros BLE
-  static const encountersTitle       = 'Encontros';
+  static const encountersTitle       = 'Pessoas que encontrei';
   static const encountersEmpty       = 'Nenhum encontro registrado';
   static const encountersEmptyHint   =
       'Usuários Sopro com quem você trocar cartões aparecem aqui';
@@ -147,6 +147,10 @@ class AppStrings {
   static const locationError =
       'Não foi possível obter sua localização. Tente novamente.';
 
+  // Busca de endereço por Nominatim (OpenStreetMap)
+  static const searchAddressHint = 'Buscar endereço ou lugar...';
+  static const searchError = 'Não foi possível buscar o endereço. Tente novamente.';
+
   // Tela de Configurações
   static const settingsTitle          = 'Configurações';
   static const settingsTooltip        = 'Configurações';
@@ -160,13 +164,21 @@ class AppStrings {
       'Receber sussurros ao entrar nos seus ambientes';
   static const settingsDataSection    = 'Dados';
   static const settingsMyProfile      = 'Meu perfil';
-  static const settingsMyEncounters   = 'Encontros BLE';
+  static const settingsMyEncounters   = 'Pessoas que encontrei';
   static const settingsAboutSection   = 'Sobre o Sopro';
   static const settingsVersion        = 'Versão';
   static const settingsAppVersion     = '0.1.0';
   static const settingsSourceCode     = 'github.com/JuniorFray/APP_SOPRO';
   static const settingsAppDesc        =
       '"O sussurro certo. No lugar certo." — memória física contextual, 100% on-device.';
+
+  // Notificações avançadas (som e frequência)
+  static const settingsNotifSound        = 'Som nas notificações';
+  static const settingsNotifSoundDesc    = 'Toca som ao receber um sussurro';
+  static const settingsNotifCooldown     = 'Frequência';
+
+  // Perfil — foto
+  static const profilePhotoTooltip = 'Alterar foto do perfil';
 
   // Edição de ambiente e gatilho
   static const editEnvironmentTitle = 'Editar Ambiente';

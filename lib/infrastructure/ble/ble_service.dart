@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../../domain/entities/context_card_entity.dart';
+import '../logging/app_logger.dart';
 import 'discovered_sopro_user.dart';
 
 // BleService gerencia toda a comunicação BLE do Sopro 100% via canais nativos.
@@ -79,6 +80,7 @@ class BleService {
       _onScanResult,
       onError: (Object e) {
         debugPrint('[BleService] Scan error: $e');
+        AppLogger.log('ble_error', {'type': 'scan_error', 'error': e.toString()});
       },
     );
   }
@@ -176,6 +178,11 @@ class BleService {
       return updated;
     } on PlatformException catch (e) {
       debugPrint('[BleService] fetchContextCard falhou (${user.deviceId}): ${e.message}');
+      AppLogger.log('ble_error', {
+        'type':      'gatt_error',
+        'device_id': user.deviceId,
+        'message':   e.message ?? 'unknown',
+      });
       return user;
     }
   }

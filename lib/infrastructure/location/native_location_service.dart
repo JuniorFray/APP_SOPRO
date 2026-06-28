@@ -38,14 +38,17 @@ class NativeLocationService {
     }
   }
 
-  /// Stream contínuo de posições (5 s / 10 m de deslocamento mínimo).
+  /// Stream contínuo de posições (2 s / 10 m de deslocamento mínimo).
+  /// Inclui [accuracy] em metros para ajuste dinâmico do raio de geofence.
   /// Emitido pelo LocationCallback do Kotlin; cancelado ao desinscrever.
-  Stream<({double latitude, double longitude})> getPositionStream() {
+  Stream<({double latitude, double longitude, double accuracy})>
+      getPositionStream() {
     return _stream.receiveBroadcastStream().map((dynamic data) {
       final map = Map<String, dynamic>.from(data as Map);
       return (
         latitude: (map['latitude'] as num).toDouble(),
         longitude: (map['longitude'] as num).toDouble(),
+        accuracy: (map['accuracy'] as num).toDouble(),
       );
     });
   }

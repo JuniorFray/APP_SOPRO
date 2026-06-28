@@ -194,7 +194,7 @@ class MainActivity : FlutterActivity() {
 
     private fun startLocationStream() {
         if (!hasLocationPermission()) return
-        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5_000L)
+        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L)
             .setMinUpdateDistanceMeters(10f).build()
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(lr: LocationResult) {

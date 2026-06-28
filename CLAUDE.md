@@ -87,7 +87,7 @@ Entregue:
 - Funciona com app minimizado (foreground service ativo).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 11 - Configuracoes e UX Polish - CONCLUIDO
 Entregue:
 - SettingsScreen (lib/presentation/screens/settings/settings_screen.dart):
@@ -120,10 +120,49 @@ Entregue:
 - main.dart: rota /settings adicionada (SettingsScreen).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: 12 - Logs Supabase + Correcoes pos-teste - CONCLUIDO
+Entregue:
+PARTE 1 — Sistema de logs no Supabase:
+- AppLogger (lib/infrastructure/logging/app_logger.dart): classe estatica,
+  device UUID gerado uma vez e salvo em SharedPreferences ('logger_device_id'),
+  POST assincrono para Supabase REST (dart:io HttpClient, fire-and-forget).
+  Eventos logados: app_start, geofence_enter, geofence_exit, trigger_fired,
+  ble_error. Falhas de rede silenciosas — logging nunca impacta a UX.
+- supabase/app_logs.sql: schema da tabela (id, device_id, event_type,
+  payload jsonb, created_at).
+- AppInitializer: chama AppLogger.init() no inicio de _init().
+- GeofenceManager: loga geofence_enter e geofence_exit com distancia e accuracy.
+- FireTriggersUseCase: loga trigger_fired com environment_id, trigger_id e sound.
+- BleService: loga ble_error em scan_error e gatt_error.
+
+PARTE 2 — Correcoes pos-teste:
+- GPS 2 s: MainActivity.kt linha 197 mudou 5_000L para 2_000L.
+- Raio com accuracy: NativeLocationService.getPositionStream() agora inclui
+  accuracy. GeofenceManager usa meters <= radiusMeters + accuracy.clamp(0, 100).
+- Nominatim search: AddEnvironmentScreen tem barra de busca flutuante no mapa
+  (dart:io HttpClient, User-Agent identificado, resultados em lista clicavel).
+- "Encontros BLE" renomeado para "Pessoas que encontrei" em strings.dart e
+  SettingsScreen (settingsMyEncounters, encountersTitle).
+- GitHub link removido das Configuracoes.
+- Som nas notificacoes: notificationSoundProvider + canal 'sopro_triggers_silent'
+  (sem som/vibracao). FireTriggersUseCase.showTrigger() passa useSoundChannel.
+- Frequencia de notificacoes: notificationCooldownMinutesProvider + _CooldownTile
+  com DropdownButton (Sempre / 5 / 15 / 30 / 60 min) nas Configuracoes.
+  FireTriggersUseCase rastreia _lastNotifTime para aplicar o cooldown.
+- Foto no perfil: image_picker ^1.1.2 adicionado. ProfileScreen com GestureDetector
+  no CircleAvatar: pickImage -> copia para getApplicationDocumentsDirectory ->
+  path em SharedPreferences 'profile_photo_path'. Foto nao enviada via BLE.
+- Icone do app: flutter_launcher_icons ^0.14.4 (dev). Python gerou 512x512 PNG
+  com 3 curvas de vento (#E94560) sobre fundo #1A1A2E. dart run flutter_launcher_icons
+  gerou os mipmap-* do Android.
+- AndroidManifest: READ_MEDIA_IMAGES + READ_EXTERNAL_STORAGE (maxSdkVersion=32).
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Proximo Sprint
-Sprint: 12 - Polimento avanado e exportacao
-Possivelmente: tema claro/escuro, exportacao de dados, estatisticas de uso,
-widget Android de ambiente na home, icone de categoria para ambientes.
+Sprint: 13 - Possivelmente: tema claro/escuro, exportacao de dados,
+estatisticas de uso, widget Android de ambiente na home,
+icone de categoria para ambientes.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

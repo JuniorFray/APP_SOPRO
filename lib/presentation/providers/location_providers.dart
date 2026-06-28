@@ -21,18 +21,20 @@ final nativeLocationServiceProvider = Provider<NativeLocationService>((ref) {
 // Provider do GeofenceManager — injeta repositórios, use case e serviço de GPS.
 // O manager é criado mas não iniciado aqui; HomeScreen chama .start().
 final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
-  final envRepo        = ref.watch(environmentRepositoryProvider);
-  final triggerRepo    = ref.watch(triggerRepositoryProvider);
-  final notifications  = ref.watch(notificationServiceProvider);
+  final envRepo         = ref.watch(environmentRepositoryProvider);
+  final triggerRepo     = ref.watch(triggerRepositoryProvider);
+  final notifications   = ref.watch(notificationServiceProvider);
   final locationService = ref.watch(nativeLocationServiceProvider);
 
-  // FireTriggersUseCase recebe um callback que lê o toggle de notificações
-  // no momento em que um geofence é acionado — assim a preferência do usuário
-  // é respeitada sem recriar o GeofenceManager.
+  // FireTriggersUseCase recebe callbacks que leem as preferências do usuário
+  // no momento em que um geofence é acionado — assim qualquer alteração nas
+  // Configurações é imediatamente respeitada sem recriar o GeofenceManager.
   final fireTriggers = FireTriggersUseCase(
     triggerRepo,
     notifications,
-    () => ref.read(notificationsEnabledProvider),
+    () => ref.read(notificationsEnabledProvider),   // toggle geral
+    () => ref.read(notificationSoundProvider),       // som vs. silencioso
+    () => ref.read(notificationCooldownMinutesProvider), // cooldown
   );
 
   final manager = GeofenceManager(envRepo, fireTriggers, locationService);

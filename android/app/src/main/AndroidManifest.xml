@@ -34,6 +34,12 @@
     <!-- Declara que o app usa BLE como funcionalidade principal -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true"/>
 
+    <!-- Galeria de fotos para o perfil (image_picker) — Android 13+ usa READ_MEDIA_IMAGES -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <!-- Fallback para Android 12 e anteriores -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+
     <application
         android:label="sopro"
         android:name="${applicationName}"

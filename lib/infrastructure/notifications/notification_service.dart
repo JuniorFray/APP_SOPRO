@@ -2,9 +2,10 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 // Serviço responsável por mostrar notificações locais e tratar toques nelas.
 //
-// Dois canais Android:
-//   'sopro_triggers'  — alta prioridade, exibido quando entra em geofence
-//   'sopro_background' — baixa prioridade, notificação persistente do foreground service
+// Canais Android criados em initialize():
+//   'sopro_triggers'        — alta prioridade, com som (entrada em geofence)
+//   'sopro_triggers_silent' — prioridade padrão, sem som (preferência do usuário)
+//   'sopro_background'      — baixa prioridade, notificação persistente do foreground
 //
 // Deep-link:
 //   Ao tocar numa notificação de trigger, o payload (environmentId) é entregue
@@ -13,10 +14,15 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 class NotificationService {
   final _plugin = FlutterLocalNotificationsPlugin();
 
-  // Canal de triggers — alta prioridade, exibido quando entra em um geofence
+  // Canal com som — alta prioridade, exibido em heads-up ao entrar no geofence
   static const _triggerChannelId   = 'sopro_triggers';
   static const _triggerChannelName = 'Gatilhos Sopro';
   static const _triggerChannelDesc = 'Sussurros entregues ao chegar em um local';
+
+  // Canal silencioso — sem som/vibração, para usuários que preferem discreção
+  static const _silentChannelId   = 'sopro_triggers_silent';
+  static const _silentChannelName = 'Gatilhos Sopro (silencioso)';
+  static const _silentChannelDesc = 'Sussurros sem som nem vibração';
 
   // Canal do foreground service — baixa prioridade (sem som, sem heads-up).
   // Deve ser criado ANTES de BackgroundServiceManager.start() para evitar o
@@ -59,13 +65,26 @@ class NotificationService {
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
 
-    // Canal de alta prioridade para os triggers de geofence
+    // Canal com som — alta prioridade para os triggers de geofence
     await androidImpl?.createNotificationChannel(
       const AndroidNotificationChannel(
         _triggerChannelId,
         _triggerChannelName,
         description: _triggerChannelDesc,
         importance: Importance.high,
+      ),
+    );
+
+    // Canal silencioso — prioridade padrão, sem som nem vibração
+    await androidImpl?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _silentChannelId,
+        _silentChannelName,
+        description: _silentChannelDesc,
+        importance: Importance.defaultImportance,
+        enableVibration: false,
+        playSound: false,
+        showBadge: true,
       ),
     );
 
@@ -84,11 +103,6 @@ class NotificationService {
 
   // Verifica se o app foi aberto pelo toque numa notificação (cold start).
   // Retorna o environmentId do payload, ou null se o app foi aberto normalmente.
-  //
-  // Cold start acontece quando o processo foi completamente encerrado (force-stop
-  // ou reinício do dispositivo) e o usuário toca na notificação.
-  // Com o foreground service ativo, o processo raramente é encerrado —
-  // mas esta verificação cobre o caso de exceção.
   Future<String?> checkLaunchFromNotification() async {
     final details = await _plugin.getNotificationAppLaunchDetails();
     if (details?.didNotificationLaunchApp == true) {
@@ -98,7 +112,6 @@ class NotificationService {
   }
 
   // Solicita permissão de notificação em Android 13+ (API 33).
-  // Em versões anteriores, retorna true automaticamente.
   Future<bool> requestPermission() async {
     final granted = await _plugin
         .resolvePlatformSpecificImplementation<
@@ -109,31 +122,39 @@ class NotificationService {
 
   // Exibe uma notificação de trigger — o "sussurro" do Sopro.
   //
-  // [id]      — deve ser único por trigger (usa hash do UUID) para não
-  //             sobrescrever outra notificação pendente do mesmo ambiente.
-  // [title]   — título curto: "nome do trigger • nome do ambiente"
-  // [body]    — conteúdo detalhado do trigger
-  // [payload] — ID do ambiente; passado de volta ao callback de toque
-  //             para navegar diretamente para a tela do ambiente.
+  // [id]             — deve ser único por trigger (usa hash do UUID)
+  // [title]          — "nome do trigger • nome do ambiente"
+  // [body]           — conteúdo detalhado do trigger
+  // [payload]        — environmentId para deep-link ao tocar
+  // [useSoundChannel] — true = canal com som; false = canal silencioso
   Future<void> showTrigger({
     required int id,
     required String title,
     required String body,
     String? payload,
+    bool useSoundChannel = true,
   }) async {
-    const details = AndroidNotificationDetails(
-      _triggerChannelId,
-      _triggerChannelName,
-      channelDescription: _triggerChannelDesc,
-      importance: Importance.high,
-      priority: Priority.high,
+    // Seleciona canal conforme preferência de som do usuário
+    final channelId   = useSoundChannel ? _triggerChannelId   : _silentChannelId;
+    final channelName = useSoundChannel ? _triggerChannelName : _silentChannelName;
+    final channelDesc = useSoundChannel ? _triggerChannelDesc : _silentChannelDesc;
+    final importance  = useSoundChannel ? Importance.high : Importance.defaultImportance;
+    final priority    = useSoundChannel ? Priority.high   : Priority.defaultPriority;
+
+    final details = AndroidNotificationDetails(
+      channelId,
+      channelName,
+      channelDescription: channelDesc,
+      importance: importance,
+      priority: priority,
       icon: '@mipmap/ic_launcher',
     );
+
     await _plugin.show(
       id,
       title,
       body,
-      const NotificationDetails(android: details),
+      NotificationDetails(android: details),
       payload: payload,
     );
   }

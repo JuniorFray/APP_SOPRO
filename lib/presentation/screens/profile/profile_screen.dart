@@ -2,18 +2,21 @@
 //
 // Permite criar ou editar o perfil público trocado via BLE com outros
 // usuários Sopro próximos. Campos:
+//   - Foto (opcional, armazenada localmente — nunca enviada para BLE ou servidor)
 //   - Nome (displayName) — obrigatório
 //   - Cargo (role)
 //   - Empresa (company)
 //   - Interesses (tags, separadas por vírgula)
 //   - Nota pessoal (bio, texto livre)
 //   - Toggle: Visível para outros (bleVisibleProvider)
-//
-// Navegação: sempre acessado via pushNamed('/profile') do HomeScreen.
-// Após salvar → Navigator.pop() retorna ao HomeScreen.
+
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
@@ -39,8 +42,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   final _formKey     = GlobalKey<FormState>();
 
   ContextCardEntity? _existingCard; // preenchido ao carregar o card ativo do banco
-  bool _loaded  = false; // true após carregar dados do banco
-  bool _saving  = false; // true enquanto persiste no banco
+  File? _photoFile;                 // foto do perfil (só local, nunca enviada via BLE)
+  bool _loaded  = false;            // true após carregar dados do banco
+  bool _saving  = false;            // true enquanto persiste no banco
 
   @override
   void didChangeDependencies() {
@@ -48,11 +52,16 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     if (!_loaded) _loadCard();
   }
 
-  // Carrega o ContextCard ativo do banco e pré-preenche os campos
+  // Carrega o ContextCard ativo do banco e pré-preenche os campos.
+  // Também restaura a foto do perfil salva no SharedPreferences.
   Future<void> _loadCard() async {
-    final card = await ref.read(contextCardRepositoryProvider).getActive();
+    final card  = await ref.read(contextCardRepositoryProvider).getActive();
+    final prefs = await SharedPreferences.getInstance();
+    final photoPath = prefs.getString('profile_photo_path');
+
     if (!mounted) return;
     _existingCard = card;
+
     if (card != null) {
       _nameCtrl.text    = card.displayName;
       _roleCtrl.text    = card.role;
@@ -60,6 +69,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       _tagsCtrl.text    = card.tags;
       _bioCtrl.text     = card.bio;
     }
+
+    // Verifica se a foto ainda existe no disco antes de exibir
+    if (photoPath != null && File(photoPath).existsSync()) {
+      _photoFile = File(photoPath);
+    }
+
     setState(() => _loaded = true);
   }
 
@@ -71,6 +86,32 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     _tagsCtrl.dispose();
     _bioCtrl.dispose();
     super.dispose();
+  }
+
+  // Abre a galeria para o usuário escolher uma foto de perfil.
+  // A foto é copiada para o diretório de documentos do app e o caminho
+  // é salvo no SharedPreferences. A foto NÃO é enviada via BLE nem Supabase.
+  Future<void> _pickPhoto() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,   // reduz tamanho do arquivo sem perda visível
+      maxWidth:  512,
+      maxHeight: 512,
+    );
+    if (picked == null) return; // usuário cancelou
+
+    // Copia para diretório estável do app (evita que o path temporário expire)
+    final appDir   = await getApplicationDocumentsDirectory();
+    final destPath = '${appDir.path}/profile_photo.jpg';
+    await File(picked.path).copy(destPath);
+
+    // Persiste o caminho para restaurar na próxima sessão
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('profile_photo_path', destPath);
+
+    if (!mounted) return;
+    setState(() => _photoFile = File(destPath));
   }
 
   // Salva o ContextCard no banco e gerencia a navegação pós-save
@@ -87,7 +128,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         bio: _bioCtrl.text.trim(),
         tags: _tagsCtrl.text.trim(),
         createdAt: _existingCard?.createdAt ?? DateTime.now(),
-        updatedAt: DateTime.now(),              // repositório sobrescreve com now()
+        updatedAt: DateTime.now(),
       );
 
       await ref.read(contextCardRepositoryProvider).save(entity);
@@ -102,7 +143,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         ),
       );
 
-      // Volta ao HomeScreen (sempre empilhado abaixo via pushNamed)
       Navigator.pop(context);
     } catch (e) {
       if (mounted) {
@@ -132,7 +172,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  // Spinner exibido enquanto o banco carrega
   Widget _buildLoading() {
     return const Center(
       child: CircularProgressIndicator(color: AppTheme.accent),
@@ -140,7 +179,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   Widget _buildForm(bool isVisible) {
-    // Avatar com inicial do nome (atualizado em tempo real)
+    // Inicial do nome para o avatar quando não há foto
     final initial = _nameCtrl.text.isNotEmpty
         ? _nameCtrl.text[0].toUpperCase()
         : '?';
@@ -150,18 +189,47 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
         children: [
-          // ── Avatar ──────────────────────────────────────────────────────
+          // ── Avatar com suporte a foto ────────────────────────────────────
           Center(
-            child: CircleAvatar(
-              radius: 40,
-              // ignore: deprecated_member_use
-              backgroundColor: AppTheme.accent.withOpacity(0.15),
-              child: Text(
-                initial,
-                style: const TextStyle(
-                  color: AppTheme.accent,
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
+            child: Tooltip(
+              message: AppStrings.profilePhotoTooltip,
+              child: GestureDetector(
+                onTap: _pickPhoto,
+                child: Stack(
+                  alignment: Alignment.bottomRight,
+                  children: [
+                    CircleAvatar(
+                      radius: 44,
+                      backgroundImage:
+                          _photoFile != null ? FileImage(_photoFile!) : null,
+                      // ignore: deprecated_member_use
+                      backgroundColor: AppTheme.accent.withOpacity(0.15),
+                      // Exibe inicial apenas quando não há foto
+                      child: _photoFile == null
+                          ? Text(
+                              initial,
+                              style: const TextStyle(
+                                color: AppTheme.accent,
+                                fontSize: 32,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            )
+                          : null,
+                    ),
+                    // Ícone de câmera indica que o avatar é clicável
+                    Container(
+                      decoration: const BoxDecoration(
+                        color: AppTheme.accent,
+                        shape: BoxShape.circle,
+                      ),
+                      padding: const EdgeInsets.all(5),
+                      child: const Icon(
+                        Icons.camera_alt,
+                        color: Colors.white,
+                        size: 14,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -172,7 +240,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           const _SectionLabel(label: AppStrings.profileSectionIdentity),
           const SizedBox(height: 12),
 
-          // Nome (obrigatório)
           TextFormField(
             controller: _nameCtrl,
             textCapitalization: TextCapitalization.words,
@@ -188,7 +255,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Cargo
           TextFormField(
             controller: _roleCtrl,
             textCapitalization: TextCapitalization.words,
@@ -200,7 +266,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Empresa
           TextFormField(
             controller: _companyCtrl,
             textCapitalization: TextCapitalization.words,
@@ -216,7 +281,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           const _SectionLabel(label: AppStrings.profileSectionContext),
           const SizedBox(height: 12),
 
-          // Interesses (tags comma-separated)
           TextFormField(
             controller: _tagsCtrl,
             textCapitalization: TextCapitalization.none,
@@ -228,7 +292,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Nota pessoal (bio, multiline)
           TextFormField(
             controller: _bioCtrl,
             textCapitalization: TextCapitalization.sentences,
@@ -245,7 +308,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           const _SectionLabel(label: AppStrings.profileSectionPrivacy),
           const SizedBox(height: 8),
 
-          // Toggle de visibilidade BLE
           Container(
             decoration: BoxDecoration(
               color: AppTheme.backgroundSurface,
@@ -275,7 +337,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: 32),
 
-          // ── Botão de salvar ─────────────────────────────────────────────
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
@@ -297,7 +358,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  // Helper para decoração consistente dos campos
   InputDecoration _inputDecoration({
     required String label,
     required String hint,
