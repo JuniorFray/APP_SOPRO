@@ -376,55 +376,71 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     );
   }
 
-  // Busca um endereço via Nominatim (OpenStreetMap) e exibe os resultados.
-  // Nominatim é gratuito e não exige API key; requer User-Agent identificado.
+  // Busca um endereço via Nominatim com suporte a número (ex: "Rua X, 123").
+  //
+  // Estratégia de dois estágios:
+  //   1. Detecta número na query; se encontrado, usa busca ESTRUTURADA
+  //      (street=123 Rua X) que o Nominatim resolve com mais precisão.
+  //   2. Se a busca estruturada retornar vazio (número não indexado), cai
+  //      no fallback de busca LIVRE (q=Rua X) só com o logradouro.
+  //
+  // Padrões reconhecidos de número:
+  //   "Rua X, 123"     → vírgula seguida de número (mais comum no BR)
+  //   "Rua X, nº 123"  → com prefixo "nº" ou "n°"
+  //   "123 Rua X"      → número no início
+  //   "Rua X 123"      → número ao final sem vírgula
   Future<void> _searchAddress() async {
     final query = _searchCtrl.text.trim();
     if (query.isEmpty) return;
     setState(() {
-      _searching = true;
+      _searching    = true;
       _searchResults = [];
     });
 
     try {
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 10);
+      // ── Etapa 1: extrair número do logradouro ──────────────────────────
+      String? houseNumber;
+      String  streetName = query;
 
-      final uri = Uri.https(
-        'nominatim.openstreetmap.org',
-        '/search',
-        {
-          'q':               query,
-          'format':          'json',
-          'limit':           '5',
-          'addressdetails':  '0',
-          'accept-language': 'pt-BR,pt',
-        },
-      );
+      // Padrão "Rua X, 123" ou "Rua X, nº 123" — vírgula é o delimitador mais seguro
+      final commaMatch =
+          RegExp(r'^(.+?),\s*(?:n[°º]?\s*)?(\d+)\s*$').firstMatch(query);
+      if (commaMatch != null) {
+        streetName   = commaMatch.group(1)!.trim();
+        houseNumber  = commaMatch.group(2)!.trim();
+      } else {
+        // Padrão "123 Rua X" — número como primeira palavra
+        final startMatch = RegExp(r'^(\d+)\s+(.+)$').firstMatch(query);
+        if (startMatch != null) {
+          houseNumber = startMatch.group(1)!.trim();
+          streetName  = startMatch.group(2)!.trim();
+        } else {
+          // Padrão "Rua X 123" — número como última palavra, sem vírgula
+          final endMatch = RegExp(r'^(.+?)\s+(\d+)\s*$').firstMatch(query);
+          if (endMatch != null) {
+            houseNumber = endMatch.group(2)!.trim();
+            streetName  = endMatch.group(1)!.trim();
+          }
+        }
+      }
 
-      final request = await client.getUrl(uri);
-      // Nominatim exige User-Agent para identificar o app — política de uso justo
-      request.headers.set(
-        'User-Agent',
-        'Sopro/0.1 (Android; github.com/JuniorFray/APP_SOPRO)',
-      );
+      // ── Etapa 2: busca estruturada com número (mais precisa) ───────────
+      List<_SearchResult> results = [];
 
-      final response = await request.close();
-      final body     = await response.transform(utf8.decoder).join();
-      client.close();
+      if (houseNumber != null) {
+        // Nominatim espera "NÚMERO LOGRADOURO" no campo street
+        results = await _fetchNominatim(
+          streetParam: '$houseNumber $streetName',
+        );
+      }
+
+      // ── Etapa 3: fallback sem número se não encontrou resultado ─────────
+      // Também cobre o caso em que a query não tinha número detectado.
+      if (results.isEmpty) {
+        results = await _fetchNominatim(queryParam: streetName);
+      }
 
       if (!mounted) return;
-
-      final raw = (jsonDecode(body) as List).cast<Map<String, dynamic>>();
-      final results = raw
-          .map((r) => _SearchResult(
-                displayName: r['display_name'] as String? ?? '',
-                lat: double.tryParse(r['lat'] as String? ?? '') ?? 0.0,
-                lon: double.tryParse(r['lon'] as String? ?? '') ?? 0.0,
-              ))
-          .where((r) => r.lat != 0.0 && r.lon != 0.0)
-          .toList();
-
       setState(() => _searchResults = results);
     } catch (e) {
       if (!mounted) return;
@@ -437,6 +453,67 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     } finally {
       if (mounted) setState(() => _searching = false);
     }
+  }
+
+  // Chama a API do Nominatim com busca estruturada ([streetParam]) ou livre ([queryParam]).
+  //
+  // Parâmetros fixos em todas as chamadas:
+  //   format=json, limit=5, addressdetails=1, countrycodes=br, accept-language=pt-BR
+  //
+  // [streetParam] — busca estruturada: Nominatim processa o número separado
+  //   do nome da rua, o que melhora muito a precisão em endereços numerados.
+  // [queryParam]  — busca livre: usada como fallback quando não há número
+  //   ou quando a busca estruturada não retornar resultados.
+  //
+  // Retorna lista vazia em caso de erro de rede (o chamador trata o fallback).
+  Future<List<_SearchResult>> _fetchNominatim({
+    String? streetParam, // ex: "1118 Rua Virgilio Furlan"
+    String? queryParam,  // ex: "Rua Virgilio Furlan"
+  }) async {
+    assert(streetParam != null || queryParam != null,
+        '_fetchNominatim requer streetParam ou queryParam');
+
+    final params = <String, String>{
+      'format':          'json',
+      'limit':           '5',
+      'addressdetails':  '1',   // retorna detalhes do endereço para display_name rico
+      'countrycodes':    'br',  // restringe ao Brasil (melhora relevância)
+      'accept-language': 'pt-BR,pt',
+    };
+
+    if (streetParam != null) {
+      // Busca estruturada: Nominatim trata number + street separadamente
+      params['street'] = streetParam;
+    } else {
+      // Busca livre
+      params['q'] = queryParam!;
+    }
+
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 10);
+
+    final request = await client.getUrl(
+      Uri.https('nominatim.openstreetmap.org', '/search', params),
+    );
+    // Nominatim exige User-Agent identificado — política de uso justo da API
+    request.headers.set(
+      'User-Agent',
+      'Sopro/0.1 (Android; github.com/JuniorFray/APP_SOPRO)',
+    );
+
+    final response = await request.close();
+    final body     = await response.transform(utf8.decoder).join();
+    client.close();
+
+    final raw = (jsonDecode(body) as List).cast<Map<String, dynamic>>();
+    return raw
+        .map((r) => _SearchResult(
+              displayName: r['display_name'] as String? ?? '',
+              lat: double.tryParse(r['lat'] as String? ?? '') ?? 0.0,
+              lon: double.tryParse(r['lon'] as String? ?? '') ?? 0.0,
+            ))
+        .where((r) => r.lat != 0.0 && r.lon != 0.0)
+        .toList();
   }
 
   // Seleciona um resultado da busca: move o mapa e posiciona o pin
