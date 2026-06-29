@@ -50,18 +50,9 @@ class FireTriggersUseCase {
     final withSound = _soundEnabled();
 
     for (final trigger in triggers) {
-      await _notifications.showTrigger(
-        // ID da notificação: hash positivo do UUID
-        id: trigger.id.hashCode & 0x7FFFFFFF,
-        // Título mostra o ambiente para contextualizar o sussurro
-        title: '${trigger.title} • $environmentName',
-        body: trigger.content,
-        // Payload = ID do ambiente para navegar diretamente ao tocar
-        payload: environmentId,
-        // Canal escolhido conforme preferência de som do usuário
-        useSoundChannel: withSound,
-      );
-
+      // Loga a intenção de disparar — confirmação de que o use case chegou aqui.
+      // Se trigger_fired aparece no Supabase mas notification_displayed não,
+      // o problema está em showTrigger() → flutter_local_notifications → Android.
       AppLogger.log('trigger_fired', {
         'environment_id':   environmentId,
         'environment_name': environmentName,
@@ -69,6 +60,36 @@ class FireTriggersUseCase {
         'trigger_title':    trigger.title,
         'with_sound':       withSound,
       });
+
+      try {
+        await _notifications.showTrigger(
+          // ID da notificação: hash positivo do UUID
+          id: trigger.id.hashCode & 0x7FFFFFFF,
+          // Título mostra o ambiente para contextualizar o sussurro
+          title: '${trigger.title} • $environmentName',
+          body: trigger.content,
+          // Payload = ID do ambiente para navegar diretamente ao tocar
+          payload: environmentId,
+          // Canal escolhido conforme preferência de som do usuário
+          useSoundChannel: withSound,
+        );
+
+        // Loga apenas se show() completou sem exceção — indica que a API Android
+        // recebeu a notificação. Se este evento não aparece no Supabase, o problema
+        // está no flutter_local_notifications (plugin crash, permissão revogada, etc.).
+        AppLogger.log('notification_displayed', {
+          'trigger_id':     trigger.id,
+          'trigger_title':  trigger.title,
+          'environment_id': environmentId,
+          'with_sound':     withSound,
+        });
+      } catch (e) {
+        // Loga falha de exibição — ajuda a identificar exceções do plugin/canal
+        AppLogger.log('notification_error', {
+          'trigger_id': trigger.id,
+          'error':      e.toString(),
+        });
+      }
     }
   }
 }

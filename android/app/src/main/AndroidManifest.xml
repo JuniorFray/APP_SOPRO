@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <!-- Notificações de trigger visíveis ao usuário (Android 13+/API 33+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Permite exibir notificações em tela cheia (sobre a tela de bloqueio).
+         Obrigatório no Android 14+ (API 34+) para qualquer uso de fullScreenIntent.
+         Sem essa permissão o sistema descarta silenciosamente o fullScreenIntent. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
 
     <!-- Foreground service para manter o processo vivo quando o app é minimizado -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>

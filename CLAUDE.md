@@ -120,7 +120,7 @@ Entregue:
 - main.dart: rota /settings adicionada (SettingsScreen).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 12 - Logs Supabase + Correcoes pos-teste - CONCLUIDO
 Entregue:
 PARTE 1 — Sistema de logs no Supabase:
@@ -159,10 +159,67 @@ PARTE 2 — Correcoes pos-teste:
 - AndroidManifest: READ_MEDIA_IMAGES + READ_EXTERNAL_STORAGE (maxSdkVersion=32).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Proximo Sprint
-Sprint: 13 - Possivelmente: tema claro/escuro, exportacao de dados,
-estatisticas de uso, widget Android de ambiente na home,
-icone de categoria para ambientes.
+## Sprint Atual
+Sprint: 13 - Correcoes de Notificacao + Robustez - EM ANDAMENTO (2026-06-29)
+
+### O que funciona (confirmado em testes)
+- Geofencing nativo (GeofencingClient): GeofenceReceiver.onReceive() dispara
+  corretamente quando o dispositivo entra no raio do ambiente.
+- Foreground Service: BackgroundService permanece ativo com app minimizado.
+  Loopback de GPS a cada 2 s funciona (FusedLocationProviderClient).
+- GeofenceManager: deteccao de entrada/saida via stream de GPS funciona em
+  paralelo ao GeofencingClient (dupla cobertura).
+- FireTriggersUseCase: callada corretamente, logs trigger_fired aparecem no
+  Supabase confirmando que o codigo de disparo executa.
+- BLE Social: scan, advertise e troca de ContextCard funcionam quando visivel.
+- Banco de dados: Drift + SQLCipher, migracao automatica ate schemaVersion 3.
+- Deep-link de notificacao: toque na notificacao abre EnvironmentDetailScreen.
+- Configuracoes: toggles de notificacao, som e cooldown persistidos em prefs.
+
+### O que NAO funciona (bug confirmado)
+- NOTIFICACOES NAO APARECEM NA TELA (Motorola G52, Android 12):
+  Supabase registra trigger_fired mas a notificacao heads-up nao aparece.
+  Hipoteses descartadas: permissao POST_NOTIFICATIONS concedida, canal criado.
+  Causa provavel: canal 'sopro_triggers' criado com Importance.high (4) em vez
+  de Importance.max (5). OEMs restritivos (Motorola My UX) ignoram importance
+  HIGH para apps em segundo plano — exigem MAX para garantir heads-up.
+
+### Correcoes aplicadas neste sprint (2026-06-29)
+- NotificationService: canal 'sopro_triggers' mudou para Importance.max.
+  showTrigger() agora usa Priority.max + Importance.max no canal de som.
+  Adicionados ticker (forca heads-up em OEMs) e visibility: public (lock screen).
+- AndroidManifest: USE_FULL_SCREEN_INTENT adicionado (Android 14+ / API 34+).
+- FireTriggersUseCase: log 'trigger_fired' movido para ANTES de showTrigger().
+  Novo log 'notification_displayed' apos show() bem-sucedido.
+  Novo log 'notification_error' se show() lancar excecao (diagnose silenciosa).
+- GeofenceReceiver: canal criado com check null (idempotente), permissao
+  verificada via areNotificationsEnabled(), fallback de nome, try/catch +
+  logs de debug/error. CHANNEL_ID = 'sopro_triggers' identico ao Dart.
+- flutter analyze lib/: No issues found. flutter build apk --release: success.
+
+### Decisoes Tecnicas (historico)
+- Dual geofencing: GeofencingClient (nativo, funciona com app morto) +
+  GeofenceManager via stream GPS (funciona com foreground service). Mantidos
+  os dois — redundancia intencional para maxima confiabilidade.
+- Canal de notificacao: decidido NAO usar novo channelId para importance MAX
+  porque exigiria migrar instalacoes existentes. Instalacoes novas ou com
+  clear data recebem MAX corretamente. Instalacoes existentes: orientar usuario
+  a limpar dados do app OU criar canal 'sopro_triggers_v2' se o problema persistir.
+- USE_FULL_SCREEN_INTENT: adicionado preventivamente. Nao usado hoje (sem
+  fullScreenIntent ativo), mas evita crash silencioso em Android 14+ se
+  futuramente precisarmos de notificacao sobre lock screen.
+- Supabase logging: fire-and-forget (ignore()), nunca bloqueia UI, falhas
+  silenciosas em producao, log em debugPrint apenas em kDebugMode.
+
+### Proximo passo no Sprint 13
+Apos build e teste no Motorola G52:
+1. Verificar no Supabase se notification_displayed aparece apos trigger_fired.
+2. Se sim: notificacao chega ao Android mas OEM suprime — investigar bateria e
+   "Gerenciador de aplicativos > Notificacoes" no dispositivo.
+3. Se nao: excecao silenciosa em showTrigger() — investigar notification_error.
+4. Se resolvido: seguir para tema claro/escuro, exportacao de dados ou widget Android.
+
+## Repositorio
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

@@ -3,9 +3,12 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 // Serviço responsável por mostrar notificações locais e tratar toques nelas.
 //
 // Canais Android criados em initialize():
-//   'sopro_triggers'        — alta prioridade, com som (entrada em geofence)
+//   'sopro_triggers'        — prioridade MÁXIMA, com som (entrada em geofence)
 //   'sopro_triggers_silent' — prioridade padrão, sem som (preferência do usuário)
 //   'sopro_background'      — baixa prioridade, notificação persistente do foreground
+//
+// Importance.max (IMPORTANCE_MAX = 5) no canal garante heads-up em OEMs como
+// Motorola My UX e Samsung One UI, que ignoram Importance.high em segundo plano.
 //
 // Deep-link:
 //   Ao tocar numa notificação de trigger, o payload (environmentId) é entregue
@@ -14,7 +17,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 class NotificationService {
   final _plugin = FlutterLocalNotificationsPlugin();
 
-  // Canal com som — alta prioridade, exibido em heads-up ao entrar no geofence
+  // Canal com som — prioridade MÁXIMA para garantir heads-up em qualquer OEM
   static const _triggerChannelId   = 'sopro_triggers';
   static const _triggerChannelName = 'Gatilhos Sopro';
   static const _triggerChannelDesc = 'Sussurros entregues ao chegar em um local';
@@ -68,13 +71,17 @@ class NotificationService {
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
 
-    // Canal com som — alta prioridade para os triggers de geofence
+    // Canal com som — IMPORTANCE_MAX (5) para garantir heads-up mesmo em OEMs
+    // restritivos (Motorola My UX, Samsung One UI).
+    // ATENÇÃO: se o canal já existe com importance menor (instalações anteriores),
+    // o Android mantém a configuração do usuário — reinstalar o app ou limpar
+    // dados de notificação reseta o canal para este valor.
     await androidImpl?.createNotificationChannel(
       const AndroidNotificationChannel(
         _triggerChannelId,
         _triggerChannelName,
         description: _triggerChannelDesc,
-        importance: Importance.high,
+        importance: Importance.max,
       ),
     );
 
@@ -141,8 +148,10 @@ class NotificationService {
     final channelId   = useSoundChannel ? _triggerChannelId   : _silentChannelId;
     final channelName = useSoundChannel ? _triggerChannelName : _silentChannelName;
     final channelDesc = useSoundChannel ? _triggerChannelDesc : _silentChannelDesc;
-    final importance  = useSoundChannel ? Importance.high : Importance.defaultImportance;
-    final priority    = useSoundChannel ? Priority.high   : Priority.defaultPriority;
+    // Priority.max + Importance.max = combinação necessária para heads-up garantido.
+    // Importance.max no canal define o teto; priority na notificação define a entrega.
+    final importance = useSoundChannel ? Importance.max            : Importance.defaultImportance;
+    final priority   = useSoundChannel ? Priority.max              : Priority.defaultPriority;
 
     final details = AndroidNotificationDetails(
       channelId,
@@ -152,6 +161,11 @@ class NotificationService {
       priority: priority,
       // drawable monocromático — mesmo recurso do AndroidInitializationSettings
       icon: 'notification_icon',
+      // ticker: texto exibido na barra de status no momento da chegada —
+      // necessário para acionar o heads-up em alguns OEMs (Motorola, Samsung).
+      ticker: title,
+      // public: exibe conteúdo completo na tela de bloqueio (sem mascarar).
+      visibility: NotificationVisibility.public,
     );
 
     await _plugin.show(
