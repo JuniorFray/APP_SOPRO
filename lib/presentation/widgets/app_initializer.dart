@@ -6,6 +6,7 @@ import '../../core/navigation/app_router.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
+import '../providers/database_provider.dart';
 import '../providers/location_providers.dart';
 import '../providers/settings_providers.dart';
 
@@ -18,9 +19,11 @@ import '../providers/settings_providers.dart';
 //   2. Registra o callback de toque em notificação (antes de initialize()).
 //   3. Inicializa o plugin de notificações e cria os canais Android.
 //   4. Verifica cold start (app aberto por toque numa notificação).
-//   5. Restaura as preferências do usuário das Configurações.
-//   6. Inicia o foreground service se o onboarding já foi concluído.
-//   7. Loga o evento app_start.
+//   5. Detecta SharedPreferences obsoletas (OEM Auto Backup):
+//      Se onboarding_done=true mas banco vazio → reseta flags e encerra early.
+//   6. Restaura as preferências do usuário das Configurações.
+//   7. Inicia o foreground service se o onboarding já foi concluído.
+//   8. Loga o evento app_start.
 class AppInitializer extends ConsumerStatefulWidget {
   final Widget child;
 
@@ -59,7 +62,48 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
 
     final prefs = await SharedPreferences.getInstance();
 
-    // 5. Restaura as preferências salvas pelo usuário nas Configurações.
+    // 5. Detecção de SharedPreferences obsoletas (OEM Auto Backup).
+    //
+    //    Motorola G52 e outros OEMs com Android Auto Backup podem restaurar
+    //    SharedPreferences após reinstalação SEM restaurar o banco de dados.
+    //    Isso faz com que 'onboarding_done=true' e as permissões não sejam
+    //    re-solicitadas, mesmo que o banco esteja completamente vazio.
+    //
+    //    Diagnóstico: onboarding_done=true + banco sem Environments E sem perfil.
+    //    Ação: remove todas as prefs que controlam o estado de primeiro acesso
+    //    e restaura os providers para os valores padrão antes de carregá-los
+    //    das prefs (evita duplo-set de estado).
+    if (prefs.getBool('onboarding_done') ?? false) {
+      final envs = await ref.read(environmentRepositoryProvider).getAll();
+      final card = await ref.read(contextCardRepositoryProvider).getActive();
+
+      if (envs.isEmpty && card == null) {
+        // Banco vazio mas prefs dizem que onboarding foi concluído:
+        // Remove as prefs que podem estar em estado inconsistente.
+        await Future.wait([
+          prefs.remove('onboarding_done'),
+          prefs.remove('notifications_enabled'),
+          prefs.remove('notification_sound_enabled'),
+          prefs.remove('notification_cooldown_minutes'),
+        ]);
+
+        // Providers já têm os defaults corretos na inicialização; garantimos
+        // explicitamente que não sofreram alteração antes deste reset.
+        ref.read(notificationsEnabledProvider.notifier).state = true;
+        ref.read(notificationSoundProvider.notifier).state = true;
+        ref.read(notificationCooldownMinutesProvider.notifier).state = 0;
+
+        AppLogger.log('stale_prefs_reset', {
+          'reason': 'onboarding_done=true but database is empty',
+        });
+        // Não continua o _init() — HomeScreen detectará onboarding_done=false
+        // e redirecionará para o OnboardingScreen normalmente.
+        AppLogger.log('app_start');
+        return;
+      }
+    }
+
+    // 6. Restaura as preferências salvas pelo usuário nas Configurações.
     //    Os defaults já estão nos providers; só atualiza quando diferem.
     final notifEnabled = prefs.getBool('notifications_enabled') ?? true;
     if (!notifEnabled) {
@@ -77,13 +121,13 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
           cooldownMinutes;
     }
 
-    // 6. Inicia o foreground service apenas se o onboarding já foi concluído.
+    // 7. Inicia o foreground service apenas se o onboarding já foi concluído.
     //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
     if (prefs.getBool('onboarding_done') ?? false) {
       await BackgroundServiceManager.start();
     }
 
-    // 7. Loga a inicialização do app após tudo estar configurado
+    // 8. Loga a inicialização do app após tudo estar configurado
     AppLogger.log('app_start');
   }
 

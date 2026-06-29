@@ -16,9 +16,16 @@ part 'sopro_database.g.dart';
 
 // Banco de dados principal do Sopro.
 //
-// Usa drift_flutter que por padrão cria um arquivo SQLite no diretório de
-// dados do app (getApplicationDocumentsDirectory). Em produção será substituído
-// por SQLCipher para criptografia em repouso (privacidade antes de feature).
+// Armazenamento: drift_flutter usa getApplicationDocumentsDirectory() —
+//   Android: /data/data/com.sopro.sopro/app_flutter/sopro.db  (armazenamento
+//            privado do app, apagado na desinstalação pelo Android).
+//   Nota: Android Auto Backup (API 23+) pode restaurar SharedPreferences sem
+//         restaurar o banco. Por isso AppInitializer detecta esta inconsistência
+//         e reseta o flag 'onboarding_done' quando prefs dizem "done" mas banco
+//         está vazio — veja app_initializer.dart, seção "Detecção de prefs obsoletas".
+//
+// Em produção será substituído por SQLCipher para criptografia em repouso
+// (privacidade antes de feature).
 //
 // Histórico de versões:
 //   v1 (Sprint 1): criação das tabelas Environments, Triggers, ContextCards
