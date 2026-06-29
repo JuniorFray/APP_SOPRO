@@ -185,6 +185,7 @@ Sprint: 13 - Correcoes de Notificacao + Robustez - EM ANDAMENTO (2026-06-29)
   HIGH para apps em segundo plano — exigem MAX para garantir heads-up.
 
 ### Correcoes aplicadas neste sprint (2026-06-29)
+PARTE 1 — Notificacoes (correcao principal):
 - NotificationService: canal 'sopro_triggers' mudou para Importance.max.
   showTrigger() agora usa Priority.max + Importance.max no canal de som.
   Adicionados ticker (forca heads-up em OEMs) e visibility: public (lock screen).
@@ -195,6 +196,20 @@ Sprint: 13 - Correcoes de Notificacao + Robustez - EM ANDAMENTO (2026-06-29)
 - GeofenceReceiver: canal criado com check null (idempotente), permissao
   verificada via areNotificationsEnabled(), fallback de nome, try/catch +
   logs de debug/error. CHANNEL_ID = 'sopro_triggers' identico ao Dart.
+
+PARTE 2 — Onboarding, Perfil, Revisao Geral:
+- OnboardingScreen: _requestNotifications() e _requestBle() agora capturam
+  o bool retornado pela permissao. Se negada: exibe Container inline com
+  mensagem de impacto (AnimatedSize) e substitui botao primario por
+  "Continuar assim mesmo". Botao secundario oculto enquanto aviso visivel.
+  _denialMessage limpo ao trocar de passo (onPageChanged).
+- ProfileScreen: _pickPhoto() substituido por _showPhotoOptions() que abre
+  bottom sheet com opcoes "Tirar foto" (camera) e "Escolher da galeria"
+  (gallery). Logica de copia/persistencia extraida para _pickPhotoFrom().
+- strings.dart: obContinueAnyway, obNotifDenied, obBleDenied, profilePhotoOptions,
+  profilePhotoCamera, profilePhotoGallery, settingsNotifCooldownDesc adicionados.
+- settings_screen.dart: string hardcoded 'Intervalo minimo entre notificacoes'
+  substituida por AppStrings.settingsNotifCooldownDesc (regra de nao hardcode).
 - flutter analyze lib/: No issues found. flutter build apk --release: success.
 
 ### Decisoes Tecnicas (historico)
@@ -210,14 +225,22 @@ Sprint: 13 - Correcoes de Notificacao + Robustez - EM ANDAMENTO (2026-06-29)
   futuramente precisarmos de notificacao sobre lock screen.
 - Supabase logging: fire-and-forget (ignore()), nunca bloqueia UI, falhas
   silenciosas em producao, log em debugPrint apenas em kDebugMode.
+- Onboarding permissoes: NAO bloqueamos avanco quando permissao negada — app
+  funciona sem BLE (so perde "Pessoas aqui") e sem notificacoes (perde sussurros).
+  Exibimos impacto e deixamos o usuario decidir — privacidade antes de feature.
 
-### Proximo passo no Sprint 13
-Apos build e teste no Motorola G52:
-1. Verificar no Supabase se notification_displayed aparece apos trigger_fired.
-2. Se sim: notificacao chega ao Android mas OEM suprime — investigar bateria e
-   "Gerenciador de aplicativos > Notificacoes" no dispositivo.
-3. Se nao: excecao silenciosa em showTrigger() — investigar notification_error.
-4. Se resolvido: seguir para tema claro/escuro, exportacao de dados ou widget Android.
+### Proximos testes necessarios (Sprint 13)
+1. Reinstalar APK no Motorola G52 (limpar dados para resetar canal de notificacao).
+2. Entrar num geofence e verificar no Supabase:
+   - Se trigger_fired + notification_displayed aparecem: bug resolvido.
+   - Se trigger_fired sem notification_displayed: excecao em showTrigger() —
+     verificar notification_error no Supabase.
+   - Se notification_displayed existe mas heads-up nao aparece: OEM suprime
+     apos receber — verificar "Gerenciador de apps > Notificacoes" no dispositivo
+     e desabilitar otimizacao de bateria para o Sopro.
+3. Testar onboarding do zero (desinstalar): verificar mensagem de negacao
+   de notificacao e BLE; verificar que "Continuar assim mesmo" avanca corretamente.
+4. Testar foto de perfil: bottom sheet com camera e galeria.
 
 ## Repositorio
 

@@ -88,13 +88,84 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     super.dispose();
   }
 
-  // Abre a galeria para o usuário escolher uma foto de perfil.
+  // Exibe um bottom sheet com opções de fonte da foto (câmera ou galeria).
+  // A escolha do usuário chama _pickPhotoFrom() com a fonte selecionada.
+  Future<void> _showPhotoOptions() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppTheme.backgroundSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Alça visual do bottom sheet
+            Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              decoration: BoxDecoration(
+                color: AppTheme.textDisabled,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: Text(
+                AppStrings.profilePhotoOptions,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined, color: AppTheme.accent),
+              title: const Text(
+                AppStrings.profilePhotoCamera,
+                style: TextStyle(color: AppTheme.textPrimary),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickPhotoFrom(ImageSource.camera);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined, color: AppTheme.accent),
+              title: const Text(
+                AppStrings.profilePhotoGallery,
+                style: TextStyle(color: AppTheme.textPrimary),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickPhotoFrom(ImageSource.gallery);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.close, color: AppTheme.textSecondary),
+              title: const Text(
+                AppStrings.cancel,
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+              onTap: () => Navigator.pop(ctx),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Captura ou seleciona uma foto de acordo com a [source] escolhida no bottom sheet.
   // A foto é copiada para o diretório de documentos do app e o caminho
   // é salvo no SharedPreferences. A foto NÃO é enviada via BLE nem Supabase.
-  Future<void> _pickPhoto() async {
+  Future<void> _pickPhotoFrom(ImageSource source) async {
     final picker = ImagePicker();
     final picked = await picker.pickImage(
-      source: ImageSource.gallery,
+      source: source,
       imageQuality: 80,   // reduz tamanho do arquivo sem perda visível
       maxWidth:  512,
       maxHeight: 512,
@@ -194,7 +265,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             child: Tooltip(
               message: AppStrings.profilePhotoTooltip,
               child: GestureDetector(
-                onTap: _pickPhoto,
+                onTap: _showPhotoOptions,
                 child: Stack(
                   alignment: Alignment.bottomRight,
                   children: [

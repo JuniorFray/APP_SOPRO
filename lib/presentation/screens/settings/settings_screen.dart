@@ -244,7 +244,7 @@ class _CooldownTile extends StatelessWidget {
         ),
       ),
       subtitle: const Text(
-        'Intervalo mínimo entre notificações',
+        AppStrings.settingsNotifCooldownDesc,
         style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
       ),
       // DropdownButton integrado ao trailing do ListTile

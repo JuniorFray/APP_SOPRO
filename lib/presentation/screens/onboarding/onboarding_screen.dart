@@ -83,6 +83,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   bool _actionInProgress = false; // true enquanto aguarda resposta do SO de permissão
   bool _finishing = false;        // true enquanto salva SharedPreferences antes de navegar
 
+  // Mensagem exibida inline quando o usuário nega uma permissão.
+  // null = nenhuma negação recente; limpa ao trocar de passo.
+  String? _denialMessage;
+
   @override
   void dispose() {
     _pageController.dispose();
@@ -133,34 +137,53 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
-  // Solicita permissão de notificações → avança independentemente do resultado
+  // Solicita permissão de notificações (Android 13+ / API 33+).
+  // Avança ao próximo passo se concedida; exibe mensagem de impacto se negada.
+  // Em Android < 13, requestPermission() retorna true sem exibir diálogo.
   Future<void> _requestNotifications() async {
     setState(() => _actionInProgress = true);
+    bool granted = false;
     try {
-      await ref.read(notificationServiceProvider).requestPermission();
+      granted = await ref.read(notificationServiceProvider).requestPermission();
+    } catch (_) {
+      // Falha na requisição — trata como negado para não bloquear o fluxo
     } finally {
-      if (mounted) {
-        setState(() => _actionInProgress = false);
-        _nextPage();
-      }
+      if (mounted) setState(() => _actionInProgress = false);
+    }
+    if (!mounted) return;
+    if (granted) {
+      _nextPage();
+    } else {
+      // Mostra aviso e aguarda o usuário pressionar "Continuar assim mesmo"
+      setState(() => _denialMessage = AppStrings.obNotifDenied);
     }
   }
 
-  // Solicita permissões BLE → conclui o onboarding independentemente do resultado
+  // Solicita BLUETOOTH_SCAN e BLUETOOTH_ADVERTISE (Android 12+ / API 31+).
+  // Conclui o onboarding se concedido; exibe mensagem de impacto se negado.
   Future<void> _requestBle() async {
     setState(() => _actionInProgress = true);
+    bool granted = false;
     try {
-      await ref.read(bleServiceProvider).requestPermissions();
+      granted = await ref.read(bleServiceProvider).requestPermissions();
+    } catch (_) {
+      // Falha na requisição — trata como negado
     } finally {
-      if (mounted) {
-        setState(() => _actionInProgress = false);
-        _goHome();
-      }
+      if (mounted) setState(() => _actionInProgress = false);
+    }
+    if (!mounted) return;
+    if (granted) {
+      _goHome();
+    } else {
+      // Mostra aviso e aguarda o usuário pressionar "Continuar assim mesmo"
+      setState(() => _denialMessage = AppStrings.obBleDenied);
     }
   }
 
-  // Texto do botão primário muda conforme o passo
+  // Texto do botão primário.
+  // Quando uma permissão foi negada, muda para "Continuar assim mesmo".
   String get _primaryLabel {
+    if (_denialMessage != null) return AppStrings.obContinueAnyway;
     switch (_currentStep) {
       case 1:  return AppStrings.obLocationBtn;
       case 2:  return AppStrings.obNotifBtn;
@@ -169,9 +192,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
-  // Callback do botão primário — null durante loading bloqueia interação
+  // Callback do botão primário — null durante loading bloqueia interação.
+  // Quando há mensagem de negação ativa, o botão apenas avança (sem re-pedir).
   VoidCallback? get _primaryAction {
     if (_actionInProgress || _finishing) return null;
+    if (_denialMessage != null) {
+      // Avança após o usuário reconhecer o impacto da permissão negada
+      return _currentStep == _steps.length - 1 ? _goHome : _nextPage;
+    }
     switch (_currentStep) {
       case 0:  return _nextPage;
       case 1:  return _requestLocation;
@@ -181,7 +209,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
-  // Botão secundário: "Pular" nos passos 1-2, "Ir para o app" no passo 3
+  // Botão secundário: "Pular" nos passos 1-2, "Ir para o app" no passo 3.
+  // Oculto quando há mensagem de negação ativa (o primário já oferece avanço).
   String get _secondaryLabel =>
       _currentStep == _steps.length - 1 ? AppStrings.obFinish : AppStrings.obSkip;
 
@@ -215,18 +244,65 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 controller: _pageController,
                 // Só os botões navegam — evita gestos acidentais
                 physics: const NeverScrollableScrollPhysics(),
-                onPageChanged: (i) => setState(() => _currentStep = i),
+                onPageChanged: (i) => setState(() {
+                  _currentStep = i;
+                  _denialMessage = null; // limpa aviso ao mudar de passo
+                }),
                 itemCount: _steps.length,
                 itemBuilder: (_, i) => _StepPage(step: _steps[i]),
               ),
             ),
 
-            // Rodapé: indicadores de progresso + botões de ação
+            // Rodapé: aviso de negação (se houver) + indicadores + botões de ação
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 0, 24, 36),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // Aviso inline exibido quando o usuário nega uma permissão.
+                  // AnimatedSize suaviza o aparecimento/desaparecimento do container.
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOut,
+                    child: _denialMessage != null
+                        ? Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.only(bottom: 16),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              // ignore: deprecated_member_use
+                              color: AppTheme.accent.withOpacity(0.10),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                // ignore: deprecated_member_use
+                                color: AppTheme.accent.withOpacity(0.30),
+                              ),
+                            ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(
+                                  Icons.info_outline,
+                                  color: AppTheme.accent,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _denialMessage!,
+                                    style: const TextStyle(
+                                      color: AppTheme.textSecondary,
+                                      fontSize: 13,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+
                   // Indicadores de passo animados (bolinha larga = passo atual)
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -266,8 +342,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                     ),
                   ),
 
-                  // Botão secundário nos passos de permissão (pular / ir para o app)
-                  if (_currentStep > 0) ...[
+                  // Botão secundário: "Pular" / "Ir para o app".
+                  // Oculto quando há mensagem de negação ativa — o botão primário
+                  // já oferece "Continuar assim mesmo" como alternativa.
+                  if (_currentStep > 0 && _denialMessage == null) ...[
                     const SizedBox(height: 4),
                     TextButton(
                       // Nos passos 1-2: avança sem pedir permissão

@@ -74,9 +74,10 @@ class AppStrings {
   static const bleClose                = 'Fechar';
 
   // Onboarding — 4 passos que explicam o valor antes de pedir cada permissão
-  static const obSkip   = 'Pular';
-  static const obNext   = 'Próximo';
-  static const obFinish = 'Ir para o app';
+  static const obSkip          = 'Pular';
+  static const obNext          = 'Próximo';
+  static const obFinish        = 'Ir para o app';
+  static const obContinueAnyway = 'Continuar assim mesmo';
 
   // Passo 0: Boas-vindas
   static const obWelcomeTitle = 'Bem-vindo ao Sopro';
@@ -98,7 +99,11 @@ class AppStrings {
       'As notificações são o meio pelo qual o Sopro fala com você — '
       'sem precisar abrir o app. Apenas seus lembretes. '
       'Nenhuma notificação de marketing.';
-  static const obNotifBtn   = 'Permitir notificações';
+  static const obNotifBtn    = 'Permitir notificações';
+  // Exibida quando o usuário nega a permissão de notificações
+  static const obNotifDenied =
+      'Sem notificações, o Sopro não consegue entregar seus sussurros. '
+      'Você pode habilitar depois em Configurações do sistema.';
 
   // Passo 3: Bluetooth
   static const obBleTitle = 'Pessoas ao redor';
@@ -106,7 +111,11 @@ class AppStrings {
       'Detecta outros usuários Sopro próximos via Bluetooth e permite trocar '
       'cartões de contexto diretamente entre dispositivos — '
       'nada é enviado pela internet.';
-  static const obBleBtn   = 'Permitir Bluetooth';
+  static const obBleBtn    = 'Permitir Bluetooth';
+  // Exibida quando o usuário nega as permissões BLE
+  static const obBleDenied =
+      'Sem Bluetooth, a função "Pessoas aqui" não estará disponível. '
+      'Você pode habilitar depois nas Configurações do dispositivo.';
 
   // Tela de Perfil
   static const profileTitle          = 'Meu Perfil';
@@ -176,9 +185,14 @@ class AppStrings {
   static const settingsNotifSound        = 'Som nas notificações';
   static const settingsNotifSoundDesc    = 'Toca som ao receber um sussurro';
   static const settingsNotifCooldown     = 'Frequência';
+  static const settingsNotifCooldownDesc = 'Intervalo mínimo entre notificações';
 
   // Perfil — foto
   static const profilePhotoTooltip = 'Alterar foto do perfil';
+  // Bottom sheet de seleção de fonte da foto
+  static const profilePhotoOptions = 'Foto do perfil';
+  static const profilePhotoCamera  = 'Tirar foto';
+  static const profilePhotoGallery = 'Escolher da galeria';
 
   // Edição de ambiente e gatilho
   static const editEnvironmentTitle = 'Editar Ambiente';
