@@ -7,25 +7,31 @@ import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/usecases/fire_triggers_use_case.dart';
 import '../location/native_location_service.dart';
 import '../logging/app_logger.dart';
+import 'native_geofence_service.dart';
 
 // Monitora a posição do usuário e dispara triggers quando ele entra num ambiente.
 //
-// Lógica ENTER/EXIT:
-// - _insideEnvironments rastreia quais ambientes o usuário já está dentro.
-// - A cada posição recebida, a distância até cada ambiente é calculada com
-//   latlong2.Distance (haversine) e comparada com o raio + precisão do GPS.
-// - ENTER: distância <= raio + accuracy && não estava dentro → FireTriggersUseCase + Set
-// - EXIT:  distância >  raio + accuracy && estava dentro  → remove do Set
+// Opera em dois modos complementares:
 //
-// A precisão do GPS (accuracy) é somada ao raio para evitar falsos disparos
-// quando o sinal está fraco — a entrada só é confirmada quando o usuário
-// está definitivamente dentro do perímetro de interesse.
+// 1. GEOFENCING NATIVO (principal, app fechado/morto):
+//    Registra todos os ambientes no GeofencingClient do Android via
+//    NativeGeofenceService. O sistema Android gerencia as transições
+//    e aciona o GeofenceReceiver.kt sem depender do app estar vivo.
+//    → Notificação enviada pelo GeofenceReceiver: "Você está em: [nome]"
 //
-// GPS via MethodChannel nativo (MainActivity.kt / FusedLocationProviderClient).
+// 2. GPS STREAM (complementar, app em foreground/background):
+//    FusedLocationProviderClient via MethodChannel. Dispara triggers com
+//    texto específico e loga no Supabase — mais rico que o modo nativo.
+//    → Padrão ENTER/EXIT com accuracy bonus de até 100 m.
+//
+// Os dois modos podem co-existir: o nativo garante cobertura quando o
+// foreground service morre (ex: Motorola agressivo); o GPS stream oferece
+// triggers completos com textos personalizados quando o app está vivo.
 class GeofenceManager {
   final IEnvironmentRepository _envRepo;
   final FireTriggersUseCase _fireTriggers;
   final NativeLocationService _locationService;
+  final NativeGeofenceService _nativeGeofence;
 
   // Subscription ao stream de posições — cancelada em stop()
   StreamSubscription<({double latitude, double longitude, double accuracy})>?
@@ -39,9 +45,14 @@ class GeofenceManager {
 
   bool _running = false;
 
-  GeofenceManager(this._envRepo, this._fireTriggers, this._locationService);
+  GeofenceManager(
+    this._envRepo,
+    this._fireTriggers,
+    this._locationService,
+    this._nativeGeofence,
+  );
 
-  /// Verifica/solicita permissão e assina o stream de posição.
+  /// Verifica/solicita permissão, registra geofences nativos e assina o GPS stream.
   Future<void> start() async {
     bool ok = await _locationService.checkPermission();
     if (!ok) ok = await _locationService.requestPermission();
@@ -51,6 +62,32 @@ class GeofenceManager {
       return;
     }
 
+    // ── Geofences nativos ──────────────────────────────────────────────────
+    // Solicita permissão de background (Android 10+) para que o GeofenceReceiver
+    // seja acionado mesmo com o app morto.
+    final hasBg = await _nativeGeofence.hasBackgroundPermission();
+    if (!hasBg) await _nativeGeofence.requestBackgroundPermission();
+
+    // Registra cada ambiente no GeofencingClient — idempotente: chamar novamente
+    // com o mesmo ID apenas atualiza o geofence existente.
+    final envs = await _envRepo.getAll();
+    for (final env in envs) {
+      try {
+        await _nativeGeofence.addGeofence(
+          id:           env.id,
+          lat:          env.latitude,
+          lng:          env.longitude,
+          radiusMeters: env.radiusMeters,
+          name:         env.name,
+        );
+      } catch (e) {
+        // Falha silenciosa: o GPS stream ainda monitora mesmo sem o geofence nativo
+        debugPrint('[GeofenceManager] Falha ao registrar geofence nativo ${env.id}: $e');
+      }
+    }
+    debugPrint('[GeofenceManager] ${envs.length} geofence(s) nativo(s) registrado(s).');
+
+    // ── GPS stream (triggers completos quando app está vivo) ───────────────
     _sub = _locationService.getPositionStream().listen(
       _onPosition,
       onError: (Object e) =>

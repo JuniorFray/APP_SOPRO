@@ -34,6 +34,11 @@
     <!-- Declara que o app usa BLE como funcionalidade principal -->
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true"/>
 
+    <!-- Geofencing nativo em segundo plano — Android 10+ (API 29+) exige essa permissão
+         para que o GeofenceReceiver seja acionado quando o app não está em primeiro plano.
+         No Android 11+, o usuário concede via Configurações > Localização > "Sempre". -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+
     <!-- Galeria de fotos para o perfil (image_picker) — Android 13+ usa READ_MEDIA_IMAGES -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <!-- Fallback para Android 12 e anteriores -->
@@ -74,6 +79,13 @@
             android:foregroundServiceType="location"
             android:exported="false"
             tools:replace="android:exported"/>
+
+        <!-- GeofenceReceiver — ativado pelo sistema Android ao detectar transições
+             de geofence. android:exported="false": só o próprio sistema (via
+             GeofencingClient PendingIntent) pode enviar Intents para este receiver. -->
+        <receiver
+            android:name=".GeofenceReceiver"
+            android:exported="false"/>
 
         <meta-data
             android:name="flutterEmbedding"

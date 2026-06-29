@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/usecases/fire_triggers_use_case.dart';
 import '../../infrastructure/geofence/geofence_manager.dart';
+import '../../infrastructure/geofence/native_geofence_service.dart';
 import '../../infrastructure/location/native_location_service.dart';
 import '../../infrastructure/notifications/notification_service.dart';
 import 'database_provider.dart';
@@ -18,13 +19,20 @@ final nativeLocationServiceProvider = Provider<NativeLocationService>((ref) {
   return NativeLocationService();
 });
 
-// Provider do GeofenceManager — injeta repositórios, use case e serviço de GPS.
+// Provider do NativeGeofenceService — wrapper do GeofencingClient Android.
+// Singleton: o PendingIntent interno é reutilizado em todas as chamadas.
+final nativeGeofenceServiceProvider = Provider<NativeGeofenceService>((ref) {
+  return NativeGeofenceService();
+});
+
+// Provider do GeofenceManager — injeta repositórios, use cases e serviços nativos.
 // O manager é criado mas não iniciado aqui; HomeScreen chama .start().
 final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
   final envRepo         = ref.watch(environmentRepositoryProvider);
   final triggerRepo     = ref.watch(triggerRepositoryProvider);
   final notifications   = ref.watch(notificationServiceProvider);
   final locationService = ref.watch(nativeLocationServiceProvider);
+  final nativeGeofence  = ref.watch(nativeGeofenceServiceProvider);
 
   // FireTriggersUseCase recebe callbacks que leem as preferências do usuário
   // no momento em que um geofence é acionado — assim qualquer alteração nas
@@ -32,12 +40,17 @@ final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
   final fireTriggers = FireTriggersUseCase(
     triggerRepo,
     notifications,
-    () => ref.read(notificationsEnabledProvider),   // toggle geral
-    () => ref.read(notificationSoundProvider),       // som vs. silencioso
-    () => ref.read(notificationCooldownMinutesProvider), // cooldown
+    () => ref.read(notificationsEnabledProvider),        // toggle geral
+    () => ref.read(notificationSoundProvider),            // som vs. silencioso
+    () => ref.read(notificationCooldownMinutesProvider),  // cooldown
   );
 
-  final manager = GeofenceManager(envRepo, fireTriggers, locationService);
+  final manager = GeofenceManager(
+    envRepo,
+    fireTriggers,
+    locationService,
+    nativeGeofence,
+  );
 
   // Garante que o stream de GPS seja cancelado quando o provider for descartado
   ref.onDispose(manager.stop);

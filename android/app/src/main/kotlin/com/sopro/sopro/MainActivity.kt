@@ -1,8 +1,11 @@
 package com.sopro.sopro
 
 import android.Manifest
+import android.annotation.SuppressLint
+import android.app.PendingIntent
 import android.bluetooth.*
 import android.bluetooth.le.*
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
@@ -17,13 +20,13 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.util.UUID
 
-// MainActivity expõe GPS e BLE Social ao Flutter via canais nativos.
+// MainActivity expõe GPS, BLE Social e Geofencing nativo ao Flutter via canais nativos.
 //
 // ── GPS (Sprint 5) ──────────────────────────────────────────────────────────
 // MethodChannel "com.sopro.sopro/location":
 //   checkPermission / requestPermission / getCurrentPosition
 // EventChannel "com.sopro.sopro/location_stream":
-//   Stream de posição a cada 5s / 10m
+//   Stream de posição a cada 2s / 10m
 //
 // ── BLE Social (Sprint 7) ───────────────────────────────────────────────────
 // MethodChannel "com.sopro.sopro/ble":
@@ -36,6 +39,18 @@ import java.util.UUID
 //   onListen  → inicia scan filtrado pelo SERVICE_UUID Sopro
 //   Eventos   → Map {deviceId, deviceName, rssi}
 //   onCancel  → para scan
+//
+// ── Geofencing nativo (Sprint 13) ───────────────────────────────────────────
+// MethodChannel "com.sopro.sopro/native_geofence":
+//   addGeofence({id, lat, lng, radius, name}) — registra no GeofencingClient
+//   removeGeofence({id})                      — remove pelo ID do ambiente
+//   clearGeofences()                          — remove todos os geofences
+//   hasBackgroundLocationPermission()         — bool (Android 10+)
+//   requestBackgroundLocationPermission()     — bool (abre dialog/Configurações)
+//
+// O GeofencingClient do Android gerencia as zonas mesmo com o app fechado:
+// ao entrar num geofence, o sistema aciona o GeofenceReceiver que envia
+// a notificação via NotificationManager sem depender do app estar vivo.
 //
 // Peripheral role: BluetoothLeAdvertiser + BluetoothGattServer
 // Central role:    BluetoothLeScanner + BluetoothGatt (GATT client)
@@ -52,6 +67,12 @@ class MainActivity : FlutterActivity() {
         private const val BLE_SCAN_CHANNEL  = "com.sopro.sopro/ble_scan"
         private const val PERM_REQUEST_BLE  = 1002
 
+        // ── Geofencing nativo ─────────────────────────────────────────────────
+        private const val GEOFENCE_CHANNEL      = "com.sopro.sopro/native_geofence"
+        private const val PERM_REQUEST_BG_LOC   = 1003
+        // SharedPreferences compartilhadas com GeofenceReceiver: {envId → envName}
+        private const val PREFS_GEOFENCE_NAMES  = GeofenceReceiver.PREFS_NAME
+
         // UUIDs Sopro — FIXOS (nunca alterar; identificam o app na rede BLE)
         private val SERVICE_UUID           = ParcelUuid.fromString("550e8400-e29b-41d4-a716-446655440000")
         private val CONTEXT_CARD_CHAR_UUID = UUID.fromString("550e8401-e29b-41d4-a716-446655440000")
@@ -65,6 +86,12 @@ class MainActivity : FlutterActivity() {
     private var locationCallback: LocationCallback? = null
     private var locationEventSink: EventChannel.EventSink? = null
     private var pendingLocPermResult: MethodChannel.Result? = null
+
+    // ── Geofencing nativo ─────────────────────────────────────────────────────
+    private lateinit var geofencingClient: GeofencingClient
+    // PendingIntent que aponta para GeofenceReceiver; reutilizado em todas as chamadas
+    private var geofencePendingIntent: PendingIntent? = null
+    private var pendingBgLocResult: MethodChannel.Result? = null
 
     // ── BLE peripheral (advertising + GATT server) ────────────────────────────
     private var advertiser: BluetoothLeAdvertiser? = null
@@ -87,7 +114,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        fusedClient = LocationServices.getFusedLocationProviderClient(this)
+        fusedClient       = LocationServices.getFusedLocationProviderClient(this)
+        geofencingClient  = LocationServices.getGeofencingClient(this)
 
         // ── GPS: MethodChannel ────────────────────────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LOCATION_CHANNEL)
@@ -146,6 +174,55 @@ class MainActivity : FlutterActivity() {
                     scanEventSink = null
                 }
             })
+
+        // ── Geofencing nativo: MethodChannel ──────────────────────────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GEOFENCE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "addGeofence" -> {
+                        val id     = call.argument<String>("id")     ?: return@setMethodCallHandler
+                        val lat    = call.argument<Double>("lat")    ?: return@setMethodCallHandler
+                        val lng    = call.argument<Double>("lng")    ?: return@setMethodCallHandler
+                        val radius = call.argument<Double>("radius") ?: return@setMethodCallHandler
+                        val name   = call.argument<String>("name")   ?: id
+                        addNativeGeofence(id, lat, lng, radius.toFloat(), name, result)
+                    }
+                    "removeGeofence" -> {
+                        val id = call.argument<String>("id") ?: return@setMethodCallHandler
+                        geofencingClient.removeGeofences(listOf(id))
+                            .addOnSuccessListener {
+                                // Remove também o nome salvo nas prefs
+                                getSharedPreferences(PREFS_GEOFENCE_NAMES, MODE_PRIVATE)
+                                    .edit().remove(id).apply()
+                                result.success(null)
+                            }
+                            .addOnFailureListener { e ->
+                                result.error("REMOVE_FAILED", e.message, null)
+                            }
+                    }
+                    "clearGeofences" -> {
+                        val pi = geofencePendingIntent
+                        if (pi != null) {
+                            geofencingClient.removeGeofences(pi)
+                                .addOnSuccessListener {
+                                    getSharedPreferences(PREFS_GEOFENCE_NAMES, MODE_PRIVATE)
+                                        .edit().clear().apply()
+                                    result.success(null)
+                                }
+                                .addOnFailureListener { e ->
+                                    result.error("CLEAR_FAILED", e.message, null)
+                                }
+                        } else {
+                            result.success(null) // nenhum geofence registrado ainda
+                        }
+                    }
+                    "hasBackgroundLocationPermission" ->
+                        result.success(hasBackgroundLocationPermission())
+                    "requestBackgroundLocationPermission" ->
+                        requestBackgroundLocationPermission(result)
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -214,6 +291,97 @@ class MainActivity : FlutterActivity() {
         "longitude" to loc.longitude,
         "accuracy"  to loc.accuracy.toDouble()
     )
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Geofencing nativo — GeofencingClient + PendingIntent → GeofenceReceiver
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // Cria (ou reutiliza) o PendingIntent que aponta para o GeofenceReceiver.
+    // FLAG_MUTABLE é obrigatório no Android 12+ para o GeofencingClient injetar
+    // os dados da transição no Intent antes de entregá-lo ao receiver.
+    private fun getGeofencePendingIntent(): PendingIntent {
+        geofencePendingIntent?.let { return it }
+        val intent = Intent(this, GeofenceReceiver::class.java)
+        val flags  = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        else
+            PendingIntent.FLAG_UPDATE_CURRENT
+        return PendingIntent.getBroadcast(this, 0, intent, flags)
+            .also { geofencePendingIntent = it }
+    }
+
+    // Registra um geofence circular no GeofencingClient do Android.
+    // O sistema Android monitorará o geofence mesmo após o app ser fechado.
+    // [name] é salvo nas SharedPreferences para que o GeofenceReceiver possa
+    // exibi-lo na notificação sem precisar acessar o banco de dados do app.
+    @SuppressLint("MissingPermission") // permissão verificada em hasLocationPermission()
+    private fun addNativeGeofence(
+        id: String, lat: Double, lng: Double, radius: Float, name: String,
+        result: MethodChannel.Result
+    ) {
+        if (!hasLocationPermission()) {
+            result.error("PERMISSION_DENIED", "ACCESS_FINE_LOCATION required", null)
+            return
+        }
+
+        val geofence = Geofence.Builder()
+            .setRequestId(id)                       // ID único = ID do ambiente no banco
+            .setCircularRegion(lat, lng, radius)    // centro e raio em metros
+            .setExpirationDuration(Geofence.NEVER_EXPIRE)   // permanente até removeGeofence()
+            .setTransitionTypes(
+                Geofence.GEOFENCE_TRANSITION_ENTER or
+                Geofence.GEOFENCE_TRANSITION_EXIT
+            )
+            .build()
+
+        val request = GeofencingRequest.Builder()
+            // Não dispara ao registrar caso o usuário já esteja dentro do geofence;
+            // o disparo acontece na próxima entrada detectada pelo sistema.
+            .setInitialTrigger(0)
+            .addGeofence(geofence)
+            .build()
+
+        geofencingClient.addGeofences(request, getGeofencePendingIntent())
+            .addOnSuccessListener {
+                // Persiste o nome do ambiente para uso offline pelo GeofenceReceiver
+                getSharedPreferences(PREFS_GEOFENCE_NAMES, MODE_PRIVATE)
+                    .edit().putString(id, name).apply()
+                result.success(null)
+            }
+            .addOnFailureListener { e ->
+                result.error("ADD_FAILED", e.message ?: "Unknown error", null)
+            }
+    }
+
+    // Verifica se ACCESS_BACKGROUND_LOCATION foi concedido.
+    // Necessário no Android 10+ para que o GeofenceReceiver seja acionado
+    // quando o app não está em primeiro plano.
+    private fun hasBackgroundLocationPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            // Android 9 e anteriores: ACCESS_FINE_LOCATION já cobre background
+            hasLocationPermission()
+        }
+
+    // Solicita ACCESS_BACKGROUND_LOCATION ao usuário.
+    // No Android 11+ o sistema exige que o usuário conceda manualmente via
+    // Configurações > Apps > Sopro > Permissões > Localização > "Sempre".
+    private fun requestBackgroundLocationPermission(result: MethodChannel.Result) {
+        if (hasBackgroundLocationPermission()) { result.success(true); return }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            pendingBgLocResult = result
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                PERM_REQUEST_BG_LOC
+            )
+        } else {
+            result.success(true) // versões anteriores ao Android 10 não precisam
+        }
+    }
 
     // ═════════════════════════════════════════════════════════════════════════
     // BLE — permissões + estado do adaptador
@@ -556,6 +724,12 @@ class MainActivity : FlutterActivity() {
                               grantResults.all { it == PackageManager.PERMISSION_GRANTED }
                 pendingBlePermResult?.success(granted)
                 pendingBlePermResult = null
+            }
+            PERM_REQUEST_BG_LOC -> {
+                val granted = grantResults.isNotEmpty() &&
+                              grantResults[0] == PackageManager.PERMISSION_GRANTED
+                pendingBgLocResult?.success(granted)
+                pendingBgLocResult = null
             }
         }
     }
