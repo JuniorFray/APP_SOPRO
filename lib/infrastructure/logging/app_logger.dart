@@ -71,6 +71,11 @@ class AppLogger {
       request.write(body);
 
       final response = await request.close();
+      // Em debug, avisa se o Supabase recusou o log (4xx/5xx).
+      // Em produção, silencioso — logging nunca pode crashar o app.
+      if (kDebugMode && response.statusCode != 201) {
+        debugPrint('[AppLogger] HTTP ${response.statusCode} ao logar "$eventType"');
+      }
       await response.drain<void>(); // consome o body para liberar a conexão
       client.close();
     } catch (e) {
