@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ícone monocromático para notificações Android 5.0+.
+     O Android exige que o smallIcon seja branco sobre fundo transparente.
+     Ícones coloridos (ou @mipmap/ic_launcher) aparecem como quadrado branco
+     na barra de status — este drawable resolve o problema.
+
+     Representa o símbolo do Sopro: três linhas de vento onduladas,
+     consistente com o ícone principal do app. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!-- Linha superior — curva suave para cima -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M3,7 C7,3 14,3 17,7 C19,9.5 22,7 22,7" />
+
+    <!-- Linha do meio — a maior, representa o sopro principal -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M3,12 C8,7 16,17 21,12" />
+
+    <!-- Linha inferior — curva mais curta -->
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M3,17 C6,13.5 11,20.5 14,17" />
+
+</vector>

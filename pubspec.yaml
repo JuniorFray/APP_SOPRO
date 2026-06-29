@@ -60,13 +60,16 @@ dev_dependencies:
   # Gerador do ícone do app para Android (executa via 'dart run flutter_launcher_icons')
   flutter_launcher_icons: ^0.14.4
 
-# Configuração do gerador de ícones — lê assets/icon/icon.png e gera os mipmap-*
+# Configuração do gerador de ícones.
+# adaptive_icon_background + adaptive_icon_foreground geram o ícone adaptativo
+# (Android 8.0+ / API 26+) que preenche todo o espaço disponível no launcher —
+# sem a moldura cinza do ícone legado. image_path serve de fallback para API < 26.
 flutter_launcher_icons:
   android: true
-  ios: false
   image_path: "assets/icon/icon.png"
+  adaptive_icon_background: "#1A1A2E"
+  adaptive_icon_foreground: "assets/icon/icon.png"
   min_sdk_android: 21
-  remove_alpha_channel_ios: false
 
 flutter:
   uses-material-design: true

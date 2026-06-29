@@ -45,8 +45,11 @@ class NotificationService {
   // Inicializa o plugin, registra o handler de toque e cria os canais Android.
   // Deve ser chamado uma vez no AppInitializer, antes de BackgroundServiceManager.start().
   Future<void> initialize() async {
+    // 'notification_icon' refere-se a res/drawable/notification_icon.xml —
+    // drawable monocromático (branco + transparente) exigido pelo Android 5.0+.
+    // Usar '@mipmap/ic_launcher' como smallIcon causa o quadrado branco na barra.
     const androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+        AndroidInitializationSettings('notification_icon');
     const initSettings = InitializationSettings(android: androidSettings);
 
     await _plugin.initialize(
@@ -147,7 +150,8 @@ class NotificationService {
       channelDescription: channelDesc,
       importance: importance,
       priority: priority,
-      icon: '@mipmap/ic_launcher',
+      // drawable monocromático — mesmo recurso do AndroidInitializationSettings
+      icon: 'notification_icon',
     );
 
     await _plugin.show(

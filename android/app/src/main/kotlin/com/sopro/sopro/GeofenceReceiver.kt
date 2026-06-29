@@ -59,7 +59,9 @@ class GeofenceReceiver : BroadcastReceiver() {
             val envName = prefs.getString(geofence.requestId, null) ?: return@forEach
 
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.mipmap.ic_launcher)
+                // drawable monocromático — obrigatório no Android 5.0+.
+                // R.mipmap.ic_launcher causaria quadrado branco na barra de status.
+                .setSmallIcon(R.drawable.notification_icon)
                 .setContentTitle("Sopro")
                 .setContentText("Você está em: $envName")
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
