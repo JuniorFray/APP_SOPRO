@@ -71,6 +71,7 @@ class GeofenceManager {
     // Registra cada ambiente no GeofencingClient — idempotente: chamar novamente
     // com o mesmo ID apenas atualiza o geofence existente.
     final envs = await _envRepo.getAll();
+    var registeredCount = 0;
     for (final env in envs) {
       try {
         await _nativeGeofence.addGeofence(
@@ -80,12 +81,20 @@ class GeofenceManager {
           radiusMeters: env.radiusMeters,
           name:         env.name,
         );
+        registeredCount++;
       } catch (e) {
-        // Falha silenciosa: o GPS stream ainda monitora mesmo sem o geofence nativo
+        // Falha silenciosa: o GPS stream continua monitorando mesmo sem o geofence nativo
         debugPrint('[GeofenceManager] Falha ao registrar geofence nativo ${env.id}: $e');
       }
     }
-    debugPrint('[GeofenceManager] ${envs.length} geofence(s) nativo(s) registrado(s).');
+
+    // Log de diagnóstico: confirma quantos geofences foram registrados no Android.
+    // Se count < total, significa que alguns ambientes não serão detectados com o app morto.
+    AppLogger.log('native_geofence_registered', {
+      'count': registeredCount,
+      'total': envs.length,
+    });
+    debugPrint('[GeofenceManager] $registeredCount/${envs.length} geofence(s) nativo(s) registrado(s).');
 
     // ── GPS stream (triggers completos quando app está vivo) ───────────────
     _sub = _locationService.getPositionStream().listen(

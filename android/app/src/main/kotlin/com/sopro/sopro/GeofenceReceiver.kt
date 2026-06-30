@@ -68,19 +68,25 @@ class GeofenceReceiver : BroadcastReceiver() {
         // Situação: app nunca foi aberto → NotificationService.initialize() nunca rodou
         //           → canal 'sopro_triggers' não existe → notify() silenciosamente ignorado.
         //
-        // getNotificationChannel() retorna null se o canal ainda não foi criado.
-        // createNotificationChannel() é idempotente: se o canal já existe,
-        // o Android mantém as configurações do usuário e ignora a chamada.
+        // IMPORTANTE: usar IMPORTANCE_MAX (não HIGH). OEMs restritivos como Motorola My UX
+        // ignoram notificações IMPORTANCE_HIGH de apps em background — exigem MAX para
+        // garantir heads-up. Mesmo canal e mesma importância usados pelo Dart (Sprint 13).
+        // createNotificationChannel() é idempotente: se o canal já existe com MAX (criado
+        // pelo NotificationService.initialize()), o Android mantém as configurações do
+        // usuário e ignora esta chamada.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (nm.getNotificationChannel(CHANNEL_ID) == null) {
                 val channel = NotificationChannel(
                     CHANNEL_ID,
                     CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply { enableVibration(true) }
+                    NotificationManager.IMPORTANCE_MAX  // deve ser MAX, não HIGH
+                ).apply {
+                    enableVibration(true)
+                    lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+                }
                 nm.createNotificationChannel(channel)
-                Log.d(TAG, "Canal '$CHANNEL_ID' criado pelo GeofenceReceiver (app nunca aberto)")
+                Log.d(TAG, "Canal '$CHANNEL_ID' criado pelo GeofenceReceiver (IMPORTANCE_MAX)")
             }
         }
 
@@ -89,17 +95,17 @@ class GeofenceReceiver : BroadcastReceiver() {
 
         event.triggeringGeofences?.forEach { geofence ->
             // Nome salvo pelo MainActivity.addNativeGeofence() — fallback se ausente.
-            // Antes usávamos return@forEach (notification silenciada), agora exibe
-            // mesmo sem nome: evita sumir a notificação por prefs vazia/desatualizada.
             val envName = prefs.getString(geofence.requestId, null) ?: "um local Sopro"
 
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-                // drawable monocromático (res/drawable/notification_icon.xml) —
-                // obrigatório desde Android 5.0. @mipmap/ic_launcher → quadrado branco.
                 .setSmallIcon(R.drawable.notification_icon)
                 .setContentTitle("Sopro")
                 .setContentText("Você está em: $envName")
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                // ticker força heads-up em OEMs restritivos (Motorola My UX, etc.)
+                // mesmo com app em background — mesma estratégia do FireTriggersUseCase
+                .setTicker("Sopro — $envName")
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setAutoCancel(true)
                 .build()
 

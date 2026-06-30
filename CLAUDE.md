@@ -329,7 +329,7 @@ Entregue:
      profilePhoneHelperOn, profilePhoneHelperOff adicionados.
    - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 16 - Deduplicacao BLE + Auditoria de Seguranca + Documentacao V1 - CONCLUIDO (2026-06-30)
 Entregue:
 
@@ -371,7 +371,29 @@ PARTE 2 — Auditoria de seguranca:
   limitacao conhecida da V1 na secao STATUS V1.
 - flutter analyze lib/: No issues found. flutter build apk --release --split-per-abi: success.
 
-## STATUS V1 — Sopro 0.1.0
+## Sprint Atual
+Sprint: 17 - Fechamento V1 - CONCLUIDO (2026-06-30)
+Entregue:
+
+TAREFA 1 — Regressao critica (GeofenceReceiver nao mostrava notificacao com app morto):
+- Causa raiz: GeofenceReceiver.kt criava canal com IMPORTANCE_HIGH quando o app nunca foi
+  aberto (NotificationService ainda nao rodou). Motorola My UX silencia IMPORTANCE_HIGH de
+  apps em background — mesma causa do bug do Sprint 13, mas no receiver nativo.
+- Correcao: IMPORTANCE_MAX + PRIORITY_MAX + ticker + VISIBILITY_PUBLIC no GeofenceReceiver.kt.
+- Diagnostico: AppLogger.log('native_geofence_registered', {count, total}) em
+  GeofenceManager.start() confirma quantos geofences foram registrados com sucesso no Supabase.
+
+TAREFA 2 — Sync de perfil BLE em tempo real:
+- _cardRefreshAfter reduzido de 30s para 10s em BleService.
+  Qualquer campo do ContextCard reflete para outros usuarios em ate 10s de re-deteccao BLE.
+
+TAREFA 3 — Documentacao V1 finalizada:
+- CLAUDE.md: Sprint 17 adicionado, STATUS V1 renomeado para V1 FINALIZADA, historico de
+  17 sprints, todos os bugs de campo, auditoria de seguranca, stack tecnico, metricas de
+  teste, arquitetura final e secao V2 Proximos Passos.
+- flutter analyze lib/: No issues found. flutter build apk --release --split-per-abi: success.
+
+## V1 FINALIZADA — Sopro 0.1.0
 
 ### Historico de Sprints
 
@@ -390,12 +412,15 @@ Sprint 12 — Supabase logs: AppLogger fire-and-forget, foto de perfil, icone do
 Sprint 13 — Notif + WhatsApp: canal Importance.MAX, debounce de trigger, TX Power BLE, campo phone.
 Sprint 14 — GATT Retry: auto-retry 3x + closeZombieGatts; linguagem sem jargao tecnico na UI.
 Sprint 15 — Cartao completo: _ContextCardSheet com todos os campos; toggle WhatsApp independente.
-Sprint 16 — V1 Final: dedup por card.id, TTL 10s, refresh 30s, auditoria de seguranca, docs V1.
+Sprint 16 — Dedup BLE: dedup por card.id, TTL 10s, refresh 30s, auditoria de seguranca.
+Sprint 17 — Fechamento V1: fix GeofenceReceiver (IMPORTANCE_MAX), refresh BLE 10s, docs finais.
 
 ### Bugs Corrigidos em Campo (Motorola G52, Android 12)
 
-- Notificacoes nao apareciam (Motorola My UX): canal criado com Importance.HIGH ignorado por
-  apps em segundo plano em OEMs restritivos. Corrigido: Importance.MAX + Priority.MAX + ticker.
+- Notificacoes de trigger nao apareciam (Motorola My UX): canal Importance.HIGH ignorado por
+  apps em background. Corrigido: Importance.MAX + Priority.MAX + ticker no FireTriggersUseCase.
+- Notificacoes de geofence nativo nao apareciam (mesma causa): GeofenceReceiver.kt criava o
+  canal com IMPORTANCE_HIGH quando o app nunca foi aberto. Corrigido: IMPORTANCE_MAX + ticker.
 - GATT status=133 / "service not found": conexao sem fechar GATT zumbi anterior causava falha.
   Corrigido: closeZombieGatts() antes de cada tentativa + delay 600ms + 2 retries no Dart.
 - MAC rotation — mesmo usuario aparecia multiplas vezes na lista BLE.
@@ -419,42 +444,65 @@ Permissoes Android            — OK. Todas justificadas no manifesto; maxSdkVer
 Banco de dados cifrado        — PENDENTE V2. Drift usa SQLite padrao. Dados em armazenamento privado (/data/data/com.sopro.sopro/) inacessivel sem root. SQLCipher na V2.
 Localizacao em segundo plano  — ACEITO. ACCESS_BACKGROUND_LOCATION necessario para GeofencingClient com app morto. Documentado e justificado no manifesto.
 
+### Stack Tecnico Final
+
+Flutter 3.x / Dart, Riverpod 2.x, Drift (SQLite schemaV4), MethodChannel / EventChannel nativos,
+FusedLocationProviderClient (GPS 2s), GeofencingClient (geofences nativos com app morto),
+flutter_local_notifications (IMPORTANCE_MAX), flutter_background_service (foreground service),
+Supabase REST (logging anonimo, INSERT-only), image_picker, url_launcher, flutter_map + nominatim.
+
 ### Arquitetura Final
 
 lib/
-  core/constants/strings.dart         -- Todas as strings visiveis centralizadas (nunca hardcode em widget)
+  core/constants/strings.dart         -- Todas as strings visiveis (nunca hardcode em widget)
   core/navigation/app_router.dart     -- GlobalKey<NavigatorState> + pushScreen() animado
-  core/theme/app_theme.dart
-  domain/entities/                    -- Entidades puras: ContextCardEntity, EnvironmentEntity, TriggerEntity
+  domain/entities/                    -- ContextCardEntity, EnvironmentEntity, TriggerEntity
   domain/use_cases/fire_triggers_use_case.dart
-  data/database/                      -- Drift (SQLite); schemaVersion=4; migracoes automaticas v1→v4
-  data/repositories/                  -- Implementacoes concretas dos contratos de dominio
-  infrastructure/ble/                 -- BleService (scan/advertise/GATT/dedup/TTL), DiscoveredSoproUser
+  data/database/                      -- Drift; schemaVersion=4; migracoes automaticas v1→v4
+  data/repositories/                  -- Implementacoes dos contratos de dominio
+  infrastructure/ble/                 -- BleService (scan/advertise/GATT/dedup/TTL/refresh 10s)
+  infrastructure/geofence/            -- GeofenceManager (GPS stream) + NativeGeofenceService
   infrastructure/gps/                 -- NativeLocationService (FusedLocationProviderClient)
-  infrastructure/geofencing/          -- GeofenceManager (stream GPS) + GeofenceReceiver (nativo)
-  infrastructure/notifications/       -- NotificationService (flutter_local_notifications, canais Android)
-  infrastructure/background/          -- BackgroundServiceManager (flutter_background_service)
-  infrastructure/logging/             -- AppLogger (Supabase fire-and-forget, diagnóstico)
+  infrastructure/notifications/       -- NotificationService (canais Android IMPORTANCE_MAX)
+  infrastructure/background/          -- BackgroundServiceManager (foreground service)
+  infrastructure/logging/             -- AppLogger (Supabase fire-and-forget)
   presentation/providers/             -- Riverpod: StateProviders, StreamProviders, FutureProviders
-  presentation/screens/               -- Home, EnvironmentDetail, Profile, Settings, PeopleNearby...
-  presentation/widgets/               -- AppInitializer, EnvironmentCard, _TriggerTile...
+  presentation/screens/               -- Home, EnvironmentDetail, Profile, Settings, PeopleNearby
+  presentation/widgets/               -- AppInitializer, EnvironmentCard
 
 android/app/src/main/kotlin/com/sopro/sopro/
-  MainActivity.kt      -- Toda a logica nativa: BLE scan/advertise/GATT, GPS, MethodChannel/EventChannel
-  GeofenceReceiver.kt  -- BroadcastReceiver para geofencing nativo (funciona com app morto)
+  MainActivity.kt      -- BLE scan/advertise/GATT, GPS, Geofencing; MethodChannel/EventChannel
+  GeofenceReceiver.kt  -- BroadcastReceiver nativo (app morto, IMPORTANCE_MAX, ticker)
 
-### Proximos Passos V2
+### Metricas de Teste de Campo
 
-- SQLCipher real: substituir driftDatabase('sopro') por conexao cifrada com chave derivada do Android Keystore.
+Dispositivos: Motorola G52 (Android 12, My UX)
+Cenarios validados:
+  [OK] Trigger ao entrar em geofence com app em foreground
+  [OK] Trigger ao entrar em geofence com app minimizado (foreground service)
+  [OK] Notificacao heads-up no Motorola (canal IMPORTANCE_MAX)
+  [OK] Deep-link da notificacao abre EnvironmentDetailScreen
+  [OK] Troca de ContextCard via BLE (GATT) entre dois dispositivos
+  [OK] Retry GATT (3x) resolve status=133
+  [OK] MAC rotation: mesmo usuario nao aparece duplicado
+  [OK] TTL de 10s remove usuarios que foram embora
+  [OK] Toggle WhatsApp omite numero do payload BLE
+  [OK] Historico de encontros persiste entre sessoes
+  [PENDENTE] Geofence nativo com app completamente morto — fix Sprint 17, aguarda validacao
+
+### V2 — Proximos Passos
+
+- SQLCipher: substituir driftDatabase('sopro') por conexao cifrada (Android Keystore).
+- Atualizar Flutter SDK para Dart 3.10+ (desbloqueia plugins geolocator mais modernos).
 - Tema claro/escuro: ThemeMode dinamico respeitando preferencia do sistema.
-- Widget Android: AppWidget na home screen mostrando o ambiente ativo e seus gatilhos.
-- Exportacao de dados: backup manual (JSON) de ambientes, gatilhos e historico de encontros.
-- Categorias de ambiente: icones por tipo (casa, trabalho, academia, lazer) na HomeScreen.
+- Foto de perfil via Supabase Storage: sincronizar entre dispositivos (hoje so local).
+- Widget Android: AppWidget na home screen com ambiente ativo e seus gatilhos.
+- Exportacao de dados: backup manual (JSON) de ambientes, gatilhos e encontros.
 - Estatisticas de uso: dashboard com frequencia de triggers por ambiente.
 - Cache de mapa offline: tiles pre-baixados para uso sem internet.
-- Background service mais robusto: reinicio apos OEM kill via WorkManager como fallback.
-- iOS: testar e ajustar camada nativa (BLE/GPS/notificacoes) no Core Bluetooth / CoreLocation.
-- Supabase RLS: confirmar politica INSERT-only em app_logs; adicionar indice em device_id.
+- Background service mais robusto: reinicio apos OEM kill via WorkManager (fallback).
+- iOS: camada nativa (Core Bluetooth, CoreLocation, UNUserNotificationCenter).
+- Supabase RLS: confirmar INSERT-only em app_logs; adicionar indice em device_id.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

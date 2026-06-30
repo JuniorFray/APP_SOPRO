@@ -64,9 +64,11 @@ class BleService {
   // TTL curto é essencial em ambientes de alto fluxo (eventos, ruas, lojas).
   Timer? _expiryTimer;
 
-  static const _ttl             = Duration(seconds: 10);
+  static const _ttl                  = Duration(seconds: 10);
   static const _expiryCheckInterval = Duration(seconds: 3);
-  static const _cardRefreshAfter    = Duration(seconds: 30);
+  // Refresh de 10s: qualquer atualização de perfil (nome, cargo, WhatsApp, etc.)
+  // reflete rapidamente para quem está vendo via BLE na tela de Pessoas Aqui.
+  static const _cardRefreshAfter     = Duration(seconds: 10);
 
   Stream<List<DiscoveredSoproUser>> get devicesStream =>
       _devicesController.stream;
