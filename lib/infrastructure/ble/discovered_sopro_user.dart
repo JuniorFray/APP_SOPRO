@@ -4,7 +4,8 @@ import '../../domain/entities/context_card_entity.dart';
 // Criado quando o scan encontra um dispositivo anunciando o SERVICE_UUID Sopro.
 // O ContextCard é carregado sob demanda via GATT quando o usuário toca no item.
 class DiscoveredSoproUser {
-  // ID do dispositivo Bluetooth (MAC no Android, UUID no iOS)
+  // ID do dispositivo Bluetooth (MAC no Android, UUID no iOS).
+  // Usado somente para conexão GATT — não é a chave de deduplicação.
   final String deviceId;
 
   // Nome exibido: vem do advertisement localName ou "Usuário Sopro" como fallback
@@ -13,11 +14,17 @@ class DiscoveredSoproUser {
   // Intensidade do sinal em dBm — quanto mais próximo de 0, mais perto
   final int rssi;
 
-  // Última vez que este dispositivo foi visto no scan
+  // Última vez que este dispositivo foi visto no scan BLE.
+  // Usado pelo timer de TTL (10 s) para remover usuários que saíram do alcance.
   final DateTime lastSeen;
 
   // ContextCard carregado via GATT; null enquanto não foi buscado
   final ContextCardEntity? card;
+
+  // Quando o card foi carregado via GATT pela última vez.
+  // Usado para agendar re-leitura automática (>30 s → re-busca para refletir
+  // mudanças de privacidade, como desativar compartilhamento de WhatsApp).
+  final DateTime? fetchedAt;
 
   const DiscoveredSoproUser({
     required this.deviceId,
@@ -25,6 +32,7 @@ class DiscoveredSoproUser {
     required this.rssi,
     required this.lastSeen,
     this.card,
+    this.fetchedAt,
   });
 
   // Cria uma cópia com campos substituídos — necessário porque a classe é imutável
@@ -34,13 +42,15 @@ class DiscoveredSoproUser {
     int? rssi,
     DateTime? lastSeen,
     ContextCardEntity? card,
+    DateTime? fetchedAt,
   }) {
     return DiscoveredSoproUser(
-      deviceId: deviceId ?? this.deviceId,
+      deviceId:   deviceId   ?? this.deviceId,
       deviceName: deviceName ?? this.deviceName,
-      rssi: rssi ?? this.rssi,
-      lastSeen: lastSeen ?? this.lastSeen,
-      card: card ?? this.card,
+      rssi:       rssi       ?? this.rssi,
+      lastSeen:   lastSeen   ?? this.lastSeen,
+      card:       card       ?? this.card,
+      fetchedAt:  fetchedAt  ?? this.fetchedAt,
     );
   }
 

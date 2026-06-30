@@ -298,7 +298,7 @@ Entregue:
      tambem usa o termo) e textos de erro de hardware.
    - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 15 - Cartao BLE Completo + WhatsApp Opcional - CONCLUIDO (2026-06-30)
 Entregue:
 
@@ -329,10 +329,132 @@ Entregue:
      profilePhoneHelperOn, profilePhoneHelperOff adicionados.
    - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Proximo Sprint
-Sprint: 16 - Possivelmente: tema claro/escuro, exportacao de dados,
-estatisticas de uso, widget Android de ambiente na home,
-icone de categoria para ambientes.
+## Sprint Atual
+Sprint: 16 - Deduplicacao BLE + Auditoria de Seguranca + Documentacao V1 - CONCLUIDO (2026-06-30)
+Entregue:
+
+PARTE 1 — Robustez BLE em ambientes de alto fluxo:
+- DEDUPLICACAO POR IDENTIDADE ESTAVEL: _devices indexado por card.id (UUID
+  gerado pelo dono do perfil) apos a primeira leitura GATT. Antes disso usa o
+  MAC como chave temporaria. _macToStableId mapeia MAC → ID estavel para que
+  redeteccoes (mesmo ou novo MAC) atualizem a entrada correta.
+  _promoteToCardId() reindexia de MAC → card.id tratando 3 casos:
+  refresh (card.id ja e chave), MAC rotation (mesmo card.id, novo MAC → mescla),
+  primeira leitura (promove de MAC para card.id).
+- EXPIRACAO TTL 10 s: Timer.periodic a cada 3 s. Entradas nao vistas ha
+  mais de 10 s sao removidas automaticamente. Limpeza total de _macToStableId
+  e _fetchingCards para os IDs expirados.
+- REFRESH DE CARD A CADA 30 s: _maybeRefreshCard() agenda re-leitura GATT
+  (via fetchContextCard) se fetchedAt < agora - 30s. _fetchingCards evita
+  fetches paralelos para o mesmo dispositivo. Reflete mudancas de privacidade
+  (ex: outro usuario desativa compartilhamento de WhatsApp) em tempo real.
+- DiscoveredSoproUser: novo campo fetchedAt (DateTime?) registra quando o card
+  foi carregado via GATT, usado para controle do refresh.
+- BleService.dispose(): cancela _expiryTimer alem de stopScan/stopAdvertising.
+
+PARTE 2 — Auditoria de seguranca:
+- PAYLOAD BLE SANITIZADO: _sanitize() em todos os campos do ContextCard
+  (trim + truncate no limite seguro: id=36, displayName/role/company=60,
+  bio=200, tags=100, phone=15). JSON invalido descartado silenciosamente.
+  Validacao de tipo: raw is! Map → retorna user sem modificar o estado.
+- CHAVE SUPABASE DOCUMENTADA: comentario em app_logger.dart explica por que
+  sb_publishable_ e seguro em codigo fonte (analogia firebase_options.dart)
+  e qual politica RLS deve estar ativa no painel Supabase (INSERT-only).
+- PRIVACIDADE DO TELEFONE VERIFICADA: chave 'p' omitida do payload BLE via
+  collection-if quando sharePhone=false; numero salvo so localmente; nao
+  aparece em nenhum log do Supabase; strips de digitos antes de abrir WhatsApp.
+- ANDROID MANIFEST AUDITADO: todas as permissoes tem uso documentado;
+  maxSdkVersion nos fallbacks legacy (BLUETOOTH/BLUETOOTH_ADMIN ate API 30,
+  READ_EXTERNAL_STORAGE ate API 32); nenhuma permissao desnecessaria.
+- BANCO DE DADOS: SQLCipher adiado para V2 (dados em /data/data/com.sopro.sopro/
+  — armazenamento privado do app, inacessivel sem root). Documentado como
+  limitacao conhecida da V1 na secao STATUS V1.
+- flutter analyze lib/: No issues found. flutter build apk --release --split-per-abi: success.
+
+## STATUS V1 — Sopro 0.1.0
+
+### Historico de Sprints
+
+Sprint 1  — Setup: tabelas Environments/Triggers/ContextCards, CRUD basico, Drift + SQLite.
+Sprint 2  — Telas core: HomeScreen, AddEnvironmentScreen, EnvironmentDetailScreen.
+Sprint 3  — GPS nativo: FusedLocationProviderClient via MethodChannel, stream de posicao.
+Sprint 4  — Geofencing: GeofencingClient + GeofenceReceiver nativo, raio configuravel.
+Sprint 5  — Motor de triggers: FireTriggersUseCase + flutter_local_notifications.
+Sprint 6  — Onboarding: fluxo 4 passos, permissoes de localizacao e notificacoes.
+Sprint 7  — BLE Social: scan + advertise + GATT server/client via MethodChannel (sem pacote BLE externo).
+Sprint 8  — ContextCard v2: campos role + company; ContextCardEntity; troca BLE funcional.
+Sprint 9  — BleEncounters + BG: tabela BleEncounters (schemaV3), foreground service corrigido.
+Sprint 10 — Triggers em 2o plano: deep-link de notificacao → EnvironmentDetailScreen.
+Sprint 11 — Configuracoes: SettingsScreen, edicao de ambientes/gatilhos, animacoes push.
+Sprint 12 — Supabase logs: AppLogger fire-and-forget, foto de perfil, icone do app, som/cooldown.
+Sprint 13 — Notif + WhatsApp: canal Importance.MAX, debounce de trigger, TX Power BLE, campo phone.
+Sprint 14 — GATT Retry: auto-retry 3x + closeZombieGatts; linguagem sem jargao tecnico na UI.
+Sprint 15 — Cartao completo: _ContextCardSheet com todos os campos; toggle WhatsApp independente.
+Sprint 16 — V1 Final: dedup por card.id, TTL 10s, refresh 30s, auditoria de seguranca, docs V1.
+
+### Bugs Corrigidos em Campo (Motorola G52, Android 12)
+
+- Notificacoes nao apareciam (Motorola My UX): canal criado com Importance.HIGH ignorado por
+  apps em segundo plano em OEMs restritivos. Corrigido: Importance.MAX + Priority.MAX + ticker.
+- GATT status=133 / "service not found": conexao sem fechar GATT zumbi anterior causava falha.
+  Corrigido: closeZombieGatts() antes de cada tentativa + delay 600ms + 2 retries no Dart.
+- MAC rotation — mesmo usuario aparecia multiplas vezes na lista BLE.
+  Corrigido: deduplicacao por card.id (UUID estavel) como chave primaria do Map.
+- Race condition de trigger duplo: GeofenceReceiver + GeofenceManager disparavam simultaneamente.
+  Corrigido: debounce de 60 s por triggerId em FireTriggersUseCase.
+- SharedPreferences obsoletas (OEM Auto Backup): prefs restauradas sem banco, causando
+  onboarding_done=true com banco vazio. Corrigido: AppInitializer detecta e reseta flags.
+- "Bad notification for startForeground": canal sopro_background nao existia antes do servico.
+  Corrigido: NotificationService.initialize() cria ambos os canais antes do servico subir.
+- GPS lento demais para geofencing confiavel: intervalo era 5s.
+  Corrigido: intervalo de 2s em FusedLocationProviderClient (MainActivity.kt).
+
+### Auditoria de Seguranca V1
+
+Chave Supabase em source      — SEGURO. sb_publishable_ e projetada para apps cliente (analogo firebase_options). RLS no painel deve ser INSERT-only na tabela app_logs.
+Payload BLE sanitizado        — CORRIGIDO (Sprint 16). _sanitize() em todos os campos; JSON invalido descartado.
+Dados pessoais nos logs       — OK. Nenhum log envia telefone, nome ou coordenadas exatas. So event_type, environment_id e erros.
+Toggle WhatsApp respeitado    — OK. Chave 'p' omitida do payload BLE; numero so no banco local.
+Permissoes Android            — OK. Todas justificadas no manifesto; maxSdkVersion nos fallbacks.
+Banco de dados cifrado        — PENDENTE V2. Drift usa SQLite padrao. Dados em armazenamento privado (/data/data/com.sopro.sopro/) inacessivel sem root. SQLCipher na V2.
+Localizacao em segundo plano  — ACEITO. ACCESS_BACKGROUND_LOCATION necessario para GeofencingClient com app morto. Documentado e justificado no manifesto.
+
+### Arquitetura Final
+
+lib/
+  core/constants/strings.dart         -- Todas as strings visiveis centralizadas (nunca hardcode em widget)
+  core/navigation/app_router.dart     -- GlobalKey<NavigatorState> + pushScreen() animado
+  core/theme/app_theme.dart
+  domain/entities/                    -- Entidades puras: ContextCardEntity, EnvironmentEntity, TriggerEntity
+  domain/use_cases/fire_triggers_use_case.dart
+  data/database/                      -- Drift (SQLite); schemaVersion=4; migracoes automaticas v1→v4
+  data/repositories/                  -- Implementacoes concretas dos contratos de dominio
+  infrastructure/ble/                 -- BleService (scan/advertise/GATT/dedup/TTL), DiscoveredSoproUser
+  infrastructure/gps/                 -- NativeLocationService (FusedLocationProviderClient)
+  infrastructure/geofencing/          -- GeofenceManager (stream GPS) + GeofenceReceiver (nativo)
+  infrastructure/notifications/       -- NotificationService (flutter_local_notifications, canais Android)
+  infrastructure/background/          -- BackgroundServiceManager (flutter_background_service)
+  infrastructure/logging/             -- AppLogger (Supabase fire-and-forget, diagnóstico)
+  presentation/providers/             -- Riverpod: StateProviders, StreamProviders, FutureProviders
+  presentation/screens/               -- Home, EnvironmentDetail, Profile, Settings, PeopleNearby...
+  presentation/widgets/               -- AppInitializer, EnvironmentCard, _TriggerTile...
+
+android/app/src/main/kotlin/com/sopro/sopro/
+  MainActivity.kt      -- Toda a logica nativa: BLE scan/advertise/GATT, GPS, MethodChannel/EventChannel
+  GeofenceReceiver.kt  -- BroadcastReceiver para geofencing nativo (funciona com app morto)
+
+### Proximos Passos V2
+
+- SQLCipher real: substituir driftDatabase('sopro') por conexao cifrada com chave derivada do Android Keystore.
+- Tema claro/escuro: ThemeMode dinamico respeitando preferencia do sistema.
+- Widget Android: AppWidget na home screen mostrando o ambiente ativo e seus gatilhos.
+- Exportacao de dados: backup manual (JSON) de ambientes, gatilhos e historico de encontros.
+- Categorias de ambiente: icones por tipo (casa, trabalho, academia, lazer) na HomeScreen.
+- Estatisticas de uso: dashboard com frequencia de triggers por ambiente.
+- Cache de mapa offline: tiles pre-baixados para uso sem internet.
+- Background service mais robusto: reinicio apos OEM kill via WorkManager como fallback.
+- iOS: testar e ajustar camada nativa (BLE/GPS/notificacoes) no Core Bluetooth / CoreLocation.
+- Supabase RLS: confirmar politica INSERT-only em app_logs; adicionar indice em device_id.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

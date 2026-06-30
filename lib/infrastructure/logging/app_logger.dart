@@ -20,7 +20,18 @@ class AppLogger {
   // URL da tabela app_logs no Supabase
   static const _supabaseUrl =
       'https://zqgkfqenrljtncoecegv.supabase.co/rest/v1/app_logs';
-  // Chave publicável Supabase (só permite INSERT; sem acesso a dados de outros)
+
+  // Chave publishable do Supabase — projetada para ser embutida em apps cliente.
+  //
+  // O prefixo "sb_publishable_" é análogo ao firebase_options.dart do Firebase:
+  // não é um secret key e não concede acesso admin. Pode estar no fonte.
+  //
+  // A segurança real depende da política RLS na tabela app_logs (painel Supabase):
+  //   INSERT: permitido com esta chave.
+  //   SELECT/UPDATE/DELETE: bloqueados — nenhum dispositivo lê logs de outros.
+  //
+  // Nenhum dado pessoal é enviado: apenas event_type, environment_id e erros —
+  // sem coordenadas exatas, nomes, telefones ou identificadores de usuário.
   static const _apiKey =
       'sb_publishable_cw4YwcWkSNhGc-zkTjO7xw_lPS5NE09';
   // Chave do SharedPreferences para persistir o device ID entre sessões

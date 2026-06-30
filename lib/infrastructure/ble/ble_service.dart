@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import '../../core/constants/strings.dart';
 import '../../domain/entities/context_card_entity.dart';
 import '../logging/app_logger.dart';
 import 'discovered_sopro_user.dart';
@@ -26,25 +27,46 @@ import 'discovered_sopro_user.dart';
 // UUIDs Sopro (FIXOS — nunca alterar):
 //   Service:        550e8400-e29b-41d4-a716-446655440000
 //   ContextCard ch: 550e8401-e29b-41d4-a716-446655440000
+//
+// Estratégia de deduplicação:
+//   O Android rotaciona o MAC BLE periodicamente (privacidade do SO).
+//   _devices é indexado por card.id (UUID estável gerado pelo dono do perfil)
+//   após a primeira leitura GATT. Antes disso, usa o MAC como chave temporária.
+//   _macToStableId mapeia MAC → ID estável para que eventos de scan subsequentes
+//   (com o mesmo ou novo MAC) atualizem a entrada correta.
 class BleService {
   static const _bleChannel     = MethodChannel('com.sopro.sopro/ble');
   static const _bleScanChannel = EventChannel('com.sopro.sopro/ble_scan');
 
-  // Cache em memória dos usuários detectados nesta sessão de scan.
-  // Indexado por deviceId (MAC BLE) — garante deduplicação.
+  // Indexado por ID estável: card.id se já carregado via GATT, MAC caso contrário.
+  // Garante que o mesmo usuário físico aparece uma única vez mesmo após MAC rotation.
   final _devices = <String, DiscoveredSoproUser>{};
 
+  // MAC BLE → ID estável: permite que eventos de scan redetectem dispositivos já
+  // conhecidos pelo card.id mesmo que o MAC tenha rotacionado.
+  final _macToStableId = <String, String>{};
+
+  // IDs estáveis com fetch GATT em andamento — evita fetches paralelos para o
+  // mesmo dispositivo (race condition / vazamento de conexão GATT).
+  final _fetchingCards = <String>{};
+
   // Stream broadcast emitido a cada atualização do cache de dispositivos.
-  // O debounce em _emitDevices() evita rebuild excessivo quando o scan
-  // retorna múltiplos resultados para o mesmo dispositivo em sequência.
   final _devicesController =
       StreamController<List<DiscoveredSoproUser>>.broadcast();
 
-  // Subscription ao EventChannel de scan nativo (ativa/inativa conforme startScan/stopScan)
+  // Subscription ao EventChannel de scan nativo
   StreamSubscription<dynamic>? _scanSub;
 
-  // Timer de debounce: agrupa emissões rápidas em uma única atualização (500ms)
+  // Debounce de 500 ms: agrupa resultados em burst antes de emitir para a UI
   Timer? _emitDebounce;
+
+  // Timer de expiração: verifica a cada 3 s e remove usuários não vistos há >10 s.
+  // TTL curto é essencial em ambientes de alto fluxo (eventos, ruas, lojas).
+  Timer? _expiryTimer;
+
+  static const _ttl             = Duration(seconds: 10);
+  static const _expiryCheckInterval = Duration(seconds: 3);
+  static const _cardRefreshAfter    = Duration(seconds: 30);
 
   Stream<List<DiscoveredSoproUser>> get devicesStream =>
       _devicesController.stream;
@@ -61,7 +83,6 @@ class BleService {
 
   // ── Estado do adaptador Bluetooth ─────────────────────────────────────────
 
-  // Retorna true se o Bluetooth estiver ligado e disponível
   Future<bool> isBluetoothOn() async {
     try {
       final state = await _bleChannel.invokeMethod<String>('getAdapterState');
@@ -73,14 +94,13 @@ class BleService {
 
   // ── Scan BLE (central role via EventChannel) ──────────────────────────────
 
-  // Inicia o scan BLE assinando o EventChannel nativo.
-  // onListen no Kotlin inicia o BluetoothLeScanner com filtro pelo SERVICE_UUID.
-  // Cada dispositivo encontrado emite um evento {deviceId, deviceName, rssi}.
   Future<void> startScan() async {
-    if (_scanSub != null) return; // scan já ativo
+    if (_scanSub != null) return;
 
     _devices.clear();
+    _macToStableId.clear();
     _emitDevices();
+    _startExpiryTimer();
 
     _scanSub = _bleScanChannel.receiveBroadcastStream().listen(
       _onScanResult,
@@ -92,34 +112,83 @@ class BleService {
   }
 
   Future<void> stopScan() async {
-    // Cancelar a subscription dispara onCancel no Kotlin, parando o scan nativo
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
     await _scanSub?.cancel();
     _scanSub = null;
   }
 
-  // Processa um evento de resultado de scan vindo do Kotlin.
-  // O Map<String, DiscoveredSoproUser> garante deduplicação por deviceId.
+  // Remove entradas não vistas há mais de _ttl a cada _expiryCheckInterval.
+  void _startExpiryTimer() {
+    _expiryTimer?.cancel();
+    _expiryTimer = Timer.periodic(_expiryCheckInterval, (_) {
+      final cutoff = DateTime.now().subtract(_ttl);
+      final expired = _devices.entries
+          .where((e) => e.value.lastSeen.isBefore(cutoff))
+          .map((e) => e.key)
+          .toList();
+
+      if (expired.isNotEmpty) {
+        for (final key in expired) {
+          final dev = _devices.remove(key);
+          _macToStableId.removeWhere((_, v) => v == key);
+          if (dev != null && dev.deviceId != key) {
+            _macToStableId.remove(dev.deviceId);
+          }
+          _fetchingCards.remove(key);
+        }
+        _emitDevices();
+      }
+    });
+  }
+
+  // Processa evento de scan: atualiza ou cria entrada sob ID estável.
   void _onScanResult(dynamic event) {
     final data = Map<String, dynamic>.from(event as Map);
-    final id = data['deviceId'] as String? ?? '';
-    if (id.isEmpty) return;
+    final mac = data['deviceId'] as String? ?? '';
+    if (mac.isEmpty) return;
 
     final name = (data['deviceName'] as String?) ?? '';
-    final existing = _devices[id];
-    _devices[id] = DiscoveredSoproUser(
-      deviceId: id,
-      // Preferência: nome do advertisement → nome já conhecido → fallback
-      deviceName: name.isNotEmpty ? name : existing?.deviceName ?? 'Usuário Sopro',
-      rssi: data['rssi'] as int? ?? 0,
-      lastSeen: DateTime.now(),
-      card: existing?.card, // preserva ContextCard já carregado via GATT
+    final rssi = data['rssi'] as int? ?? 0;
+    final now  = DateTime.now();
+
+    // Resolve ID estável: card.id se já conhecido via GATT, MAC caso contrário
+    final stableId = _macToStableId[mac] ?? mac;
+    final existing = _devices[stableId];
+
+    _devices[stableId] = DiscoveredSoproUser(
+      deviceId:   mac, // mantém o MAC atual para conexão GATT
+      deviceName: name.isNotEmpty
+          ? name
+          : existing?.deviceName ?? AppStrings.bleUserLabel,
+      rssi:       rssi,
+      lastSeen:   now,
+      card:       existing?.card,
+      fetchedAt:  existing?.fetchedAt,
     );
+    _macToStableId[mac] = stableId;
+
+    // Agenda re-leitura GATT se card foi carregado há mais de _cardRefreshAfter.
+    // Reflete mudanças de privacidade (ex: usuário desativou compartilhamento de WhatsApp).
+    _maybeRefreshCard(stableId, now);
+
     _emitDevices();
   }
 
-  // Emite a lista atual de dispositivos com debounce de 500ms.
-  // Evita rebuilds excessivos quando o scan retorna resultados em burst
-  // (mesmo dispositivo detectado várias vezes em sequência rápida).
+  // Re-busca o card via GATT se stale (>30 s). Evita fetch paralelo via _fetchingCards.
+  void _maybeRefreshCard(String stableId, DateTime now) {
+    final dev = _devices[stableId];
+    if (dev == null || dev.card == null || dev.fetchedAt == null) return;
+    if (_fetchingCards.contains(stableId)) return;
+    if (now.difference(dev.fetchedAt!).inSeconds < _cardRefreshAfter.inSeconds) return;
+
+    _fetchingCards.add(stableId);
+    fetchContextCard(dev)
+        .then((_) => _fetchingCards.remove(stableId))
+        .onError((_, __) => _fetchingCards.remove(stableId));
+  }
+
+  // Emite lista atual com debounce de 500 ms para evitar rebuilds em burst de scan.
   void _emitDevices() {
     _emitDebounce?.cancel();
     _emitDebounce = Timer(const Duration(milliseconds: 500), () {
@@ -144,8 +213,8 @@ class BleService {
       final payload = jsonEncode({
         'id': card.id,
         'n': card.displayName,
-        'r': card.role,    // cargo
-        'c': card.company, // empresa
+        'r': card.role,
+        'c': card.company,
         'b': card.bio.substring(0, min(card.bio.length, 120)),
         't': card.tags,
         // Omite 'p' se o usuário optou por não compartilhar o número
@@ -173,8 +242,8 @@ class BleService {
   // Conecta ao dispositivo Sopro, lê a characteristic de ContextCard e desconecta.
   // Tenta até 3 vezes (delays de 600ms e 1200ms entre tentativas) para contornar
   // falhas transitórias do Android GATT stack (status=133, service not found).
-  // O Kotlin já aguarda 600ms antes do connectGatt e fecha GATTs zumbis antes de cada
-  // tentativa. Loga 'ble_retry_success' no Supabase se o retry resolver a falha.
+  // Sanitiza todos os campos recebidos antes de criar a entidade (proteção contra
+  // payload malformado ou malicioso).
   Future<DiscoveredSoproUser> fetchContextCard(DiscoveredSoproUser user) async {
     const retryDelays = [Duration(milliseconds: 600), Duration(milliseconds: 1200)];
     PlatformException? lastError;
@@ -191,17 +260,32 @@ class BleService {
         );
         if (cardJson == null || cardJson.isEmpty) return user;
 
-        final map = jsonDecode(cardJson) as Map<String, dynamic>;
+        // Proteção contra payload JSON inválido — descarta silenciosamente
+        final dynamic raw;
+        try {
+          raw = jsonDecode(cardJson);
+        } catch (_) {
+          debugPrint('[BleService] fetchContextCard payload JSON inválido (${user.deviceId})');
+          return user;
+        }
+        if (raw is! Map) return user;
+
+        final map = raw.cast<String, dynamic>();
+        final now = DateTime.now();
+
+        // Sanitiza todos os campos: tipo correto, trim, trunca no limite seguro.
+        final cardId = _sanitize(map['id'], maxLength: 36);
         final card = ContextCardEntity(
-          id: (map['id'] as String?) ?? user.deviceId,
-          displayName: (map['n'] as String?) ?? user.deviceName,
-          role: (map['r'] as String?) ?? '',
-          company: (map['c'] as String?) ?? '',
-          bio: (map['b'] as String?) ?? '',
-          tags: (map['t'] as String?) ?? '',
-          phone: (map['p'] as String?) ?? '',
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
+          // Se o id vier vazio ou malformado, usa o deviceId como fallback
+          id:          cardId.isNotEmpty ? cardId : user.deviceId,
+          displayName: _sanitize(map['n'], maxLength: 60),
+          role:        _sanitize(map['r'], maxLength: 60),
+          company:     _sanitize(map['c'], maxLength: 60),
+          bio:         _sanitize(map['b'], maxLength: 200),
+          tags:        _sanitize(map['t'], maxLength: 100),
+          phone:       _sanitize(map['p'], maxLength: 15),
+          createdAt:   now,
+          updatedAt:   now,
         );
 
         if (attempt > 0) {
@@ -211,10 +295,8 @@ class BleService {
           });
         }
 
-        final updated = user.copyWith(card: card);
-        _devices[user.deviceId] = updated;
-        _emitDevices();
-        return updated;
+        // Re-indexa de MAC → card.id e lida com MAC rotation
+        return _promoteToCardId(user, card, now);
       } on PlatformException catch (e) {
         lastError = e;
         if (attempt < retryDelays.length) {
@@ -232,9 +314,72 @@ class BleService {
     return user;
   }
 
-  // Libera recursos (scan, advertising, stream) ao descartar o provider
+  // Reclassifica a entrada de MAC-keyed → card.id-keyed para dedup estável.
+  //
+  // Casos tratados:
+  //   1. Refresh (card.id já é a chave) → atualiza in-place.
+  //   2. MAC rotation → outro MAC já registrou este card.id: mescla e remove duplicata.
+  //   3. Primeira leitura → promove chave de MAC para card.id.
+  DiscoveredSoproUser _promoteToCardId(
+    DiscoveredSoproUser user,
+    ContextCardEntity card,
+    DateTime fetchedAt,
+  ) {
+    final mac      = user.deviceId;
+    final cardId   = card.id;
+    final stableId = _macToStableId[mac] ?? mac;
+
+    final updated = DiscoveredSoproUser(
+      deviceId:   mac,
+      deviceName: card.displayName.isNotEmpty ? card.displayName : user.deviceName,
+      rssi:       user.rssi,
+      lastSeen:   user.lastSeen,
+      card:       card,
+      fetchedAt:  fetchedAt,
+    );
+
+    if (cardId == stableId) {
+      // Caso 1: refresh — chave já é card.id, só atualiza
+      _devices[cardId] = updated;
+      _emitDevices();
+      return updated;
+    }
+
+    if (_devices.containsKey(cardId)) {
+      // Caso 2: MAC rotation — outro MAC já havia carregado este card.id
+      _devices[cardId] = _devices[cardId]!.copyWith(
+        deviceId:  mac,
+        rssi:      user.rssi,
+        lastSeen:  user.lastSeen,
+        card:      card,
+        fetchedAt: fetchedAt,
+      );
+    } else {
+      // Caso 3: primeira leitura — promove de MAC para card.id
+      _devices[cardId] = updated;
+    }
+
+    // Remove a entrada temporária com chave MAC
+    _devices.remove(stableId);
+    _macToStableId.removeWhere((_, v) => v == stableId);
+    _macToStableId[mac] = cardId;
+
+    _emitDevices();
+    return updated;
+  }
+
+  // Sanitiza campo do payload BLE: converte para String, remove espaços extras,
+  // trunca no limite. Proteção contra dados malformados ou excessivamente longos.
+  static String _sanitize(dynamic value, {required int maxLength}) {
+    if (value == null) return '';
+    final s = value.toString().trim();
+    return s.length > maxLength ? s.substring(0, maxLength) : s;
+  }
+
+  // Libera recursos ao descartar o provider
   void dispose() {
     _emitDebounce?.cancel();
+    _expiryTimer?.cancel();
     stopScan();
     stopAdvertising();
     _devicesController.close();
