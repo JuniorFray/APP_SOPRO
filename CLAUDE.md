@@ -229,20 +229,50 @@ PARTE 2 — Onboarding, Perfil, Revisao Geral:
   funciona sem BLE (so perde "Pessoas aqui") e sem notificacoes (perde sussurros).
   Exibimos impacto e deixamos o usuario decidir — privacidade antes de feature.
 
-### Proximos testes necessarios (Sprint 13)
-1. Reinstalar APK no Motorola G52 (limpar dados para resetar canal de notificacao).
-2. Entrar num geofence e verificar no Supabase:
-   - Se trigger_fired + notification_displayed aparecem: bug resolvido.
-   - Se trigger_fired sem notification_displayed: excecao em showTrigger() —
-     verificar notification_error no Supabase.
-   - Se notification_displayed existe mas heads-up nao aparece: OEM suprime
-     apos receber — verificar "Gerenciador de apps > Notificacoes" no dispositivo
-     e desabilitar otimizacao de bateria para o Sopro.
-3. Testar onboarding do zero (desinstalar): verificar mensagem de negacao
-   de notificacao e BLE; verificar que "Continuar assim mesmo" avanca corretamente.
-4. Testar foto de perfil: bottom sheet com camera e galeria.
+## Sprint Atual
+Sprint: 13 - Debounce, BLE TX Power e WhatsApp - CONCLUIDO (2026-06-30)
+Entregue:
 
-## Repositorio
+1. DEBOUNCE DE NOTIFICACAO (60s por trigger_id):
+   - FireTriggersUseCase: _triggerLastFired = Map<String, DateTime> rastreia
+     ultimo disparo por triggerId. Bloqueia re-disparo dentro de 60s.
+   - Loga 'duplicate_trigger_blocked' no Supabase com seconds_since_last.
+   - Resolve race condition onde GPS stream + GeofenceReceiver disparavam
+     o mesmo trigger quase simultaneamente.
+
+2. BLE DUPLICATAS REDUZIDAS:
+   - BleService._emitDevices(): debounce de 500ms (Timer) agrupa resultados
+     em burst antes de emitir para o StreamController.
+   - MainActivity.kt: SCAN_MODE_LOW_LATENCY -> SCAN_MODE_BALANCED.
+   - _devices ja era Map<String, DiscoveredSoproUser> (dedup por deviceId).
+
+3. POTENCIA BLE AJUSTAVEL:
+   - bleTxPowerProvider (StateProvider<int>, default=1=LOW) em settings_providers.
+   - _BlePowerTile nas Configuracoes: dropdown com 4 opcoes
+     (Minima ~2m=ULTRA_LOW, Baixa ~5m=LOW, Media ~10m=MEDIUM, Alta ~20m+=HIGH).
+   - Persistido em SharedPreferences 'ble_tx_power'; restaurado no AppInitializer.
+   - BleService.startAdvertising() recebe txPower e passa via MethodChannel.
+   - MainActivity.startBleAdvertising(cardJson, txPower, result): usa
+     txPower.coerceIn(0,3) no AdvertiseSettings.Builder.
+
+4. WHATSAPP NO PERFIL (schemaVersion 3->4):
+   - Migracao: addColumn(contextCards, phone) + addColumn(bleEncounters, phone).
+   - phone em ContextCardEntity, BleEncounterEntity (default='').
+   - Payload BLE ampliado: chave 'p' para phone.
+   - ProfileScreen: campo "WhatsApp / Telefone" com FilteringTextInputFormatter.
+     digitsOnly, maxLength=13, secao "Contato".
+   - _ContextCardSheet: ElevatedButton verde (Color(0xFF25D366)) "Conversar no
+     WhatsApp" se card.phone.isNotEmpty. Abre https://wa.me/55<digitos> via
+     url_launcher (modo externalApplication). Prefixa 55 se nao comeca com 55.
+   - AndroidManifest: <queries> com intent VIEW + scheme https (Android 11+).
+   - pubspec.yaml: url_launcher ^6.3.0 adicionado.
+   - dart run build_runner build: Drift *.g.dart regenerados.
+   - flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Proximo Sprint
+Sprint: 14 - Possivelmente: tema claro/escuro, exportacao de dados,
+estatisticas de uso, widget Android de ambiente na home,
+icone de categoria para ambientes.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
