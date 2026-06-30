@@ -269,7 +269,7 @@ Entregue:
    - dart run build_runner build: Drift *.g.dart regenerados.
    - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 14 - GATT Retry + Linguagem Simples - CONCLUIDO (2026-06-30)
 Entregue:
 
@@ -298,8 +298,39 @@ Entregue:
      tambem usa o termo) e textos de erro de hardware.
    - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: 15 - Cartao BLE Completo + WhatsApp Opcional - CONCLUIDO (2026-06-30)
+Entregue:
+
+1. CARTAO BLE COMPLETO (_ContextCardSheet em people_nearby_screen.dart):
+   - Todos os campos do ContextCard exibidos condicionalmente (omite se vazio):
+     Avatar (inicial colorida), Nome, "Cargo na Empresa" (formato legivel),
+     Interesses como chips (tags split por virgula, filtrados), Nota pessoal/bio,
+     "Ultima vez visto" relativo (Agora mesmo / Ha X min / Ha Xh / Ha X dias),
+     botao WhatsApp (condicional, apenas se phone presente no payload).
+   - isScrollControlled: true + SingleChildScrollView: sheet rolavel para
+     perfis com muito conteudo.
+   - lastSeen (DateTime de DiscoveredSoproUser) propagado de _onUserTapped
+     via _showCardSheet ate _ContextCardSheet para calculo de tempo relativo.
+
+2. WHATSAPP OPCIONAL NO PERFIL:
+   - shareWhatsAppProvider (StateProvider<bool>, default=true) em settings_providers.dart.
+   - Toggle "Compartilhar WhatsApp" na secao Privacidade do ProfileScreen
+     (abaixo do toggle "Visivel para outros"). Persistido em SharedPreferences
+     'share_whatsapp'; restaurado no AppInitializer.startup.
+   - BleService.startAdvertising() aceita sharePhone:bool (default=true).
+     Omite chave 'p' do payload JSON via collection-if quando false —
+     payload continua compacto sem foto (foto so local, nunca via BLE).
+   - PeopleNearbyScreen._startBle() le shareWhatsAppProvider e passa sharePhone
+     ao startAdvertising(). O receiver so ve o telefone se o emissor optou.
+   - Helper text do campo phone no ProfileScreen muda dinamicamente:
+     "Sera incluido no seu cartao" (verde) ou "Salvo, mas nao compartilhado" (cinza).
+   - strings.dart: profileShareWhatsApp, profileShareWhatsAppDesc,
+     profilePhoneHelperOn, profilePhoneHelperOff adicionados.
+   - flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Proximo Sprint
-Sprint: 15 - Possivelmente: tema claro/escuro, exportacao de dados,
+Sprint: 16 - Possivelmente: tema claro/escuro, exportacao de dados,
 estatisticas de uso, widget Android de ambiente na home,
 icone de categoria para ambientes.
 
