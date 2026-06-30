@@ -14,12 +14,13 @@ class BleEncounterRepository implements IBleEncounterRepository {
   @override
   Future<void> save(BleEncounterEntity entity) => _dao.upsert(
         BleEncountersCompanion(
-          deviceId:     Value(entity.deviceId),
-          displayName:  Value(entity.displayName),
-          role:         Value(entity.role),
-          company:      Value(entity.company),
-          bio:          Value(entity.bio),
-          tags:         Value(entity.tags),
+          deviceId:      Value(entity.deviceId),
+          displayName:   Value(entity.displayName),
+          role:          Value(entity.role),
+          company:       Value(entity.company),
+          bio:           Value(entity.bio),
+          tags:          Value(entity.tags),
+          phone:         Value(entity.phone),
           encounteredAt: Value(entity.encounteredAt),
         ),
       );
@@ -36,12 +37,13 @@ class BleEncounterRepository implements IBleEncounterRepository {
   Future<void> deleteAll() async => await _dao.deleteAll();
 
   BleEncounterEntity _toEntity(BleEncounter row) => BleEncounterEntity(
-        deviceId:     row.deviceId,
-        displayName:  row.displayName,
-        role:         row.role,
-        company:      row.company,
-        bio:          row.bio,
-        tags:         row.tags,
+        deviceId:      row.deviceId,
+        displayName:   row.displayName,
+        role:          row.role,
+        company:       row.company,
+        bio:           row.bio,
+        tags:          row.tags,
+        phone:         row.phone,
         encounteredAt: row.encounteredAt,
       );
 }

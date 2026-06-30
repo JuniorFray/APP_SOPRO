@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
@@ -8,6 +9,7 @@ import '../../../domain/entities/context_card_entity.dart';
 import '../../../infrastructure/ble/discovered_sopro_user.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
+import '../../providers/settings_providers.dart';
 import '../encounters/encounters_screen.dart';
 
 // PeopleNearbyScreen — "Pessoas Aqui"
@@ -77,12 +79,14 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
       return;
     }
 
-    // 3. Ativa advertising se o usuário tem perfil E quer ser visível (preferência do Perfil)
+    // 3. Ativa advertising se o usuário tem perfil E quer ser visível.
+    //    Usa o nível de potência BLE configurado pelo usuário nas Configurações.
     if (ref.read(bleVisibleProvider)) {
       try {
         final card = await ref.read(contextCardRepositoryProvider).getActive();
         if (card != null) {
-          final advertised = await service.startAdvertising(card);
+          final txPower = ref.read(bleTxPowerProvider);
+          final advertised = await service.startAdvertising(card, txPower: txPower);
           if (mounted) {
             ref.read(bleAdvertisingProvider.notifier).state = advertised;
           }
@@ -166,12 +170,13 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
     try {
       await ref.read(bleEncounterRepositoryProvider).save(
             BleEncounterEntity(
-              deviceId:     deviceId,
-              displayName:  card.displayName,
-              role:         card.role,
-              company:      card.company,
-              bio:          card.bio,
-              tags:         card.tags,
+              deviceId:      deviceId,
+              displayName:   card.displayName,
+              role:          card.role,
+              company:       card.company,
+              bio:           card.bio,
+              tags:          card.tags,
+              phone:         card.phone,
               encounteredAt: DateTime.now(),
             ),
           );
@@ -482,7 +487,8 @@ class _ErrorState extends StatelessWidget {
   }
 }
 
-// Bottom sheet com o ContextCard completo de um usuário detectado
+// Bottom sheet com o ContextCard completo de um usuário detectado.
+// Exibe botão "Conversar no WhatsApp" se o contato preencheu o telefone.
 class _ContextCardSheet extends StatelessWidget {
   final ContextCardEntity card;
   const _ContextCardSheet({required this.card});
@@ -575,6 +581,28 @@ class _ContextCardSheet extends StatelessWidget {
           ],
 
           const SizedBox(height: 24),
+
+          // Botão WhatsApp — exibido apenas se o contato preencheu o telefone
+          if (card.phone.isNotEmpty) ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () => _launchWhatsApp(context, card.phone),
+                icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                label: const Text(AppStrings.bleWhatsApp),
+                style: ElevatedButton.styleFrom(
+                  // Verde WhatsApp para reconhecimento imediato pelo usuário
+                  backgroundColor: const Color(0xFF25D366),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+
           SizedBox(
             width: double.infinity,
             child: OutlinedButton(
@@ -592,5 +620,21 @@ class _ContextCardSheet extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  // Abre o WhatsApp com o número informado no cartão.
+  // Remove formatação e prefixa o DDI do Brasil (55) se necessário.
+  Future<void> _launchWhatsApp(BuildContext context, String phone) async {
+    final digits = phone.replaceAll(RegExp(r'\D'), '');
+    final number = digits.startsWith('55') ? digits : '55$digits';
+    final url = Uri.parse('https://wa.me/$number');
+
+    if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text(AppStrings.bleWhatsAppError)),
+        );
+      }
+    }
   }
 }

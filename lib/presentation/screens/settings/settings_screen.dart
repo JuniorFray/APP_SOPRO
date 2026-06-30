@@ -19,6 +19,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Lê todos os toggles de configuração
     final bleVisible    = ref.watch(bleVisibleProvider);
+    final bleTxPower    = ref.watch(bleTxPowerProvider);
     final notifEnabled  = ref.watch(notificationsEnabledProvider);
     final notifSound    = ref.watch(notificationSoundProvider);
     final notifCooldown = ref.watch(notificationCooldownMinutesProvider);
@@ -45,6 +46,16 @@ class SettingsScreen extends ConsumerWidget {
               // de iniciar advertising. Não precisa de persistência extra
               // porque o advertising é iniciado manualmente pelo usuário.
               ref.read(bleVisibleProvider.notifier).state = v;
+            },
+          ),
+
+          // Seletor de potência BLE — afeta alcance de detecção por outros
+          _BlePowerTile(
+            value: bleTxPower,
+            onChanged: (v) async {
+              ref.read(bleTxPowerProvider.notifier).state = v;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setInt('ble_tx_power', v);
             },
           ),
 
@@ -210,6 +221,56 @@ class _SwitchTile extends StatelessWidget {
         value: value,
         onChanged: onChanged,
         activeColor: AppTheme.accent,
+      ),
+    );
+  }
+}
+
+// Seletor de potência de transmissão BLE com DropdownButton.
+// 0=ULTRA_LOW (~2m), 1=LOW (~5m), 2=MEDIUM (~10m), 3=HIGH (~20m+)
+class _BlePowerTile extends StatelessWidget {
+  final int value;
+  final ValueChanged<int> onChanged;
+
+  const _BlePowerTile({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppTheme.backgroundElevated,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Icon(Icons.settings_input_antenna, color: AppTheme.accent, size: 20),
+      ),
+      title: const Text(
+        AppStrings.settingsBleTxPower,
+        style: TextStyle(
+          color: AppTheme.textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+      ),
+      subtitle: const Text(
+        AppStrings.settingsBleTxPowerDesc,
+        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+      ),
+      trailing: DropdownButton<int>(
+        value: value,
+        dropdownColor: AppTheme.backgroundElevated,
+        underline: const SizedBox.shrink(),
+        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        items: const [
+          DropdownMenuItem(value: 0, child: Text(AppStrings.bleTxPowerMin)),
+          DropdownMenuItem(value: 1, child: Text(AppStrings.bleTxPowerLow)),
+          DropdownMenuItem(value: 2, child: Text(AppStrings.bleTxPowerMed)),
+          DropdownMenuItem(value: 3, child: Text(AppStrings.bleTxPowerHigh)),
+        ],
+        onChanged: (v) => onChanged(v!),
       ),
     );
   }

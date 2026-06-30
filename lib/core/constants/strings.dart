@@ -72,6 +72,8 @@ class AppStrings {
   static const bleNoProfileWarning     = 'Configure seu perfil para ser visto por outros';
   static const bleViewCard             = 'Ver cartão';
   static const bleClose                = 'Fechar';
+  static const bleWhatsApp             = 'Conversar no WhatsApp';
+  static const bleWhatsAppError        = 'Não foi possível abrir o WhatsApp';
 
   // Onboarding — 4 passos que explicam o valor antes de pedir cada permissão
   static const obSkip          = 'Pular';
@@ -129,6 +131,9 @@ class AppStrings {
   static const profileInterestsHint  = 'Ex: tecnologia, música, café';
   static const profileNote           = 'Nota pessoal';
   static const profileNoteHint       = 'O que você está fazendo aqui? O que busca?';
+  static const profilePhone          = 'WhatsApp / Telefone';
+  static const profilePhoneHint      = 'Ex: 11999998888 (apenas dígitos)';
+  static const profileSectionContact = 'Contato';
   static const profileVisible        = 'Visível para outros';
   static const profileVisibleDesc    =
       'Outros usuários Sopro próximos poderão ver seu cartão via Bluetooth.';
@@ -167,6 +172,12 @@ class AppStrings {
   static const settingsBleVisible     = 'Visível para outros';
   static const settingsBleVisibleDesc =
       'Outros usuários Sopro próximos podem ver seu cartão via Bluetooth';
+  static const settingsBleTxPower     = 'Alcance BLE';
+  static const settingsBleTxPowerDesc = 'Distância aproximada de detecção por outros';
+  static const bleTxPowerMin          = 'Mínima ~2m';
+  static const bleTxPowerLow          = 'Baixa ~5m';
+  static const bleTxPowerMed          = 'Média ~10m';
+  static const bleTxPowerHigh         = 'Alta ~20m+';
   static const settingsNotifSection     = 'Notificações';
   static const settingsNotifEnabled     = 'Notificações de gatilhos';
   static const settingsNotifEnabledDesc =

@@ -5,6 +5,7 @@ import 'package:drift/drift.dart';
 //
 // schemaVersion 1: id, displayName, bio, tags, createdAt, updatedAt
 // schemaVersion 2: + role (cargo), + company (empresa) — Sprint 8
+// schemaVersion 4: + phone (WhatsApp/telefone) — Sprint 13
 class ContextCards extends Table {
   // UUID v4 como chave primária
   TextColumn get id => text()();
@@ -23,6 +24,9 @@ class ContextCards extends Table {
 
   // Tags de interesse separadas por vírgula (ex: "tech,música,café")
   TextColumn get tags => text().withDefault(const Constant(''))();
+
+  // Número de WhatsApp/telefone (só dígitos, ex: "11999998888") — opcional
+  TextColumn get phone => text().withDefault(const Constant(''))();
 
   // Timestamp de criação do cartão
   DateTimeColumn get createdAt => dateTime()();

@@ -3,6 +3,7 @@
 // usuários Sopro próximos fisicamente.
 //
 // Sprint 8: adicionados campos role (cargo) e company (empresa).
+// Sprint 13: adicionado campo phone (WhatsApp/telefone, opcional).
 class ContextCardEntity {
   // Identificador único gerado via UUID v4
   final String id;
@@ -22,6 +23,9 @@ class ContextCardEntity {
   // Tags de interesse/contexto separadas por vírgula (ex: "tech,música,café")
   final String tags;
 
+  // Número de telefone/WhatsApp (só dígitos, ex: "11999998888") — opcional
+  final String phone;
+
   // Data de criação do cartão
   final DateTime createdAt;
 
@@ -35,6 +39,7 @@ class ContextCardEntity {
     required this.company,
     required this.bio,
     required this.tags,
+    this.phone = '',
     required this.createdAt,
     required this.updatedAt,
   });
@@ -58,6 +63,7 @@ class ContextCardEntity {
     String? company,
     String? bio,
     String? tags,
+    String? phone,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) =>
@@ -68,6 +74,7 @@ class ContextCardEntity {
         company: company ?? this.company,
         bio: bio ?? this.bio,
         tags: tags ?? this.tags,
+        phone: phone ?? this.phone,
         createdAt: createdAt ?? this.createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
       );

@@ -21,6 +21,12 @@ class FireTriggersUseCase {
   // Rastreia o último disparo para aplicar o cooldown configurado pelo usuário
   DateTime? _lastNotifTime;
 
+  // Debounce por trigger individual: evita disparos duplicados dentro de 60s.
+  // Causa: GeofenceManager (GPS stream) e GeofenceReceiver (nativo) podem
+  // detectar o mesmo evento ENTER quase simultaneamente quando o app está vivo.
+  final _triggerLastFired = <String, DateTime>{};
+  static const _debounceSecs = 60;
+
   FireTriggersUseCase(
     this._triggerRepo,
     this._notifications,
@@ -50,6 +56,21 @@ class FireTriggersUseCase {
     final withSound = _soundEnabled();
 
     for (final trigger in triggers) {
+      // Debounce por trigger: bloqueia disparo se o mesmo trigger foi disparado
+      // há menos de 60s. Evita duplicatas quando GPS stream + nativo detectam
+      // o mesmo ENTER quase ao mesmo tempo (race condition de _onPosition).
+      final lastFired = _triggerLastFired[trigger.id];
+      if (lastFired != null &&
+          DateTime.now().difference(lastFired).inSeconds < _debounceSecs) {
+        AppLogger.log('duplicate_trigger_blocked', {
+          'trigger_id':         trigger.id,
+          'environment_id':     environmentId,
+          'seconds_since_last': DateTime.now().difference(lastFired).inSeconds,
+        });
+        continue;
+      }
+      _triggerLastFired[trigger.id] = DateTime.now();
+
       // Loga a intenção de disparar — confirmação de que o use case chegou aqui.
       // Se trigger_fired aparece no Supabase mas notification_displayed não,
       // o problema está em showTrigger() → flutter_local_notifications → Android.

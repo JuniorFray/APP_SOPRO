@@ -149,7 +149,9 @@ class MainActivity : FlutterActivity() {
                     "requestPermissions"  -> requestBluetoothPermissions(result)
                     "startAdvertising"    -> {
                         val cardJson = call.argument<String>("cardJson") ?: "{}"
-                        startBleAdvertising(cardJson, result)
+                        // txPower: 0=ULTRA_LOW, 1=LOW (padrão), 2=MEDIUM, 3=HIGH
+                        val txPower = call.argument<Int>("txPower") ?: 1
+                        startBleAdvertising(cardJson, txPower, result)
                     }
                     "stopAdvertising"     -> { stopBleAdvertising(); result.success(null) }
                     "getAdapterState"     -> result.success(getAdapterState())
@@ -421,7 +423,9 @@ class MainActivity : FlutterActivity() {
     // BLE Peripheral — advertising + GATT server (expõe ContextCard)
     // ═════════════════════════════════════════════════════════════════════════
 
-    private fun startBleAdvertising(cardJson: String, result: MethodChannel.Result) {
+    // [txPower]: 0=ULTRA_LOW (~2m), 1=LOW (~5m), 2=MEDIUM (~10m), 3=HIGH (~20m+)
+    // Mapeado diretamente para AdvertiseSettings.ADVERTISE_TX_POWER_* (mesmos valores).
+    private fun startBleAdvertising(cardJson: String, txPower: Int, result: MethodChannel.Result) {
         if (!hasBluetoothPermissions()) {
             result.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null); return
         }
@@ -443,7 +447,8 @@ class MainActivity : FlutterActivity() {
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
             .setConnectable(true)
             .setTimeout(0)
-            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+            // Nível de potência configurado pelo usuário nas Configurações do app
+            .setTxPowerLevel(txPower.coerceIn(0, 3))
             .build()
 
         val data = AdvertiseData.Builder()
@@ -537,8 +542,10 @@ class MainActivity : FlutterActivity() {
             .setServiceUuid(SERVICE_UUID)
             .build()
 
+        // SCAN_MODE_BALANCED: reduz frequência de callbacks vs LOW_LATENCY,
+        // diminuindo detecções duplicadas do mesmo dispositivo em burst.
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
             .build()
 
         scanCallback = object : ScanCallback() {

@@ -762,6 +762,13 @@ class $ContextCardsTable extends ContextCards
       type: DriftSqlType.string,
       requiredDuringInsert: false,
       defaultValue: const Constant(''));
+  static const VerificationMeta _phoneMeta = const VerificationMeta('phone');
+  @override
+  late final GeneratedColumn<String> phone = GeneratedColumn<String>(
+      'phone', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
   static const VerificationMeta _createdAtMeta =
       const VerificationMeta('createdAt');
   @override
@@ -776,7 +783,7 @@ class $ContextCardsTable extends ContextCards
       type: DriftSqlType.dateTime, requiredDuringInsert: true);
   @override
   List<GeneratedColumn> get $columns =>
-      [id, displayName, role, company, bio, tags, createdAt, updatedAt];
+      [id, displayName, role, company, bio, tags, phone, createdAt, updatedAt];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -818,6 +825,10 @@ class $ContextCardsTable extends ContextCards
       context.handle(
           _tagsMeta, tags.isAcceptableOrUnknown(data['tags']!, _tagsMeta));
     }
+    if (data.containsKey('phone')) {
+      context.handle(
+          _phoneMeta, phone.isAcceptableOrUnknown(data['phone']!, _phoneMeta));
+    }
     if (data.containsKey('created_at')) {
       context.handle(_createdAtMeta,
           createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
@@ -851,6 +862,8 @@ class $ContextCardsTable extends ContextCards
           .read(DriftSqlType.string, data['${effectivePrefix}bio'])!,
       tags: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}tags'])!,
+      phone: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}phone'])!,
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
       updatedAt: attachedDatabase.typeMapping
@@ -871,6 +884,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
   final String company;
   final String bio;
   final String tags;
+  final String phone;
   final DateTime createdAt;
   final DateTime updatedAt;
   const ContextCard(
@@ -880,6 +894,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
       required this.company,
       required this.bio,
       required this.tags,
+      required this.phone,
       required this.createdAt,
       required this.updatedAt});
   @override
@@ -891,6 +906,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
     map['company'] = Variable<String>(company);
     map['bio'] = Variable<String>(bio);
     map['tags'] = Variable<String>(tags);
+    map['phone'] = Variable<String>(phone);
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     return map;
@@ -904,6 +920,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
       company: Value(company),
       bio: Value(bio),
       tags: Value(tags),
+      phone: Value(phone),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -919,6 +936,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
       company: serializer.fromJson<String>(json['company']),
       bio: serializer.fromJson<String>(json['bio']),
       tags: serializer.fromJson<String>(json['tags']),
+      phone: serializer.fromJson<String>(json['phone']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -933,6 +951,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
       'company': serializer.toJson<String>(company),
       'bio': serializer.toJson<String>(bio),
       'tags': serializer.toJson<String>(tags),
+      'phone': serializer.toJson<String>(phone),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -945,6 +964,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
           String? company,
           String? bio,
           String? tags,
+          String? phone,
           DateTime? createdAt,
           DateTime? updatedAt}) =>
       ContextCard(
@@ -954,6 +974,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
         company: company ?? this.company,
         bio: bio ?? this.bio,
         tags: tags ?? this.tags,
+        phone: phone ?? this.phone,
         createdAt: createdAt ?? this.createdAt,
         updatedAt: updatedAt ?? this.updatedAt,
       );
@@ -966,6 +987,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
       company: data.company.present ? data.company.value : this.company,
       bio: data.bio.present ? data.bio.value : this.bio,
       tags: data.tags.present ? data.tags.value : this.tags,
+      phone: data.phone.present ? data.phone.value : this.phone,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -980,6 +1002,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
           ..write('company: $company, ')
           ..write('bio: $bio, ')
           ..write('tags: $tags, ')
+          ..write('phone: $phone, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -988,7 +1011,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
 
   @override
   int get hashCode => Object.hash(
-      id, displayName, role, company, bio, tags, createdAt, updatedAt);
+      id, displayName, role, company, bio, tags, phone, createdAt, updatedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -999,6 +1022,7 @@ class ContextCard extends DataClass implements Insertable<ContextCard> {
           other.company == this.company &&
           other.bio == this.bio &&
           other.tags == this.tags &&
+          other.phone == this.phone &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -1010,6 +1034,7 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
   final Value<String> company;
   final Value<String> bio;
   final Value<String> tags;
+  final Value<String> phone;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
   final Value<int> rowid;
@@ -1020,6 +1045,7 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
     this.company = const Value.absent(),
     this.bio = const Value.absent(),
     this.tags = const Value.absent(),
+    this.phone = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -1031,6 +1057,7 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
     this.company = const Value.absent(),
     required String bio,
     this.tags = const Value.absent(),
+    this.phone = const Value.absent(),
     required DateTime createdAt,
     required DateTime updatedAt,
     this.rowid = const Value.absent(),
@@ -1046,6 +1073,7 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
     Expression<String>? company,
     Expression<String>? bio,
     Expression<String>? tags,
+    Expression<String>? phone,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
     Expression<int>? rowid,
@@ -1057,6 +1085,7 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
       if (company != null) 'company': company,
       if (bio != null) 'bio': bio,
       if (tags != null) 'tags': tags,
+      if (phone != null) 'phone': phone,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
@@ -1070,6 +1099,7 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
       Value<String>? company,
       Value<String>? bio,
       Value<String>? tags,
+      Value<String>? phone,
       Value<DateTime>? createdAt,
       Value<DateTime>? updatedAt,
       Value<int>? rowid}) {
@@ -1080,6 +1110,7 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
       company: company ?? this.company,
       bio: bio ?? this.bio,
       tags: tags ?? this.tags,
+      phone: phone ?? this.phone,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
@@ -1107,6 +1138,9 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
     if (tags.present) {
       map['tags'] = Variable<String>(tags.value);
     }
+    if (phone.present) {
+      map['phone'] = Variable<String>(phone.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -1128,6 +1162,7 @@ class ContextCardsCompanion extends UpdateCompanion<ContextCard> {
           ..write('company: $company, ')
           ..write('bio: $bio, ')
           ..write('tags: $tags, ')
+          ..write('phone: $phone, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
@@ -1185,6 +1220,13 @@ class $BleEncountersTable extends BleEncounters
       type: DriftSqlType.string,
       requiredDuringInsert: false,
       defaultValue: const Constant(''));
+  static const VerificationMeta _phoneMeta = const VerificationMeta('phone');
+  @override
+  late final GeneratedColumn<String> phone = GeneratedColumn<String>(
+      'phone', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
   static const VerificationMeta _encounteredAtMeta =
       const VerificationMeta('encounteredAt');
   @override
@@ -1193,7 +1235,7 @@ class $BleEncountersTable extends BleEncounters
           type: DriftSqlType.dateTime, requiredDuringInsert: true);
   @override
   List<GeneratedColumn> get $columns =>
-      [deviceId, displayName, role, company, bio, tags, encounteredAt];
+      [deviceId, displayName, role, company, bio, tags, phone, encounteredAt];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1232,6 +1274,10 @@ class $BleEncountersTable extends BleEncounters
       context.handle(
           _tagsMeta, tags.isAcceptableOrUnknown(data['tags']!, _tagsMeta));
     }
+    if (data.containsKey('phone')) {
+      context.handle(
+          _phoneMeta, phone.isAcceptableOrUnknown(data['phone']!, _phoneMeta));
+    }
     if (data.containsKey('encountered_at')) {
       context.handle(
           _encounteredAtMeta,
@@ -1261,6 +1307,8 @@ class $BleEncountersTable extends BleEncounters
           .read(DriftSqlType.string, data['${effectivePrefix}bio'])!,
       tags: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}tags'])!,
+      phone: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}phone'])!,
       encounteredAt: attachedDatabase.typeMapping.read(
           DriftSqlType.dateTime, data['${effectivePrefix}encountered_at'])!,
     );
@@ -1279,6 +1327,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
   final String company;
   final String bio;
   final String tags;
+  final String phone;
   final DateTime encounteredAt;
   const BleEncounter(
       {required this.deviceId,
@@ -1287,6 +1336,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
       required this.company,
       required this.bio,
       required this.tags,
+      required this.phone,
       required this.encounteredAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1297,6 +1347,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
     map['company'] = Variable<String>(company);
     map['bio'] = Variable<String>(bio);
     map['tags'] = Variable<String>(tags);
+    map['phone'] = Variable<String>(phone);
     map['encountered_at'] = Variable<DateTime>(encounteredAt);
     return map;
   }
@@ -1309,6 +1360,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
       company: Value(company),
       bio: Value(bio),
       tags: Value(tags),
+      phone: Value(phone),
       encounteredAt: Value(encounteredAt),
     );
   }
@@ -1323,6 +1375,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
       company: serializer.fromJson<String>(json['company']),
       bio: serializer.fromJson<String>(json['bio']),
       tags: serializer.fromJson<String>(json['tags']),
+      phone: serializer.fromJson<String>(json['phone']),
       encounteredAt: serializer.fromJson<DateTime>(json['encounteredAt']),
     );
   }
@@ -1336,6 +1389,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
       'company': serializer.toJson<String>(company),
       'bio': serializer.toJson<String>(bio),
       'tags': serializer.toJson<String>(tags),
+      'phone': serializer.toJson<String>(phone),
       'encounteredAt': serializer.toJson<DateTime>(encounteredAt),
     };
   }
@@ -1347,6 +1401,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
           String? company,
           String? bio,
           String? tags,
+          String? phone,
           DateTime? encounteredAt}) =>
       BleEncounter(
         deviceId: deviceId ?? this.deviceId,
@@ -1355,6 +1410,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
         company: company ?? this.company,
         bio: bio ?? this.bio,
         tags: tags ?? this.tags,
+        phone: phone ?? this.phone,
         encounteredAt: encounteredAt ?? this.encounteredAt,
       );
   BleEncounter copyWithCompanion(BleEncountersCompanion data) {
@@ -1366,6 +1422,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
       company: data.company.present ? data.company.value : this.company,
       bio: data.bio.present ? data.bio.value : this.bio,
       tags: data.tags.present ? data.tags.value : this.tags,
+      phone: data.phone.present ? data.phone.value : this.phone,
       encounteredAt: data.encounteredAt.present
           ? data.encounteredAt.value
           : this.encounteredAt,
@@ -1381,6 +1438,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
           ..write('company: $company, ')
           ..write('bio: $bio, ')
           ..write('tags: $tags, ')
+          ..write('phone: $phone, ')
           ..write('encounteredAt: $encounteredAt')
           ..write(')'))
         .toString();
@@ -1388,7 +1446,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
 
   @override
   int get hashCode => Object.hash(
-      deviceId, displayName, role, company, bio, tags, encounteredAt);
+      deviceId, displayName, role, company, bio, tags, phone, encounteredAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1399,6 +1457,7 @@ class BleEncounter extends DataClass implements Insertable<BleEncounter> {
           other.company == this.company &&
           other.bio == this.bio &&
           other.tags == this.tags &&
+          other.phone == this.phone &&
           other.encounteredAt == this.encounteredAt);
 }
 
@@ -1409,6 +1468,7 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
   final Value<String> company;
   final Value<String> bio;
   final Value<String> tags;
+  final Value<String> phone;
   final Value<DateTime> encounteredAt;
   final Value<int> rowid;
   const BleEncountersCompanion({
@@ -1418,6 +1478,7 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
     this.company = const Value.absent(),
     this.bio = const Value.absent(),
     this.tags = const Value.absent(),
+    this.phone = const Value.absent(),
     this.encounteredAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -1428,6 +1489,7 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
     this.company = const Value.absent(),
     this.bio = const Value.absent(),
     this.tags = const Value.absent(),
+    this.phone = const Value.absent(),
     required DateTime encounteredAt,
     this.rowid = const Value.absent(),
   })  : deviceId = Value(deviceId),
@@ -1439,6 +1501,7 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
     Expression<String>? company,
     Expression<String>? bio,
     Expression<String>? tags,
+    Expression<String>? phone,
     Expression<DateTime>? encounteredAt,
     Expression<int>? rowid,
   }) {
@@ -1449,6 +1512,7 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
       if (company != null) 'company': company,
       if (bio != null) 'bio': bio,
       if (tags != null) 'tags': tags,
+      if (phone != null) 'phone': phone,
       if (encounteredAt != null) 'encountered_at': encounteredAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -1461,6 +1525,7 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
       Value<String>? company,
       Value<String>? bio,
       Value<String>? tags,
+      Value<String>? phone,
       Value<DateTime>? encounteredAt,
       Value<int>? rowid}) {
     return BleEncountersCompanion(
@@ -1470,6 +1535,7 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
       company: company ?? this.company,
       bio: bio ?? this.bio,
       tags: tags ?? this.tags,
+      phone: phone ?? this.phone,
       encounteredAt: encounteredAt ?? this.encounteredAt,
       rowid: rowid ?? this.rowid,
     );
@@ -1496,6 +1562,9 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
     if (tags.present) {
       map['tags'] = Variable<String>(tags.value);
     }
+    if (phone.present) {
+      map['phone'] = Variable<String>(phone.value);
+    }
     if (encounteredAt.present) {
       map['encountered_at'] = Variable<DateTime>(encounteredAt.value);
     }
@@ -1514,6 +1583,7 @@ class BleEncountersCompanion extends UpdateCompanion<BleEncounter> {
           ..write('company: $company, ')
           ..write('bio: $bio, ')
           ..write('tags: $tags, ')
+          ..write('phone: $phone, ')
           ..write('encounteredAt: $encounteredAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -2117,6 +2187,7 @@ typedef $$ContextCardsTableCreateCompanionBuilder = ContextCardsCompanion
   Value<String> company,
   required String bio,
   Value<String> tags,
+  Value<String> phone,
   required DateTime createdAt,
   required DateTime updatedAt,
   Value<int> rowid,
@@ -2129,6 +2200,7 @@ typedef $$ContextCardsTableUpdateCompanionBuilder = ContextCardsCompanion
   Value<String> company,
   Value<String> bio,
   Value<String> tags,
+  Value<String> phone,
   Value<DateTime> createdAt,
   Value<DateTime> updatedAt,
   Value<int> rowid,
@@ -2160,6 +2232,9 @@ class $$ContextCardsTableFilterComposer
 
   ColumnFilters<String> get tags => $composableBuilder(
       column: $table.tags, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get phone => $composableBuilder(
+      column: $table.phone, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
@@ -2195,6 +2270,9 @@ class $$ContextCardsTableOrderingComposer
   ColumnOrderings<String> get tags => $composableBuilder(
       column: $table.tags, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get phone => $composableBuilder(
+      column: $table.phone, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
 
@@ -2228,6 +2306,9 @@ class $$ContextCardsTableAnnotationComposer
 
   GeneratedColumn<String> get tags =>
       $composableBuilder(column: $table.tags, builder: (column) => column);
+
+  GeneratedColumn<String> get phone =>
+      $composableBuilder(column: $table.phone, builder: (column) => column);
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -2268,6 +2349,7 @@ class $$ContextCardsTableTableManager extends RootTableManager<
             Value<String> company = const Value.absent(),
             Value<String> bio = const Value.absent(),
             Value<String> tags = const Value.absent(),
+            Value<String> phone = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<DateTime> updatedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
@@ -2279,6 +2361,7 @@ class $$ContextCardsTableTableManager extends RootTableManager<
             company: company,
             bio: bio,
             tags: tags,
+            phone: phone,
             createdAt: createdAt,
             updatedAt: updatedAt,
             rowid: rowid,
@@ -2290,6 +2373,7 @@ class $$ContextCardsTableTableManager extends RootTableManager<
             Value<String> company = const Value.absent(),
             required String bio,
             Value<String> tags = const Value.absent(),
+            Value<String> phone = const Value.absent(),
             required DateTime createdAt,
             required DateTime updatedAt,
             Value<int> rowid = const Value.absent(),
@@ -2301,6 +2385,7 @@ class $$ContextCardsTableTableManager extends RootTableManager<
             company: company,
             bio: bio,
             tags: tags,
+            phone: phone,
             createdAt: createdAt,
             updatedAt: updatedAt,
             rowid: rowid,
@@ -2335,6 +2420,7 @@ typedef $$BleEncountersTableCreateCompanionBuilder = BleEncountersCompanion
   Value<String> company,
   Value<String> bio,
   Value<String> tags,
+  Value<String> phone,
   required DateTime encounteredAt,
   Value<int> rowid,
 });
@@ -2346,6 +2432,7 @@ typedef $$BleEncountersTableUpdateCompanionBuilder = BleEncountersCompanion
   Value<String> company,
   Value<String> bio,
   Value<String> tags,
+  Value<String> phone,
   Value<DateTime> encounteredAt,
   Value<int> rowid,
 });
@@ -2376,6 +2463,9 @@ class $$BleEncountersTableFilterComposer
 
   ColumnFilters<String> get tags => $composableBuilder(
       column: $table.tags, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get phone => $composableBuilder(
+      column: $table.phone, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<DateTime> get encounteredAt => $composableBuilder(
       column: $table.encounteredAt, builder: (column) => ColumnFilters(column));
@@ -2408,6 +2498,9 @@ class $$BleEncountersTableOrderingComposer
   ColumnOrderings<String> get tags => $composableBuilder(
       column: $table.tags, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get phone => $composableBuilder(
+      column: $table.phone, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<DateTime> get encounteredAt => $composableBuilder(
       column: $table.encounteredAt,
       builder: (column) => ColumnOrderings(column));
@@ -2439,6 +2532,9 @@ class $$BleEncountersTableAnnotationComposer
 
   GeneratedColumn<String> get tags =>
       $composableBuilder(column: $table.tags, builder: (column) => column);
+
+  GeneratedColumn<String> get phone =>
+      $composableBuilder(column: $table.phone, builder: (column) => column);
 
   GeneratedColumn<DateTime> get encounteredAt => $composableBuilder(
       column: $table.encounteredAt, builder: (column) => column);
@@ -2477,6 +2573,7 @@ class $$BleEncountersTableTableManager extends RootTableManager<
             Value<String> company = const Value.absent(),
             Value<String> bio = const Value.absent(),
             Value<String> tags = const Value.absent(),
+            Value<String> phone = const Value.absent(),
             Value<DateTime> encounteredAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -2487,6 +2584,7 @@ class $$BleEncountersTableTableManager extends RootTableManager<
             company: company,
             bio: bio,
             tags: tags,
+            phone: phone,
             encounteredAt: encounteredAt,
             rowid: rowid,
           ),
@@ -2497,6 +2595,7 @@ class $$BleEncountersTableTableManager extends RootTableManager<
             Value<String> company = const Value.absent(),
             Value<String> bio = const Value.absent(),
             Value<String> tags = const Value.absent(),
+            Value<String> phone = const Value.absent(),
             required DateTime encounteredAt,
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -2507,6 +2606,7 @@ class $$BleEncountersTableTableManager extends RootTableManager<
             company: company,
             bio: bio,
             tags: tags,
+            phone: phone,
             encounteredAt: encounteredAt,
             rowid: rowid,
           ),

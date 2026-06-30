@@ -31,6 +31,7 @@ part 'sopro_database.g.dart';
 //   v1 (Sprint 1): criação das tabelas Environments, Triggers, ContextCards
 //   v2 (Sprint 8): adição de role + company na tabela ContextCards
 //   v3 (Sprint 9): nova tabela BleEncounters — histórico de encontros BLE
+//   v4 (Sprint 13): adição de phone em ContextCards e BleEncounters
 @DriftDatabase(
   tables: [
     Environments,
@@ -52,7 +53,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -70,6 +71,11 @@ class SoproDatabase extends _$SoproDatabase {
           if (from < 3) {
             // Sprint 9: tabela de histórico de encontros BLE
             await m.createTable(bleEncounters);
+          }
+          if (from < 4) {
+            // Sprint 13: campo phone/WhatsApp no ContextCard e BleEncounters
+            await m.addColumn(contextCards, contextCards.phone);
+            await m.addColumn(bleEncounters, bleEncounters.phone);
           }
         },
       );

@@ -121,6 +121,11 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
           cooldownMinutes;
     }
 
+    final txPower = prefs.getInt('ble_tx_power') ?? 1;
+    if (txPower != 1) {
+      ref.read(bleTxPowerProvider.notifier).state = txPower;
+    }
+
     // 7. Inicia o foreground service apenas se o onboarding já foi concluído.
     //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
     if (prefs.getBool('onboarding_done') ?? false) {

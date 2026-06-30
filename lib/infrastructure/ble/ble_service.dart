@@ -30,15 +30,21 @@ class BleService {
   static const _bleChannel     = MethodChannel('com.sopro.sopro/ble');
   static const _bleScanChannel = EventChannel('com.sopro.sopro/ble_scan');
 
-  // Cache em memória dos usuários detectados nesta sessão de scan
+  // Cache em memória dos usuários detectados nesta sessão de scan.
+  // Indexado por deviceId (MAC BLE) — garante deduplicação.
   final _devices = <String, DiscoveredSoproUser>{};
 
-  // Stream broadcast emitido a cada atualização do cache de dispositivos
+  // Stream broadcast emitido a cada atualização do cache de dispositivos.
+  // O debounce em _emitDevices() evita rebuild excessivo quando o scan
+  // retorna múltiplos resultados para o mesmo dispositivo em sequência.
   final _devicesController =
       StreamController<List<DiscoveredSoproUser>>.broadcast();
 
   // Subscription ao EventChannel de scan nativo (ativa/inativa conforme startScan/stopScan)
   StreamSubscription<dynamic>? _scanSub;
+
+  // Timer de debounce: agrupa emissões rápidas em uma única atualização (500ms)
+  Timer? _emitDebounce;
 
   Stream<List<DiscoveredSoproUser>> get devicesStream =>
       _devicesController.stream;
@@ -91,7 +97,8 @@ class BleService {
     _scanSub = null;
   }
 
-  // Processa um evento de resultado de scan vindo do Kotlin
+  // Processa um evento de resultado de scan vindo do Kotlin.
+  // O Map<String, DiscoveredSoproUser> garante deduplicação por deviceId.
   void _onScanResult(dynamic event) {
     final data = Map<String, dynamic>.from(event as Map);
     final id = data['deviceId'] as String? ?? '';
@@ -110,17 +117,24 @@ class BleService {
     _emitDevices();
   }
 
+  // Emite a lista atual de dispositivos com debounce de 500ms.
+  // Evita rebuilds excessivos quando o scan retorna resultados em burst
+  // (mesmo dispositivo detectado várias vezes em sequência rápida).
   void _emitDevices() {
-    if (!_devicesController.isClosed) {
-      _devicesController.add(List.unmodifiable(_devices.values.toList()));
-    }
+    _emitDebounce?.cancel();
+    _emitDebounce = Timer(const Duration(milliseconds: 500), () {
+      if (!_devicesController.isClosed) {
+        _devicesController.add(List.unmodifiable(_devices.values.toList()));
+      }
+    });
   }
 
   // ── Advertising BLE (peripheral role via MethodChannel) ───────────────────
 
   // Inicia o advertising com o ContextCard do usuário.
+  // [txPower]: nível de potência (0=ULTRA_LOW, 1=LOW, 2=MEDIUM, 3=HIGH).
   // Limita bio a 120 chars para manter o payload JSON compacto.
-  Future<bool> startAdvertising(ContextCardEntity card) async {
+  Future<bool> startAdvertising(ContextCardEntity card, {int txPower = 1}) async {
     try {
       final payload = jsonEncode({
         'id': card.id,
@@ -129,9 +143,10 @@ class BleService {
         'c': card.company, // empresa
         'b': card.bio.substring(0, min(card.bio.length, 120)),
         't': card.tags,
+        'p': card.phone,   // WhatsApp/telefone (pode ser vazio)
       });
       return await _bleChannel.invokeMethod<bool>(
-              'startAdvertising', {'cardJson': payload}) ??
+              'startAdvertising', {'cardJson': payload, 'txPower': txPower}) ??
           false;
     } on PlatformException catch (e) {
       debugPrint('[BleService] startAdvertising falhou: ${e.message}');
@@ -168,6 +183,7 @@ class BleService {
         company: (map['c'] as String?) ?? '',
         bio: (map['b'] as String?) ?? '',
         tags: (map['t'] as String?) ?? '',
+        phone: (map['p'] as String?) ?? '',
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
@@ -189,6 +205,7 @@ class BleService {
 
   // Libera recursos (scan, advertising, stream) ao descartar o provider
   void dispose() {
+    _emitDebounce?.cancel();
     stopScan();
     stopAdvertising();
     _devicesController.close();

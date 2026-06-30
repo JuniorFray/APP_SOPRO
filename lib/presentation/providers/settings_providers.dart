@@ -15,3 +15,9 @@ final notificationSoundProvider = StateProvider<bool>((ref) => true);
 // 0 = sem limite (sempre notifica). Persistência via SharedPreferences
 // ('notification_cooldown_minutes'). Valores válidos: 0, 5, 15, 30, 60.
 final notificationCooldownMinutesProvider = StateProvider<int>((ref) => 0);
+
+// Provider para o nível de potência de transmissão BLE do advertising.
+// 0=ULTRA_LOW (~2m), 1=LOW (~5m, padrão), 2=MEDIUM (~10m), 3=HIGH (~20m+).
+// Mapeado para AdvertiseSettings.ADVERTISE_TX_POWER_* no Android via MethodChannel.
+// Persistência via SharedPreferences ('ble_tx_power').
+final bleTxPowerProvider = StateProvider<int>((ref) => 1);

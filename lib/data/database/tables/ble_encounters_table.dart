@@ -7,6 +7,7 @@ import 'package:drift/drift.dart';
 // Isso evita acumulação de linhas duplicadas e mantém o histórico compacto.
 //
 // Adicionada em schemaVersion 3 — Sprint 9.
+// schemaVersion 4: + phone (WhatsApp/telefone) — Sprint 13.
 class BleEncounters extends Table {
   // Endereço MAC do dispositivo BLE — chave primária única por aparelho
   TextColumn get deviceId => text()();
@@ -17,6 +18,7 @@ class BleEncounters extends Table {
   TextColumn get company     => text().withDefault(const Constant(''))();
   TextColumn get bio         => text().withDefault(const Constant(''))();
   TextColumn get tags        => text().withDefault(const Constant(''))();
+  TextColumn get phone       => text().withDefault(const Constant(''))();
 
   // Data/hora do último encontro registrado com este dispositivo
   DateTimeColumn get encounteredAt => dateTime()();

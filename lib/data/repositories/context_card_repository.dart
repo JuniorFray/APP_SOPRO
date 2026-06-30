@@ -35,6 +35,7 @@ class ContextCardRepository implements IContextCardRepository {
         company: Value(entity.company),
         bio: Value(entity.bio),
         tags: Value(entity.tags),
+        phone: Value(entity.phone),
         createdAt: Value(entity.createdAt),
         updatedAt: Value(DateTime.now()),
       ),
@@ -53,6 +54,7 @@ class ContextCardRepository implements IContextCardRepository {
         company: row.company,
         bio: row.bio,
         tags: row.tags,
+        phone: row.phone,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       );

@@ -4,6 +4,8 @@
 // é recebido via GATT. O deviceId (MAC address BLE) é o identificador único:
 // encontros repetidos com o mesmo dispositivo atualizam o registro em vez de
 // criar duplicatas — mantém histórico limpo e respeita a privacidade.
+//
+// Sprint 13: adicionado campo phone (WhatsApp/telefone).
 class BleEncounterEntity {
   final String deviceId;     // MAC address BLE — chave do encontro
   final String displayName;  // Nome do ContextCard recebido
@@ -11,6 +13,7 @@ class BleEncounterEntity {
   final String company;      // Empresa ou organização (pode estar vazio)
   final String bio;          // Nota pessoal (pode estar vazio)
   final String tags;         // Interesses separados por vírgula (pode estar vazio)
+  final String phone;        // WhatsApp/telefone do contato (pode estar vazio)
   final DateTime encounteredAt; // Data/hora do último encontro com este dispositivo
 
   const BleEncounterEntity({
@@ -20,6 +23,7 @@ class BleEncounterEntity {
     required this.company,
     required this.bio,
     required this.tags,
+    this.phone = '',
     required this.encounteredAt,
   });
 

@@ -8,11 +8,13 @@
 //   - Empresa (company)
 //   - Interesses (tags, separadas por vírgula)
 //   - Nota pessoal (bio, texto livre)
+//   - Telefone/WhatsApp (phone, opcional — compartilhado via BLE)
 //   - Toggle: Visível para outros (bleVisibleProvider)
 
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -38,6 +40,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   final _companyCtrl = TextEditingController();
   final _tagsCtrl    = TextEditingController();
   final _bioCtrl     = TextEditingController();
+  final _phoneCtrl   = TextEditingController();
 
   final _formKey     = GlobalKey<FormState>();
 
@@ -68,6 +71,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       _companyCtrl.text = card.company;
       _tagsCtrl.text    = card.tags;
       _bioCtrl.text     = card.bio;
+      _phoneCtrl.text   = card.phone;
     }
 
     // Verifica se a foto ainda existe no disco antes de exibir
@@ -85,6 +89,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     _companyCtrl.dispose();
     _tagsCtrl.dispose();
     _bioCtrl.dispose();
+    _phoneCtrl.dispose();
     super.dispose();
   }
 
@@ -198,6 +203,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         company: _companyCtrl.text.trim(),
         bio: _bioCtrl.text.trim(),
         tags: _tagsCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim(),
         createdAt: _existingCard?.createdAt ?? DateTime.now(),
         updatedAt: DateTime.now(),
       );
@@ -372,6 +378,35 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             ),
             maxLines: 4,
             maxLength: 500,
+          ),
+          const SizedBox(height: 24),
+
+          // ── Seção: Contato ──────────────────────────────────────────────
+          const _SectionLabel(label: AppStrings.profileSectionContact),
+          const SizedBox(height: 8),
+
+          // Campo de WhatsApp/telefone — compartilhado via BLE se preenchido.
+          // Só dígitos; o app monta o link wa.me/55<número> ao exibir o cartão.
+          TextFormField(
+            controller: _phoneCtrl,
+            keyboardType: TextInputType.phone,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            decoration: _inputDecoration(
+              label: AppStrings.profilePhone,
+              hint: AppStrings.profilePhoneHint,
+            ).copyWith(
+              prefixIcon: const Icon(
+                Icons.chat_bubble_outline,
+                color: AppTheme.textSecondary,
+                size: 20,
+              ),
+              helperText: 'Visível para contatos BLE que tocarem em você',
+              helperStyle: const TextStyle(
+                color: AppTheme.textDisabled,
+                fontSize: 11,
+              ),
+            ),
+            maxLength: 13,
           ),
           const SizedBox(height: 24),
 

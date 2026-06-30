@@ -48,6 +48,9 @@ dependencies:
   # Seleção de foto de perfil da galeria do dispositivo
   image_picker: ^1.1.2
 
+  # Abre URLs externas (WhatsApp, browser) a partir do app
+  url_launcher: ^6.3.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
