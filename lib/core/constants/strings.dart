@@ -90,8 +90,8 @@ class AppStrings {
   // Passo 1: Localização
   static const obLocationTitle = 'Memória de lugar';
   static const obLocationBody  =
-      'Sopro detecta quando você entra num local salvo e aciona seus lembretes '
-      'automaticamente. Seu GPS é usado apenas para geofences locais — '
+      'Sopro detecta quando você entra num lugar cadastrado e aciona seus lembretes '
+      'automaticamente. Seu GPS fica no dispositivo — '
       'nenhuma posição é enviada para servidores.';
   static const obLocationBtn   = 'Permitir localização';
 
@@ -110,8 +110,8 @@ class AppStrings {
   // Passo 3: Bluetooth
   static const obBleTitle = 'Pessoas ao redor';
   static const obBleBody  =
-      'Detecta outros usuários Sopro próximos via Bluetooth e permite trocar '
-      'cartões de contexto diretamente entre dispositivos — '
+      'Detecta outros usuários Sopro próximos e permite trocar '
+      'cartões diretamente entre dispositivos — '
       'nada é enviado pela internet.';
   static const obBleBtn    = 'Permitir Bluetooth';
   // Exibida quando o usuário nega as permissões BLE
@@ -136,7 +136,7 @@ class AppStrings {
   static const profileSectionContact = 'Contato';
   static const profileVisible        = 'Visível para outros';
   static const profileVisibleDesc    =
-      'Outros usuários Sopro próximos poderão ver seu cartão via Bluetooth.';
+      'Outros usuários Sopro próximos poderão ver seu cartão.';
   static const profileSave           = 'Salvar perfil';
   static const profileSaved          = 'Perfil salvo com sucesso!';
   static const profileNameRequired   = 'Informe pelo menos um nome';
@@ -168,11 +168,11 @@ class AppStrings {
   // Tela de Configurações
   static const settingsTitle          = 'Configurações';
   static const settingsTooltip        = 'Configurações';
-  static const settingsBleSection     = 'Bluetooth Social';
+  static const settingsBleSection     = 'Pessoas próximas';
   static const settingsBleVisible     = 'Visível para outros';
   static const settingsBleVisibleDesc =
-      'Outros usuários Sopro próximos podem ver seu cartão via Bluetooth';
-  static const settingsBleTxPower     = 'Alcance BLE';
+      'Outros usuários Sopro próximos podem ver seu cartão';
+  static const settingsBleTxPower     = 'Alcance de detecção';
   static const settingsBleTxPowerDesc = 'Distância aproximada de detecção por outros';
   static const bleTxPowerMin          = 'Mínima ~2m';
   static const bleTxPowerLow          = 'Baixa ~5m';

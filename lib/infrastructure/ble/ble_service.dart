@@ -165,42 +165,65 @@ class BleService {
   // ── Leitura de ContextCard via GATT (central role via MethodChannel) ──────
 
   // Conecta ao dispositivo Sopro, lê a characteristic de ContextCard e desconecta.
-  // O Kotlin gerencia toda a negociação GATT (MTU, discover, read, cleanup).
-  // Retorna o usuário atualizado com o card preenchido; em erro retorna sem alteração.
+  // Tenta até 3 vezes (delays de 600ms e 1200ms entre tentativas) para contornar
+  // falhas transitórias do Android GATT stack (status=133, service not found).
+  // O Kotlin já aguarda 600ms antes do connectGatt e fecha GATTs zumbis antes de cada
+  // tentativa. Loga 'ble_retry_success' no Supabase se o retry resolver a falha.
   Future<DiscoveredSoproUser> fetchContextCard(DiscoveredSoproUser user) async {
-    try {
-      final cardJson = await _bleChannel.invokeMethod<String>(
-        'connectAndReadCard',
-        {'deviceId': user.deviceId},
-      );
-      if (cardJson == null || cardJson.isEmpty) return user;
+    const retryDelays = [Duration(milliseconds: 600), Duration(milliseconds: 1200)];
+    PlatformException? lastError;
 
-      final map = jsonDecode(cardJson) as Map<String, dynamic>;
-      final card = ContextCardEntity(
-        id: (map['id'] as String?) ?? user.deviceId,
-        displayName: (map['n'] as String?) ?? user.deviceName,
-        role: (map['r'] as String?) ?? '',
-        company: (map['c'] as String?) ?? '',
-        bio: (map['b'] as String?) ?? '',
-        tags: (map['t'] as String?) ?? '',
-        phone: (map['p'] as String?) ?? '',
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
+    for (var attempt = 0; attempt <= retryDelays.length; attempt++) {
+      if (attempt > 0) {
+        await Future.delayed(retryDelays[attempt - 1]);
+        debugPrint('[BleService] fetchContextCard retry $attempt/${retryDelays.length} (${user.deviceId})');
+      }
+      try {
+        final cardJson = await _bleChannel.invokeMethod<String>(
+          'connectAndReadCard',
+          {'deviceId': user.deviceId},
+        );
+        if (cardJson == null || cardJson.isEmpty) return user;
 
-      final updated = user.copyWith(card: card);
-      _devices[user.deviceId] = updated;
-      _emitDevices();
-      return updated;
-    } on PlatformException catch (e) {
-      debugPrint('[BleService] fetchContextCard falhou (${user.deviceId}): ${e.message}');
-      AppLogger.log('ble_error', {
-        'type':      'gatt_error',
-        'device_id': user.deviceId,
-        'message':   e.message ?? 'unknown',
-      });
-      return user;
+        final map = jsonDecode(cardJson) as Map<String, dynamic>;
+        final card = ContextCardEntity(
+          id: (map['id'] as String?) ?? user.deviceId,
+          displayName: (map['n'] as String?) ?? user.deviceName,
+          role: (map['r'] as String?) ?? '',
+          company: (map['c'] as String?) ?? '',
+          bio: (map['b'] as String?) ?? '',
+          tags: (map['t'] as String?) ?? '',
+          phone: (map['p'] as String?) ?? '',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+
+        if (attempt > 0) {
+          AppLogger.log('ble_retry_success', {
+            'device_id': user.deviceId,
+            'attempt':   attempt + 1,
+          });
+        }
+
+        final updated = user.copyWith(card: card);
+        _devices[user.deviceId] = updated;
+        _emitDevices();
+        return updated;
+      } on PlatformException catch (e) {
+        lastError = e;
+        if (attempt < retryDelays.length) {
+          debugPrint('[BleService] fetchContextCard tentativa ${attempt + 1} falhou (${user.deviceId}): ${e.message}');
+        }
+      }
     }
+
+    debugPrint('[BleService] fetchContextCard falhou após ${retryDelays.length + 1} tentativas (${user.deviceId}): ${lastError?.message}');
+    AppLogger.log('ble_error', {
+      'type':      'gatt_error',
+      'device_id': user.deviceId,
+      'message':   lastError?.message ?? 'unknown',
+    });
+    return user;
   }
 
   // Libera recursos (scan, advertising, stream) ao descartar o provider

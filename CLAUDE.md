@@ -159,8 +159,8 @@ PARTE 2 — Correcoes pos-teste:
 - AndroidManifest: READ_MEDIA_IMAGES + READ_EXTERNAL_STORAGE (maxSdkVersion=32).
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
-Sprint: 13 - Correcoes de Notificacao + Robustez - EM ANDAMENTO (2026-06-29)
+## Sprint Anterior
+Sprint: 13 - Correcoes de Notificacao + Robustez - CONCLUIDO (2026-06-29)
 
 ### O que funciona (confirmado em testes)
 - Geofencing nativo (GeofencingClient): GeofenceReceiver.onReceive() dispara
@@ -229,7 +229,7 @@ PARTE 2 — Onboarding, Perfil, Revisao Geral:
   funciona sem BLE (so perde "Pessoas aqui") e sem notificacoes (perde sussurros).
   Exibimos impacto e deixamos o usuario decidir — privacidade antes de feature.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 13 - Debounce, BLE TX Power e WhatsApp - CONCLUIDO (2026-06-30)
 Entregue:
 
@@ -269,8 +269,37 @@ Entregue:
    - dart run build_runner build: Drift *.g.dart regenerados.
    - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: 14 - GATT Retry + Linguagem Simples - CONCLUIDO (2026-06-30)
+Entregue:
+
+1. CORRECAO GATT BLE (MainActivity.kt + BleService.dart):
+   - closeZombieGatts(deviceId): fecha todos os GATTs ativos para o dispositivo
+     antes de nova tentativa de conexao, eliminando conexoes zumbi (status=133).
+   - connectAndReadCard: delay de 600ms antes de chamar device.connectGatt()
+     (postDelayed no mainHandler). Android precisa de tempo entre discovery e connect.
+     Timeout (10s) postado DENTRO do delay, iniciando somente apos connectGatt.
+   - BleService.fetchContextCard: retry automatico — ate 3 tentativas totais.
+     Delays entre tentativas: 600ms (retry 1) e 1200ms (retry 2).
+     Loga 'ble_retry_success' no Supabase com attempt number se retry resolver.
+     Loga 'ble_error' (gatt_error) somente na falha final, evitando ruido de log
+     em falhas transitorias resolvidas pelo retry.
+
+2. LINGUAGEM SIMPLES (strings.dart):
+   - obLocationBody: "geofences locais" → "seus lugares cadastrados";
+     "Seu GPS é usado apenas para" → "Seu GPS fica no dispositivo —".
+   - settingsBleSection: "Bluetooth Social" → "Pessoas proximas".
+   - settingsBleVisibleDesc: removido "via Bluetooth" (suficiente sem o tecnicismo).
+   - settingsBleTxPower: "Alcance BLE" → "Alcance de deteccao".
+   - obBleBody: removido "via Bluetooth" e "cartoes de contexto" → "cartoes".
+   - profileVisibleDesc: removido "via Bluetooth".
+   - Criterio: "BLE"/"Bluetooth Low Energy" e "geofencing" removidos do texto
+     visivel. "Bluetooth" mantido apenas em labels de permissao (onde o SO
+     tambem usa o termo) e textos de erro de hardware.
+   - flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Proximo Sprint
-Sprint: 14 - Possivelmente: tema claro/escuro, exportacao de dados,
+Sprint: 15 - Possivelmente: tema claro/escuro, exportacao de dados,
 estatisticas de uso, widget Android de ambiente na home,
 icone de categoria para ambientes.
 

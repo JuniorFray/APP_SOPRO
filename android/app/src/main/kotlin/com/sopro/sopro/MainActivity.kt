@@ -597,6 +597,9 @@ class MainActivity : FlutterActivity() {
             result.error("INVALID_ID", "Invalid device ID: $deviceId", null); return
         }
 
+        // Fecha GATTs zumbis para este dispositivo antes de tentar nova conexão
+        closeZombieGatts(deviceId)
+
         var responded = false
         var activeGatt: BluetoothGatt? = null
 
@@ -621,8 +624,6 @@ class MainActivity : FlutterActivity() {
             respond { result.error("TIMEOUT", "GATT connection timed out", null) }
             activeGatt?.let { cleanup(it) }
         }
-        mainHandler.postDelayed(timeoutRunnable, GATT_TIMEOUT_MS)
-
         val gattCallback = object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 when (newState) {
@@ -705,9 +706,24 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // Conecta com preferência por BLE (TRANSPORT_LE) — disponível a partir do API 23
-        activeGatt = device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-        activeGatts.add(activeGatt)
+        // Aguarda 600ms antes de conectar: Android precisa de tempo entre a descoberta
+        // via scan e a tentativa de conexão GATT para evitar status=133 (conexão zumbi)
+        mainHandler.postDelayed({
+            activeGatt = device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            activeGatt?.let { activeGatts.add(it) }
+            mainHandler.postDelayed(timeoutRunnable, GATT_TIMEOUT_MS)
+        }, 600L)
+    }
+
+    // Fecha todos os GATTs ativos para um dispositivo antes de nova conexão.
+    // Evita status=133 causado por conexões zumbi no Android BLE stack.
+    private fun closeZombieGatts(deviceId: String) {
+        val zombies = activeGatts.filter { it.device.address == deviceId }
+        zombies.forEach { gatt ->
+            try { gatt.disconnect() } catch (_: Exception) {}
+            try { gatt.close() } catch (_: Exception) {}
+        }
+        activeGatts.removeAll(zombies.toSet())
     }
 
     // ═════════════════════════════════════════════════════════════════════════
