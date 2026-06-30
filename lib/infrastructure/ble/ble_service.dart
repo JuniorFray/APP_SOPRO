@@ -133,8 +133,13 @@ class BleService {
 
   // Inicia o advertising com o ContextCard do usuário.
   // [txPower]: nível de potência (0=ULTRA_LOW, 1=LOW, 2=MEDIUM, 3=HIGH).
+  // [sharePhone]: se false, omite o campo 'p' do payload mesmo que phone esteja preenchido.
   // Limita bio a 120 chars para manter o payload JSON compacto.
-  Future<bool> startAdvertising(ContextCardEntity card, {int txPower = 1}) async {
+  Future<bool> startAdvertising(
+    ContextCardEntity card, {
+    int txPower = 1,
+    bool sharePhone = true,
+  }) async {
     try {
       final payload = jsonEncode({
         'id': card.id,
@@ -143,7 +148,8 @@ class BleService {
         'c': card.company, // empresa
         'b': card.bio.substring(0, min(card.bio.length, 120)),
         't': card.tags,
-        'p': card.phone,   // WhatsApp/telefone (pode ser vazio)
+        // Omite 'p' se o usuário optou por não compartilhar o número
+        if (sharePhone && card.phone.isNotEmpty) 'p': card.phone,
       });
       return await _bleChannel.invokeMethod<bool>(
               'startAdvertising', {'cardJson': payload, 'txPower': txPower}) ??

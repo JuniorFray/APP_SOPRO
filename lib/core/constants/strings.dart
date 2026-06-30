@@ -205,6 +205,13 @@ class AppStrings {
   static const profilePhotoCamera  = 'Tirar foto';
   static const profilePhotoGallery = 'Escolher da galeria';
 
+  // Toggle de compartilhamento de WhatsApp (Perfil — seção Privacidade)
+  static const profileShareWhatsApp     = 'Compartilhar WhatsApp';
+  static const profileShareWhatsAppDesc =
+      'Inclui seu número no cartão trocado com pessoas próximas';
+  static const profilePhoneHelperOn  = 'Será incluído no seu cartão';
+  static const profilePhoneHelperOff = 'Salvo, mas não compartilhado';
+
   // Edição de ambiente e gatilho
   static const editEnvironmentTitle = 'Editar Ambiente';
   static const editTriggerTitle     = 'Editar Gatilho';

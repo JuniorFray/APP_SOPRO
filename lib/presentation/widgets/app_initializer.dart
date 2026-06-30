@@ -126,6 +126,11 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
       ref.read(bleTxPowerProvider.notifier).state = txPower;
     }
 
+    final shareWhatsApp = prefs.getBool('share_whatsapp') ?? true;
+    if (!shareWhatsApp) {
+      ref.read(shareWhatsAppProvider.notifier).state = false;
+    }
+
     // 7. Inicia o foreground service apenas se o onboarding já foi concluído.
     //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
     if (prefs.getBool('onboarding_done') ?? false) {

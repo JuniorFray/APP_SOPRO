@@ -85,8 +85,13 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
       try {
         final card = await ref.read(contextCardRepositoryProvider).getActive();
         if (card != null) {
-          final txPower = ref.read(bleTxPowerProvider);
-          final advertised = await service.startAdvertising(card, txPower: txPower);
+          final txPower    = ref.read(bleTxPowerProvider);
+          final sharePhone = ref.read(shareWhatsAppProvider);
+          final advertised = await service.startAdvertising(
+            card,
+            txPower: txPower,
+            sharePhone: sharePhone,
+          );
           if (mounted) {
             ref.read(bleAdvertisingProvider.notifier).state = advertised;
           }
@@ -116,7 +121,7 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
   // Conecta ao dispositivo via GATT e exibe o ContextCard recebido
   Future<void> _onUserTapped(DiscoveredSoproUser user) async {
     if (user.card != null) {
-      _showCardSheet(user.card!);
+      _showCardSheet(user.card!, user.lastSeen);
       return;
     }
 
@@ -153,7 +158,7 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
     if (mounted) Navigator.of(context).pop(); // fecha loading
 
     if (updated.card != null) {
-      _showCardSheet(updated.card!);
+      _showCardSheet(updated.card!, updated.lastSeen);
       // Persiste o encontro no banco (upsert por deviceId)
       _saveEncounter(user.deviceId, updated.card!);
     } else {
@@ -185,14 +190,15 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
     }
   }
 
-  void _showCardSheet(ContextCardEntity card) {
+  void _showCardSheet(ContextCardEntity card, DateTime lastSeen) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppTheme.backgroundSurface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (_) => _ContextCardSheet(card: card),
+      builder: (_) => _ContextCardSheet(card: card, lastSeen: lastSeen),
     );
   }
 
@@ -488,136 +494,210 @@ class _ErrorState extends StatelessWidget {
 }
 
 // Bottom sheet com o ContextCard completo de um usuário detectado.
-// Exibe botão "Conversar no WhatsApp" se o contato preencheu o telefone.
+// Mostra todos os campos preenchidos; omite silenciosamente campos vazios.
+// Exibe botão WhatsApp apenas se o contato optou por compartilhar o telefone.
 class _ContextCardSheet extends StatelessWidget {
   final ContextCardEntity card;
-  const _ContextCardSheet({required this.card});
+  final DateTime lastSeen;
+
+  const _ContextCardSheet({required this.card, required this.lastSeen});
+
+  // "Cargo na Empresa", "Cargo" ou "Empresa" conforme preenchimento
+  String get _occupationLine {
+    if (card.role.isNotEmpty && card.company.isNotEmpty) {
+      return '${card.role} na ${card.company}';
+    }
+    if (card.role.isNotEmpty) return card.role;
+    if (card.company.isNotEmpty) return card.company;
+    return '';
+  }
+
+  // Tags separadas por vírgula → lista filtrada de strings não-vazias
+  List<String> get _tags => card.tags.isEmpty
+      ? []
+      : card.tags
+          .split(',')
+          .map((t) => t.trim())
+          .where((t) => t.isNotEmpty)
+          .toList();
+
+  // Tempo relativo desde o último avistamento BLE
+  String _formatLastSeen() {
+    final diff = DateTime.now().difference(lastSeen);
+    if (diff.inSeconds < 60) return 'Agora mesmo';
+    if (diff.inMinutes < 60) return 'Há ${diff.inMinutes} min';
+    if (diff.inHours < 24) return 'Há ${diff.inHours}h';
+    return 'Há ${diff.inDays} dia${diff.inDays > 1 ? "s" : ""}';
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Handle visual
-          Center(
-            child: Container(
-              width: 40, height: 4,
-              decoration: BoxDecoration(
-                color: AppTheme.textSecondary.withOpacity(0.3), // ignore: deprecated_member_use
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
+    final tags = _tags;
 
-          // Avatar + nome
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: AppTheme.accent.withOpacity(0.15), // ignore: deprecated_member_use
-                child: Text(
-                  card.displayName.isNotEmpty
-                      ? card.displayName[0].toUpperCase()
-                      : '?',
-                  style: const TextStyle(
-                    color: AppTheme.accent,
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                  ),
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Handle visual
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.textSecondary.withOpacity(0.3), // ignore: deprecated_member_use
+                  borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      card.displayName,
-                      style: const TextStyle(
-                        color: AppTheme.textPrimary,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                      ),
+            ),
+            const SizedBox(height: 20),
+
+            // ── Avatar + nome + ocupação ───────────────────────────────────
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: AppTheme.accent.withOpacity(0.15), // ignore: deprecated_member_use
+                  child: Text(
+                    card.initial,
+                    style: const TextStyle(
+                      color: AppTheme.accent,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
                     ),
-                    // Mostra cargo/empresa se disponíveis; caso contrário, tags
-                    if (card.occupationLine.isNotEmpty)
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        card.occupationLine,
+                        card.displayName,
                         style: const TextStyle(
-                          color: AppTheme.accent,
-                          fontSize: 13,
-                        ),
-                      )
-                    else if (card.tags.isNotEmpty)
-                      Text(
-                        card.tags,
-                        style: const TextStyle(
-                          color: AppTheme.textSecondary,
-                          fontSize: 13,
+                          color: AppTheme.textPrimary,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                  ],
+                      if (_occupationLine.isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          _occupationLine,
+                          style: const TextStyle(
+                            color: AppTheme.accent,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            // ── Interesses (chips) ─────────────────────────────────────────
+            if (tags.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: tags.map((tag) => Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppTheme.accent.withOpacity(0.10), // ignore: deprecated_member_use
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: AppTheme.accent.withOpacity(0.25), // ignore: deprecated_member_use
+                    ),
+                  ),
+                  child: Text(
+                    tag,
+                    style: const TextStyle(
+                      color: AppTheme.accent,
+                      fontSize: 12,
+                    ),
+                  ),
+                )).toList(),
+              ),
+            ],
+
+            // ── Nota pessoal / bio ─────────────────────────────────────────
+            if (card.bio.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              const Divider(color: AppTheme.backgroundElevated),
+              const SizedBox(height: 10),
+              Text(
+                card.bio,
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 15,
+                  height: 1.5,
                 ),
               ),
             ],
-          ),
 
-          if (card.bio.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const Divider(color: AppTheme.backgroundSurface),
-            const SizedBox(height: 12),
-            Text(
-              card.bio,
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 15,
-                height: 1.5,
-              ),
+            // ── Última vez visto ───────────────────────────────────────────
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                const Icon(
+                  Icons.access_time_rounded,
+                  size: 14,
+                  color: AppTheme.textDisabled,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _formatLastSeen(),
+                  style: const TextStyle(
+                    color: AppTheme.textDisabled,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
-          ],
 
-          const SizedBox(height: 24),
+            const SizedBox(height: 20),
 
-          // Botão WhatsApp — exibido apenas se o contato preencheu o telefone
-          if (card.phone.isNotEmpty) ...[
+            // ── Botão WhatsApp — só se o contato compartilhou o telefone ───
+            if (card.phone.isNotEmpty) ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _launchWhatsApp(context, card.phone),
+                  icon: const Icon(Icons.chat_bubble_outline, size: 18),
+                  label: const Text(AppStrings.bleWhatsApp),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF25D366),
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+
             SizedBox(
               width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () => _launchWhatsApp(context, card.phone),
-                icon: const Icon(Icons.chat_bubble_outline, size: 18),
-                label: const Text(AppStrings.bleWhatsApp),
-                style: ElevatedButton.styleFrom(
-                  // Verde WhatsApp para reconhecimento imediato pelo usuário
-                  backgroundColor: const Color(0xFF25D366),
-                  foregroundColor: Colors.white,
+              child: OutlinedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.accent,
+                  side: const BorderSide(color: AppTheme.accent),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
+                child: const Text(AppStrings.bleClose),
               ),
             ),
-            const SizedBox(height: 8),
           ],
-
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: () => Navigator.of(context).pop(),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppTheme.accent,
-                side: const BorderSide(color: AppTheme.accent),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: const Text(AppStrings.bleClose),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

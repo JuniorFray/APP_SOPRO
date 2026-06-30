@@ -21,3 +21,9 @@ final notificationCooldownMinutesProvider = StateProvider<int>((ref) => 0);
 // Mapeado para AdvertiseSettings.ADVERTISE_TX_POWER_* no Android via MethodChannel.
 // Persistência via SharedPreferences ('ble_tx_power').
 final bleTxPowerProvider = StateProvider<int>((ref) => 1);
+
+// Provider que controla se o telefone/WhatsApp é incluído no payload BLE.
+// Se false, o campo phone é omitido do cartão trocado mesmo que esteja
+// preenchido no perfil — o usuário pode ter o número salvo sem compartilhá-lo.
+// Persistência via SharedPreferences ('share_whatsapp').
+final shareWhatsAppProvider = StateProvider<bool>((ref) => true);

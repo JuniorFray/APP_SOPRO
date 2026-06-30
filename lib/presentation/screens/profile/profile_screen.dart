@@ -25,6 +25,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../domain/entities/context_card_entity.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
+import '../../providers/settings_providers.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -237,7 +238,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isVisible = ref.watch(bleVisibleProvider);
+    final isVisible    = ref.watch(bleVisibleProvider);
+    final shareWhatsApp = ref.watch(shareWhatsAppProvider);
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
@@ -245,7 +247,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         title: const Text(AppStrings.profileTitle),
         backgroundColor: AppTheme.backgroundSurface,
       ),
-      body: _loaded ? _buildForm(isVisible) : _buildLoading(),
+      body: _loaded ? _buildForm(isVisible, shareWhatsApp) : _buildLoading(),
     );
   }
 
@@ -255,7 +257,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  Widget _buildForm(bool isVisible) {
+  Widget _buildForm(bool isVisible, bool shareWhatsApp) {
     // Inicial do nome para o avatar quando não há foto
     final initial = _nameCtrl.text.isNotEmpty
         ? _nameCtrl.text[0].toUpperCase()
@@ -400,9 +402,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 color: AppTheme.textSecondary,
                 size: 20,
               ),
-              helperText: 'Visível para contatos BLE que tocarem em você',
-              helperStyle: const TextStyle(
-                color: AppTheme.textDisabled,
+              helperText: shareWhatsApp
+                  ? AppStrings.profilePhoneHelperOn
+                  : AppStrings.profilePhoneHelperOff,
+              helperStyle: TextStyle(
+                color: shareWhatsApp
+                    ? AppTheme.accent
+                    : AppTheme.textDisabled,
                 fontSize: 11,
               ),
             ),
@@ -433,6 +439,40 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
               subtitle: const Text(
                 AppStrings.profileVisibleDesc,
+                style: TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // Toggle independente: compartilha o telefone no cartão BLE ou não.
+          // O número continua salvo no perfil mas é omitido do payload se desligado.
+          Container(
+            decoration: BoxDecoration(
+              color: AppTheme.backgroundSurface,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: SwitchListTile(
+              value: shareWhatsApp,
+              onChanged: (v) async {
+                ref.read(shareWhatsAppProvider.notifier).state = v;
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('share_whatsapp', v);
+              },
+              activeColor: AppTheme.accent,
+              title: const Text(
+                AppStrings.profileShareWhatsApp,
+                style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              subtitle: const Text(
+                AppStrings.profileShareWhatsAppDesc,
                 style: TextStyle(
                   color: AppTheme.textSecondary,
                   fontSize: 12,
