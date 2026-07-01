@@ -522,6 +522,84 @@ Entregue:
 - flutter analyze lib/: No issues found.
 
 ## Sprint Atual
+Sprint: V2-VoicePro - Botao WhatsApp + Zero Confirmacao + Busca Case-Insensitive - CONCLUIDO (2026-07-01)
+Entregue:
+
+1. BUG FIX — BUSCA DE AMBIENTE CASE-INSENSITIVE E PARCIAL:
+   - _matchEnv() em _VoiceFabState: exact match primeiro (case-insensitive),
+     depois CONTAINS match ("casa" encontra "Minha Casa" e vice-versa).
+   - Resolve o bug onde Gemini retornava "casa" (minusculo) e ambiente
+     estava salvo como "Casa" → gatilho nao era salvo.
+   - Log 'trigger_voice_failed' no Supabase com env_name_from_gemini,
+     trigger_action e transcript quando ambiente nao for encontrado.
+   - Snackbar verde "Gatilho criado em [env] ✓" apos salvar com sucesso.
+
+2. FLUXO ZERO CONFIRMACAO (hands-free total):
+   - _executeResult() despacha diretamente sem esperar confirmacao manual.
+   - criar_trigger + env encontrado → salva TriggerEntity no banco → snackbar → _setSuccess().
+   - criar_trigger + env nao encontrado → _EnvPickerSheet (lista de ambientes, 1 toque).
+   - criar_ambiente → getCurrentPosition() via NativeLocationService → abre
+     AddEnvironmentScreen com initialName E initialPosition pre-definidos.
+   - resolver_trigger → setActive(false) diretamente → snackbar → _setSuccess().
+   - listar_triggers + env encontrado → _TriggerListSheet inline no sheet.
+   - listar_triggers + env nao encontrado → _EnvPickerSheet → _TriggerListSheet.
+   - nao_entendido → _FallbackSheet com campo editavel + botao Re-analisar.
+
+3. BOTAO DE GRAVACAO ESTILO WHATSAPP (_VoiceFab):
+   - Substituiu FloatingActionButton.small + _VoiceBottomSheet (removidos).
+   - Tamanho: 64x64dp, circulo, elevation via boxShadow.
+   - Cor idle: AppTheme.accent (#E94560); gravando: #E53935 (vermelho).
+   - Ícone: Icons.mic_rounded 28dp; sucesso: Icons.check_rounded verde 32dp.
+   - SEGURAR (onPointerDown): inicia gravacao.
+   - SOLTAR (onPointerUp): processa ou cancela conforme zona.
+   - ARRASTAR PARA CIMA > 60dp: ativa zona de cancelamento.
+     Lixeira aparece acima (Container 44dp, vermelho quando ativa).
+     Botao fica cinza na zona de cancelamento.
+     Soltar nessa zona → cancela sem processar.
+   - Animacao de pulso: AnimationController 700ms, escala 1.0↔1.12 (repeat reverse).
+   - Auto-stop: 30 s de gravacao maxima.
+   - Contador de segundos abaixo do botao durante gravacao.
+   - _setSuccess(): estado success (verde) por 1 s → volta a idle.
+   - _FabState enum: idle/recording/processing/success/error.
+
+4. SHEETS DE CONTINUACAO:
+   - _EnvPickerSheet (ConsumerWidget): lista de ambientes com titulo/subtitulo.
+     Titulo dinamico ("Em qual ambiente?" ou "Pendencias de qual ambiente?").
+     Subtitulo = acao reconhecida para contexto visual.
+     Tap → Navigator.pop + onEnvSelected callback.
+   - _TriggerListSheet (ConsumerWidget + FutureBuilder): lista apenas triggers ativos.
+     getActiveByEnvironment() do repositorio.
+     Exibe titulo + conteudo com separadores visuais.
+   - _FallbackSheet (ConsumerStatefulWidget): TextField editavel + botao Re-analisar.
+     Chama resolveIntentFromText() e passa resultado de volta via onResult callback.
+     autofocus: true para o teclado abrir automaticamente.
+
+5. PREPARACAO V3 — OVERLAY:
+   - AndroidManifest: SYSTEM_ALERT_WINDOW adicionado (necessaria para overlay futuro).
+   - lib/infrastructure/voice/voice_overlay_service.dart: stub com comentario
+     detalhado explicando requisitos V3 (WindowManager, MethodChannel dedicado).
+   - onboarding_screen.dart: passo 5 adicionado (icone mic_external_on_outlined,
+     cor accent, titulo/corpo de AppStrings.obOverlayTitle/Body).
+     _requestBle() agora chama _nextPage() em vez de _goHome() (ha um passo a mais).
+     _primaryLabel: case 4 = obOverlayBtn. _primaryAction: case 4 = _goHome.
+   - strings.dart: obOverlayTitle, obOverlayBody, obOverlayBtn adicionados.
+
+6. ADD_ENVIRONMENT_SCREEN — initialPosition:
+   - Parametro LatLng? initialPosition adicionado ao constructor.
+   - initState(): se initialPosition != null, define _selectedPoint e
+     centraliza o mapa com move(initialPosition!, 15.0) apos primeiro frame.
+   - Permite que o comando de voz "criar_ambiente" posicione o pin GPS
+     automaticamente sem o usuario clicar na bolinha de localizacao.
+
+7. STRINGS NOVAS (strings.dart):
+   - voiceTriggerSavedIn, voiceTriggerDeactivated, voiceTriggerNotFound.
+   - voiceEnvPickerTitle, voiceEnvPickerAction.
+   - voiceTriggerListTitle, voiceNoTriggersPending.
+   - obOverlayTitle, obOverlayBody, obOverlayBtn.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Sprint Anterior
 Sprint: V2-GeminiAudio - Gravacao de audio + Gemini Audio API - CONCLUIDO (2026-07-01)
 Entregue:
 
@@ -611,6 +689,7 @@ Sprint V2-Voz  — Voz: speech_to_text + flutter_tts, FAB mic na Home, regex on-
 Sprint V2-Voz-Fix     — Locale pt-BR dinamico via locales() + Gemini API para intencao com fallback regex; _processing spinner no sheet.
 Sprint V2-Gemini-Robustez — Modelo gemini-1.5-flash, heuristica STT ingles, transcript editavel com re-analisar.
 Sprint V2-GeminiAudio  — Substitui STT por gravacao de audio + Gemini 2.5 Flash Audio API. UX: segure para gravar, solte para processar.
+Sprint V2-VoicePro     — Botao WhatsApp-style (hold=gravar/arrastar=cancelar), fluxo zero-confirmacao, seletor de ambiente inline, lista de triggers inline, bug fix de busca case-insensitive, SYSTEM_ALERT_WINDOW, stub VoiceOverlayService, passo 5 no onboarding.
 
 ### Bugs Corrigidos em Campo (Motorola G52, Android 12)
 

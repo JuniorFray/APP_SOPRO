@@ -29,8 +29,16 @@ class AddEnvironmentScreen extends ConsumerStatefulWidget {
   final EnvironmentEntity? environment;
   // Nome pré-preenchido quando criado via comando de voz (Sprint V2-Voz)
   final String? initialName;
+  // Posição GPS pré-definida quando enviado via voz (Sprint V2-VoicePro).
+  // Centra o mapa e posiciona o pin automaticamente sem clique do usuário.
+  final LatLng? initialPosition;
 
-  const AddEnvironmentScreen({super.key, this.environment, this.initialName});
+  const AddEnvironmentScreen({
+    super.key,
+    this.environment,
+    this.initialName,
+    this.initialPosition,
+  });
 
   @override
   ConsumerState<AddEnvironmentScreen> createState() =>
@@ -85,6 +93,12 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
       // Centraliza o mapa após o primeiro frame (MapController não está pronto no initState)
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _mapController.move(_selectedPoint!, 15.0);
+      });
+    } else if (widget.initialPosition != null) {
+      // GPS pré-obtido via comando de voz — posiciona pin sem clique do usuário
+      _selectedPoint = widget.initialPosition;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _mapController.move(widget.initialPosition!, 15.0);
       });
     }
   }

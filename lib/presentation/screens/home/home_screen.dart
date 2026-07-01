@@ -5,19 +5,26 @@
 //      - false → pushReplacementNamed('/onboarding') — sem await, sem recursão
 //      - true  → inicia geofences e exibe a tela normalmente
 //   2. Listar ambientes cadastrados pelo usuário
-//   3. Navegar para PeopleNearbyScreen e ProfileScreen
-//   4. FAB secundário de voz: abre _VoiceBottomSheet para comandos por fala
+//   3. FAB de voz: _VoiceFab — botão 64 dp hold-to-record que auto-executa ações
+//      via Gemini Audio API sem nenhuma confirmação manual (estilo WhatsApp)
+//   4. FAB principal: "Novo Ambiente"
+//   5. AppBar: BLE Social, Perfil, Configurações
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/navigation/app_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
+import '../../../infrastructure/logging/app_logger.dart';
+import '../../../infrastructure/voice/voice_service.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/location_providers.dart';
@@ -25,9 +32,7 @@ import '../../providers/voice_providers.dart';
 import '../../widgets/environment_card.dart';
 import '../ble/people_nearby_screen.dart';
 import '../environment/add_environment_screen.dart';
-import '../environment/environment_detail_screen.dart';
 import '../settings/settings_screen.dart';
-import '../../../infrastructure/voice/voice_service.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -63,138 +68,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     await ref.read(geofenceManagerProvider).start();
     if (mounted) setState(() => _ready = true);
   }
-
-  // Abre o bottom sheet de interação por voz
-  void _openVoiceSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppTheme.backgroundElevated,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (_) => _VoiceBottomSheet(onResult: _handleVoiceResult),
-    );
-  }
-
-  // Executa a ação correspondente ao resultado de voz confirmado pelo usuário.
-  // Navega para a tela adequada conforme a intenção detectada.
-  Future<void> _handleVoiceResult(VoiceResult result) async {
-    if (!mounted) return;
-
-    switch (result.intent) {
-      // Lembra de [ação] quando eu chegar em [ambiente]
-      case VoiceIntent.createTrigger:
-        final envs = await ref.read(environmentRepositoryProvider).getAll();
-        final query = result.environmentName?.toLowerCase() ?? '';
-        final env = envs
-            .where((e) =>
-                e.name.toLowerCase().contains(query) ||
-                (query.isNotEmpty && query.contains(e.name.toLowerCase())))
-            .firstOrNull;
-        if (env != null && mounted) {
-          pushScreen(context, EnvironmentDetailScreen(environment: env));
-        } else if (mounted) {
-          // Ambiente não encontrado: cria um novo
-          pushScreen(
-            context,
-            AddEnvironmentScreen(
-              initialName: _capitalize(result.environmentName ?? ''),
-            ),
-          );
-        }
-
-      // Salva esse lugar como [nome] / Cria um ambiente aqui chamado [nome]
-      case VoiceIntent.openEnvironment:
-        if (mounted) {
-          pushScreen(
-            context,
-            AddEnvironmentScreen(
-              initialName: result.environmentName ?? '',
-            ),
-          );
-        }
-
-      // Resolvi [título] / Pode apagar [título]
-      case VoiceIntent.resolveTrigger:
-        final triggers = await _searchAllTriggers(result.triggerAction ?? '');
-        if (triggers.isNotEmpty && mounted) {
-          final first = triggers.first;
-          await ref
-              .read(triggerRepositoryProvider)
-              .setActive(first.id, active: false);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Gatilho "${first.title.isNotEmpty ? first.title : first.content}" desativado',
-                ),
-              ),
-            );
-          }
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Gatilho "${result.triggerAction}" não encontrado',
-              ),
-            ),
-          );
-        }
-
-      // O que tenho pendente em [ambiente]?
-      case VoiceIntent.listTriggers:
-        final envs = await ref.read(environmentRepositoryProvider).getAll();
-        final query = result.environmentName?.toLowerCase() ?? '';
-        final env = envs
-            .where((e) =>
-                e.name.toLowerCase().contains(query) ||
-                (query.isNotEmpty && query.contains(e.name.toLowerCase())))
-            .firstOrNull;
-        if (env != null && mounted) {
-          pushScreen(context, EnvironmentDetailScreen(environment: env));
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Ambiente "${result.environmentName}" não encontrado',
-              ),
-            ),
-          );
-        }
-
-      // Texto livre não classificado
-      case VoiceIntent.fallback:
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content:  Text('Selecione um ambiente para: "${result.transcript}"'),
-              duration: const Duration(seconds: 4),
-            ),
-          );
-        }
-    }
-  }
-
-  // Busca triggers em todos os ambientes cujo título ou conteúdo contenha [query].
-  Future<List<TriggerEntity>> _searchAllTriggers(String query) async {
-    if (query.isEmpty) return [];
-    final envs = await ref.read(environmentRepositoryProvider).getAll();
-    final lower = query.toLowerCase();
-    final results = <TriggerEntity>[];
-    for (final env in envs) {
-      final triggers =
-          await ref.read(triggerRepositoryProvider).getByEnvironment(env.id);
-      results.addAll(triggers.where((t) =>
-          t.title.toLowerCase().contains(lower) ||
-          t.content.toLowerCase().contains(lower)));
-    }
-    return results;
-  }
-
-  // Capitaliza a primeira letra da string
-  String _capitalize(String s) =>
-      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
   @override
   Widget build(BuildContext context) {
@@ -255,21 +128,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     EnvironmentCard(environment: environments[i]),
               ),
       ),
-      // FABs empilhados: microfone secundário acima do botão principal
+      // FABs empilhados: microfone (hold-to-record) acima do botão principal
       floatingActionButton: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // FAB secundário — abre interação por voz
-          FloatingActionButton.small(
-            onPressed: _openVoiceSheet,
-            backgroundColor: AppTheme.backgroundSurface,
-            foregroundColor: AppTheme.accent,
-            heroTag: 'voice_fab',
-            tooltip: AppStrings.voiceMicTooltip,
-            child: const Icon(Icons.mic_outlined),
-          ),
-          const SizedBox(height: 12),
+          // FAB de voz redesenhado — 64 dp, hold=gravar, arrastar=cancelar
+          const _VoiceFab(),
+          const SizedBox(height: 16),
           // FAB principal — cria novo ambiente
           FloatingActionButton.extended(
             onPressed: () => pushScreen(context, const AddEnvironmentScreen()),
@@ -285,210 +151,823 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-// ── Bottom sheet de interação por voz ─────────────────────────────────────────
+// ── Estados do botão de voz ────────────────────────────────────────────────────
 
-// Exibe animação de ondas sonoras enquanto escuta, mostra a transcrição em
-// tempo real e, ao finalizar, apresenta a intenção reconhecida para confirmação.
-class _VoiceBottomSheet extends ConsumerStatefulWidget {
-  // Callback chamado quando o usuário confirma a ação reconhecida
-  final void Function(VoiceResult) onResult;
-
-  const _VoiceBottomSheet({required this.onResult});
-
-  @override
-  ConsumerState<_VoiceBottomSheet> createState() => _VoiceBottomSheetState();
+enum _FabState {
+  idle,       // mic parado, aguardando pressão
+  recording,  // gravando áudio (vermelho pulsante)
+  processing, // Gemini processando + executando ação
+  success,    // checkmark verde por 1 s após sucesso
+  error,      // mic_off vermelho breve após falha de permissão
 }
 
-class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
-  // true enquanto o AudioRecorder está gravando ativamente
-  bool _isRecording = false;
-  // true enquanto o Gemini processa o áudio enviado (spinner)
-  bool _processing  = false;
-  // true após Gemini retornar resultado e bottom sheet mostrar ação
-  bool _processed   = false;
-  // true se permissão de microfone foi negada
-  bool _unavailable = false;
-  // Resultado final com intenção detectada e transcrição do Gemini
-  VoiceResult? _result;
-  // Segundos gravados — mostrado no contador durante gravação
-  int _recordingSeconds = 0;
-  // Timer que incrementa _recordingSeconds a cada segundo
+// ── Botão de voz flutuante (WhatsApp-style) ───────────────────────────────────
+//
+// - SEGURAR: inicia gravação (vermelho pulsante + contador de segundos)
+// - ARRASTAR PARA CIMA > 60 dp: exibe lixeira vermelha → soltar cancela
+// - SOLTAR (sem cancelar): para gravação → Gemini Audio API → auto-executa
+// - Sem nenhuma confirmação manual — ação é executada imediatamente
+class _VoiceFab extends ConsumerStatefulWidget {
+  const _VoiceFab();
+
+  @override
+  ConsumerState<_VoiceFab> createState() => _VoiceFabState();
+}
+
+class _VoiceFabState extends ConsumerState<_VoiceFab>
+    with SingleTickerProviderStateMixin {
+
+  _FabState _fabState = _FabState.idle;
+
+  // Animação de pulso durante gravação: escala 1.0 ↔ 1.12 em 700 ms
+  late final AnimationController _pulseCtrl;
+  late final Animation<double>   _pulseAnim;
+
+  // Contador de segundos exibido durante gravação
+  int    _recordingSeconds = 0;
   Timer? _recordingTimer;
-  // Limite de gravação automático (30 s) para evitar arquivos gigantes
-  static const _maxRecordingSeconds = 30;
-  // Controller do campo editável de transcrição no estado de resultado.
-  // Permite corrigir a transcrição do Gemini e re-analisar.
-  final _transcriptController = TextEditingController();
+  static const _maxSeconds = 30; // auto-stop após 30 s
+
+  // Rastreamento do gesto de cancelar (arrastar para cima)
+  double _dragDeltaY   = 0;   // negativo = arrastado para cima
+  bool   _inCancelZone = false;
+  static const _cancelThreshold = 60.0; // dp para ativar zona de cancelamento
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      duration: const Duration(milliseconds: 700),
+      vsync: this,
+    );
+    _pulseAnim = Tween<double>(begin: 1.0, end: 1.12).animate(
+      CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
+    );
+  }
 
   @override
   void dispose() {
-    // Para gravação se o sheet for fechado durante gravação
+    _pulseCtrl.dispose();
     _recordingTimer?.cancel();
+    // Garante que gravação seja cancelada se o widget for descartado durante uso
     ref.read(voiceServiceProvider).cancelRecording();
-    _transcriptController.dispose();
     super.dispose();
   }
 
-  // Inicia gravação ao pressionar o botão (onPointerDown).
+  bool get _isRecording => _fabState == _FabState.recording;
+
+  // ── Pointer events ─────────────────────────────────────────────────────────
+
+  // Pressão inicial → inicia gravação
+  void _onPointerDown(PointerDownEvent _) {
+    if (_fabState != _FabState.idle) return;
+    _dragDeltaY   = 0;
+    _inCancelZone = false;
+    _startRecording();
+  }
+
+  // Movimento do dedo → detecta zona de cancelamento (arrastar ≥ 60 dp para cima)
+  void _onPointerMove(PointerMoveEvent event) {
+    if (!_isRecording) return;
+    _dragDeltaY += event.delta.dy; // dy negativo = arrastar para cima
+    final inCancel = _dragDeltaY < -_cancelThreshold;
+    if (inCancel != _inCancelZone && mounted) {
+      setState(() => _inCancelZone = inCancel);
+    }
+  }
+
+  // Soltar o dedo → cancela se na zona de cancelamento, caso contrário processa
+  void _onPointerUp(PointerUpEvent _) {
+    if (!_isRecording) return;
+    if (_inCancelZone) {
+      _cancelRecording();
+    } else {
+      _stopAndProcess();
+    }
+  }
+
+  // Evento cancelado pelo sistema (ex: ligação recebida)
+  void _onPointerCancel(PointerCancelEvent _) => _cancelRecording();
+
+  // ── Ciclo de gravação ──────────────────────────────────────────────────────
+
+  // Inicia gravação e contador de segundos
   Future<void> _startRecording() async {
-    if (_isRecording || _processing) return;
     final service = ref.read(voiceServiceProvider);
     final ok      = await service.startRecording();
     if (!mounted) return;
+
     if (!ok) {
-      // Permissão negada ou microfone indisponível
-      setState(() => _unavailable = true);
+      // Permissão de microfone negada ou hardware indisponível
+      setState(() => _fabState = _FabState.error);
+      await Future.delayed(const Duration(milliseconds: 800));
+      if (mounted) setState(() => _fabState = _FabState.idle);
       return;
     }
+
     setState(() {
-      _isRecording      = true;
+      _fabState         = _FabState.recording;
       _recordingSeconds = 0;
     });
-    // Conta os segundos e aplica limite máximo de 30 s
+    _pulseCtrl.repeat(reverse: true);
+
+    // Contador de segundos com auto-stop aos 30 s
     _recordingTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
       setState(() => _recordingSeconds++);
-      if (_recordingSeconds >= _maxRecordingSeconds) {
+      if (_recordingSeconds >= _maxSeconds) {
         t.cancel();
-        // Tempo máximo atingido — processa automaticamente
         _stopAndProcess();
       }
     });
   }
 
-  // Para gravação ao soltar o botão (onPointerUp) e envia ao Gemini.
+  // Para gravação e envia áudio ao Gemini para processar + auto-executar
   Future<void> _stopAndProcess() async {
     if (!_isRecording) return;
     _recordingTimer?.cancel();
     _recordingTimer = null;
-    setState(() {
-      _isRecording = false;
-      _processing  = true;
-    });
-    // Para gravação e obtém o caminho do arquivo
+    _pulseCtrl.stop();
+    _pulseCtrl.reset();
+    if (!mounted) return;
+    setState(() { _fabState = _FabState.processing; _inCancelZone = false; });
+
     final service  = ref.read(voiceServiceProvider);
     final filePath = await service.stopRecording();
     if (!mounted) return;
 
     if (filePath == null) {
-      setState(() { _processing = false; _processed = true; });
+      // Gravação falhou silenciosamente (arquivo não criado)
+      setState(() => _fabState = _FabState.idle);
       return;
     }
 
-    // Envia áudio ao Gemini Audio API
     try {
+      // 300 ms de feedback visual antes de chamar o Gemini
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+
       final result = await service.processAudio(filePath);
       if (!mounted) return;
-      // Preenche o campo editável com a transcrição do Gemini
-      _transcriptController.text = result.transcript;
-      setState(() {
-        _result     = result;
-        _processing = false;
-        _processed  = true;
-      });
-      // TTS: fala a confirmação se o toggle estiver ativo
-      final audioOn    = ref.read(voiceAudioResponseProvider);
-      final speechRate = ref.read(voiceSpeechRateProvider);
-      if (audioOn && result.intent != VoiceIntent.fallback) {
-        service.speak(_intentLabel(result), rate: speechRate);
-      }
+
+      // Executa ação sem esperar confirmação do usuário
+      await _executeResult(result);
     } catch (e) {
-      debugPrint('[VoiceBottomSheet] Erro ao processar áudio: $e');
-      if (mounted) setState(() { _processing = false; _processed = true; });
+      debugPrint('[_VoiceFab] Erro ao processar áudio: $e');
+      if (mounted) {
+        setState(() => _fabState = _FabState.error);
+        await Future.delayed(const Duration(milliseconds: 800));
+        if (mounted) setState(() => _fabState = _FabState.idle);
+      }
     }
   }
 
-  // Cancela gravação sem processar (ex.: sheet fechado com PointerCancel).
+  // Cancela gravação sem processar (usuário arrastou para cima ou evento cancelado)
   void _cancelRecording() {
     if (!_isRecording) return;
     _recordingTimer?.cancel();
     _recordingTimer = null;
+    _pulseCtrl.stop();
+    _pulseCtrl.reset();
     ref.read(voiceServiceProvider).cancelRecording();
-    if (mounted) setState(() { _isRecording = false; });
-  }
-
-  // Reinicia o sheet para o estado inicial (botão "Tentar novamente").
-  void _reset() {
-    _transcriptController.clear();
-    setState(() {
-      _isRecording      = false;
-      _processing       = false;
-      _processed        = false;
-      _unavailable      = false;
-      _result           = null;
-      _recordingSeconds = 0;
-    });
-  }
-
-  // Re-analisa o texto editado manualmente no campo de transcrição.
-  // Usa Gemini Text API com fallback regex — sem nova gravação.
-  Future<void> _reanalyze() async {
-    final text = _transcriptController.text.trim();
-    if (text.isEmpty) return;
-    setState(() {
-      _processing = true;
-      _processed  = false;
-      _result     = null;
-    });
-    try {
-      final service = ref.read(voiceServiceProvider);
-      final result  = await service.resolveIntentFromText(text);
-      if (!mounted) return;
-      setState(() {
-        _result     = result;
-        _processing = false;
-        _processed  = true;
-      });
-      final audioOn = ref.read(voiceAudioResponseProvider);
-      if (audioOn && result.intent != VoiceIntent.fallback) {
-        service.speak(_intentLabel(result),
-            rate: ref.read(voiceSpeechRateProvider));
-      }
-    } catch (e) {
-      if (mounted) setState(() { _processing = false; _processed = true; });
+    if (mounted) {
+      setState(() { _fabState = _FabState.idle; _inCancelZone = false; });
     }
   }
 
-  // Confirma a ação detectada e fecha o sheet
-  void _confirm() {
-    final result = _result;
-    if (result == null) return;
-    Navigator.pop(context);
-    widget.onResult(result);
+  // Exibe checkmark verde por 1 s e volta ao estado idle
+  Future<void> _setSuccess() async {
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.success);
+    await Future.delayed(const Duration(seconds: 1));
+    if (mounted) setState(() => _fabState = _FabState.idle);
   }
 
-  // Label curto falado/exibido ao reconhecer a intenção
-  String _intentLabel(VoiceResult r) {
-    switch (r.intent) {
+  // ── Auto-execução de intenções (zero confirmação) ─────────────────────────
+
+  // Despacha o resultado do Gemini para o handler correto.
+  // Cada handler executa a ação diretamente ou abre um sheet de continuação.
+  Future<void> _executeResult(VoiceResult result) async {
+    switch (result.intent) {
       case VoiceIntent.createTrigger:
-        return r.environmentName != null
-            ? 'Criar gatilho para ${r.environmentName}'
-            : AppStrings.voiceIntentCreate;
+        await _handleCreateTrigger(result);
       case VoiceIntent.openEnvironment:
-        return r.environmentName != null
-            ? 'Criar ambiente ${r.environmentName}'
-            : AppStrings.voiceIntentEnv;
+        await _handleOpenEnvironment(result);
       case VoiceIntent.resolveTrigger:
-        return r.triggerAction != null
-            ? 'Desativar ${r.triggerAction}'
-            : AppStrings.voiceIntentResolve;
+        await _handleResolveTrigger(result);
       case VoiceIntent.listTriggers:
-        return r.environmentName != null
-            ? 'Pendências em ${r.environmentName}'
-            : AppStrings.voiceIntentList;
+        await _handleListTriggers(result);
       case VoiceIntent.fallback:
-        return AppStrings.voiceIntentFallback;
+        await _handleFallback(result);
     }
   }
 
-  // Ícone representativo de cada intenção
-  IconData _intentIcon(VoiceIntent intent) {
-    switch (intent) {
-      case VoiceIntent.createTrigger:   return Icons.bolt_outlined;
-      case VoiceIntent.openEnvironment: return Icons.add_location_outlined;
-      case VoiceIntent.resolveTrigger:  return Icons.check_circle_outlined;
-      case VoiceIntent.listTriggers:    return Icons.list_outlined;
-      case VoiceIntent.fallback:        return Icons.edit_outlined;
+  // Busca ambiente por nome: case-insensitive, correspondência parcial (CONTAINS).
+  // Tenta exact match primeiro para evitar ambiguidades em listas grandes.
+  EnvironmentEntity? _matchEnv(List<EnvironmentEntity> envs, String? query) {
+    if (query == null || query.trim().isEmpty) return null;
+    final q = query.toLowerCase().trim();
+    // 1. Correspondência exata (case-insensitive)
+    final exact = envs.where((e) => e.name.toLowerCase() == q).firstOrNull;
+    if (exact != null) return exact;
+    // 2. Env name CONTAINS query ou vice-versa ("casa" → "Minha Casa")
+    return envs
+        .where((e) =>
+            e.name.toLowerCase().contains(q) ||
+            q.contains(e.name.toLowerCase()))
+        .firstOrNull;
+  }
+
+  // Capitaliza a primeira letra de uma string
+  String _capitalize(String s) =>
+      s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+
+  // "lembra de X quando chegar em Y" → salva TriggerEntity diretamente no banco
+  Future<void> _handleCreateTrigger(VoiceResult result) async {
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    final env  = _matchEnv(envs, result.environmentName);
+
+    if (env != null) {
+      // Ambiente encontrado → cria trigger sem interação do usuário
+      final trigger = TriggerEntity(
+        id:            const Uuid().v4(),
+        environmentId: env.id,
+        title:         result.triggerAction ?? '',
+        content:       result.transcript,
+        isActive:      true,
+        createdAt:     DateTime.now(),
+      );
+      await ref.read(triggerRepositoryProvider).save(trigger);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${AppStrings.voiceTriggerSavedIn} ${env.name} ✓'),
+        // ignore: deprecated_member_use
+        backgroundColor: Colors.green.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ));
+      await _setSuccess();
+    } else {
+      // Ambiente não encontrado → log + seletor inline para o usuário escolher
+      AppLogger.log('trigger_voice_failed', {
+        'env_name_from_gemini': result.environmentName,
+        'trigger_action':       result.triggerAction,
+        'transcript':           result.transcript,
+      });
+      if (!mounted) return;
+      setState(() => _fabState = _FabState.idle);
+      _showSheet(_EnvPickerSheet(
+        title:         AppStrings.voiceEnvPickerTitle,
+        subtitle:      result.triggerAction ?? result.transcript,
+        onEnvSelected: (env) => _saveAndConfirm(env, result),
+      ));
+    }
+  }
+
+  // Salva o trigger no ambiente escolhido pelo seletor e exibe snackbar
+  Future<void> _saveAndConfirm(EnvironmentEntity env, VoiceResult result) async {
+    final trigger = TriggerEntity(
+      id:            const Uuid().v4(),
+      environmentId: env.id,
+      title:         result.triggerAction ?? '',
+      content:       result.transcript,
+      isActive:      true,
+      createdAt:     DateTime.now(),
+    );
+    await ref.read(triggerRepositoryProvider).save(trigger);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('${AppStrings.voiceTriggerSavedIn} ${env.name} ✓'),
+      // ignore: deprecated_member_use
+      backgroundColor: Colors.green.shade700,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+    ));
+  }
+
+  // "salva esse lugar como X" → obtém GPS e abre AddEnvironmentScreen
+  Future<void> _handleOpenEnvironment(VoiceResult result) async {
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.processing);
+
+    // Obtém posição GPS atual para pré-posicionar o pin no mapa
+    LatLng? gpsPosition;
+    try {
+      final loc = await ref
+          .read(nativeLocationServiceProvider)
+          .getCurrentPosition();
+      if (loc != null) gpsPosition = LatLng(loc.latitude, loc.longitude);
+    } catch (_) {
+      // GPS indisponível — AddEnvironmentScreen usa centro padrão (São Paulo)
+    }
+
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+    // ignore: use_build_context_synchronously
+    pushScreen(
+      context,
+      AddEnvironmentScreen(
+        initialName:     _capitalize(result.environmentName ?? ''),
+        initialPosition: gpsPosition,
+      ),
+    );
+  }
+
+  // "resolvi X" → desativa o primeiro trigger que corresponda ao título
+  Future<void> _handleResolveTrigger(VoiceResult result) async {
+    final triggers = await _searchAllTriggers(result.triggerAction ?? '');
+    if (!mounted) return;
+
+    if (triggers.isNotEmpty) {
+      final first = triggers.first;
+      await ref
+          .read(triggerRepositoryProvider)
+          .setActive(first.id, active: false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          '${AppStrings.voiceTriggerDeactivated}: '
+          '"${first.title.isNotEmpty ? first.title : first.content}"',
+        ),
+        // ignore: deprecated_member_use
+        backgroundColor: Colors.green.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ));
+      await _setSuccess();
+    } else {
+      // Trigger não encontrado — sem checkmark, apenas snackbar
+      setState(() => _fabState = _FabState.idle);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          '${AppStrings.voiceTriggerNotFound}: "${result.triggerAction}"',
+        ),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ));
+    }
+  }
+
+  // "o que tenho pendente em X?" → lista triggers ativos inline (sem navegar)
+  Future<void> _handleListTriggers(VoiceResult result) async {
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    final env  = _matchEnv(envs, result.environmentName);
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+
+    if (env != null) {
+      // Exibe lista de triggers ativos do ambiente no sheet
+      _showSheet(_TriggerListSheet(environment: env));
+    } else {
+      // Ambiente não encontrado → seletor de ambiente; ao escolher → lista triggers
+      _showSheet(_EnvPickerSheet(
+        title:    AppStrings.voiceEnvPickerAction,
+        subtitle: '',
+        onEnvSelected: (e) {
+          if (mounted) _showSheet(_TriggerListSheet(environment: e));
+        },
+      ));
+    }
+  }
+
+  // Intenção não reconhecida → sheet com campo de texto editável
+  Future<void> _handleFallback(VoiceResult result) async {
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+    _showSheet(_FallbackSheet(
+      transcript: result.transcript,
+      // Re-executa a ação com a intenção re-analisada pelo usuário + Gemini
+      onResult:   (newResult) => _executeResult(newResult),
+    ));
+  }
+
+  // Busca triggers ativos em TODOS os ambientes por título ou conteúdo
+  Future<List<TriggerEntity>> _searchAllTriggers(String query) async {
+    if (query.isEmpty) return [];
+    final envs  = await ref.read(environmentRepositoryProvider).getAll();
+    final lower = query.toLowerCase();
+    final results = <TriggerEntity>[];
+    for (final env in envs) {
+      final triggers =
+          await ref.read(triggerRepositoryProvider).getByEnvironment(env.id);
+      results.addAll(triggers.where((t) =>
+          t.isActive &&
+          (t.title.toLowerCase().contains(lower) ||
+              t.content.toLowerCase().contains(lower))));
+    }
+    return results;
+  }
+
+  // Abre um bottom sheet com configuração visual padrão do Sopro
+  void _showSheet(Widget sheet) {
+    if (!mounted) return;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.backgroundElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => sheet,
+    );
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // Ícone de lixeira: aparece acima do botão durante gravação.
+        // Fica vermelho quando o dedo arrasta para cima (zona de cancelamento).
+        if (_isRecording) ...[
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width:  44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _inCancelZone
+                  ? Colors.red.shade700
+                  : AppTheme.backgroundSurface,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.delete_outline_rounded,
+              color: _inCancelZone ? Colors.white : AppTheme.textSecondary,
+              size: 22,
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+
+        // Botão principal com detector de eventos de toque
+        Listener(
+          behavior:        HitTestBehavior.opaque,
+          onPointerDown:   _onPointerDown,
+          onPointerMove:   _onPointerMove,
+          onPointerUp:     _onPointerUp,
+          onPointerCancel: _onPointerCancel,
+          child: AnimatedBuilder(
+            animation: _pulseAnim,
+            builder: (context, child) {
+              // Pulso apenas ao gravar e fora da zona de cancelamento
+              final scale = (_isRecording && !_inCancelZone)
+                  ? _pulseAnim.value
+                  : 1.0;
+              return Transform.scale(scale: scale, child: child);
+            },
+            child: _buildButtonBody(),
+          ),
+        ),
+
+        // Contador de segundos: visível somente durante gravação
+        if (_isRecording) ...[
+          const SizedBox(height: 8),
+          Text(
+            _formatSeconds(_recordingSeconds),
+            style: TextStyle(
+              color: _inCancelZone
+                  ? AppTheme.textDisabled
+                  : const Color(0xFFE53935),
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // Constrói o corpo do botão conforme o estado atual
+  Widget _buildButtonBody() {
+    final Color  bgColor;
+    final Widget child;
+
+    switch (_fabState) {
+      case _FabState.idle:
+        bgColor = AppTheme.accent;
+        child   = const Icon(Icons.mic_rounded, color: Colors.white, size: 28);
+
+      case _FabState.recording:
+        // Cinza quando na zona de cancelamento; vermelho quando gravando
+        bgColor = _inCancelZone
+            ? Colors.grey.shade600
+            : const Color(0xFFE53935);
+        child = const Icon(Icons.mic_rounded, color: Colors.white, size: 28);
+
+      case _FabState.processing:
+        bgColor = AppTheme.accent;
+        child   = const SizedBox(
+          width: 22, height: 22,
+          child: CircularProgressIndicator(
+            color: Colors.white, strokeWidth: 2.5,
+          ),
+        );
+
+      case _FabState.success:
+        bgColor = const Color(0xFF2E7D32); // verde escuro
+        child   = const Icon(Icons.check_rounded, color: Colors.white, size: 32);
+
+      case _FabState.error:
+        bgColor = Colors.red.shade700;
+        child   = const Icon(Icons.mic_off_rounded, color: Colors.white, size: 28);
+    }
+
+    return Container(
+      width:  64,
+      height: 64,
+      decoration: BoxDecoration(
+        color:  bgColor,
+        shape:  BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            // ignore: deprecated_member_use
+            color:       bgColor.withOpacity(_isRecording ? 0.55 : 0.35),
+            blurRadius:  _isRecording ? 18 : 10,
+            spreadRadius: _isRecording ? 3 : 0,
+          ),
+        ],
+      ),
+      child: Center(child: child),
+    );
+  }
+
+  // Formata segundos como "0:05" ou "1:02"
+  String _formatSeconds(int s) {
+    final min = s ~/ 60;
+    final sec = (s % 60).toString().padLeft(2, '0');
+    return '$min:$sec';
+  }
+}
+
+// ── Seletor de ambiente ────────────────────────────────────────────────────────
+
+// Exibido quando o Gemini reconhece uma intenção mas o ambiente não é encontrado
+// por nome. O usuário toca num ambiente da lista para escolher o destino da ação.
+class _EnvPickerSheet extends ConsumerWidget {
+  // Pergunta exibida no topo (ex: "Em qual ambiente?")
+  final String title;
+  // Ação reconhecida mostrada abaixo do título como contexto
+  final String subtitle;
+  // Executado quando o usuário toca num ambiente
+  final void Function(EnvironmentEntity) onEnvSelected;
+
+  const _EnvPickerSheet({
+    required this.title,
+    required this.subtitle,
+    required this.onEnvSelected,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final envsAsync = ref.watch(environmentsProvider);
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Alça visual do sheet
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: AppTheme.textDisabled,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+
+            Text(
+              title,
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+
+            // Trecho do comando reconhecido para dar contexto ao usuário
+            if (subtitle.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                '"$subtitle"',
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            const SizedBox(height: 16),
+
+            // Lista de ambientes cadastrados
+            envsAsync.when(
+              loading: () => const Center(
+                child: CircularProgressIndicator(color: AppTheme.accent),
+              ),
+              error: (_, __) => const Text(
+                AppStrings.errorGeneric,
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+              data: (envs) => envs.isEmpty
+                  ? const Text(
+                      AppStrings.homeEmptyTitle,
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: envs.length,
+                      itemBuilder: (_, i) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Container(
+                          width: 36, height: 36,
+                          decoration: BoxDecoration(
+                            // ignore: deprecated_member_use
+                            color: AppTheme.accent.withOpacity(0.12),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.location_on_outlined,
+                            color: AppTheme.accent,
+                            size: 18,
+                          ),
+                        ),
+                        title: Text(
+                          envs[i].name,
+                          style: const TextStyle(color: AppTheme.textPrimary),
+                        ),
+                        onTap: () {
+                          Navigator.pop(context);
+                          onEnvSelected(envs[i]);
+                        },
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Lista inline de triggers do ambiente ──────────────────────────────────────
+
+// Exibido pela intenção "listar_triggers" sem navegar para outra tela.
+// Mostra apenas os triggers ATIVOS do ambiente escolhido.
+class _TriggerListSheet extends ConsumerWidget {
+  final EnvironmentEntity environment;
+
+  const _TriggerListSheet({required this.environment});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<List<TriggerEntity>>(
+      future: ref
+          .read(triggerRepositoryProvider)
+          .getActiveByEnvironment(environment.id),
+      builder: (context, snap) {
+        final triggers = snap.data ?? [];
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Alça visual
+                Center(
+                  child: Container(
+                    width: 36, height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: AppTheme.textDisabled,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+
+                Text(
+                  '${AppStrings.voiceTriggerListTitle} — ${environment.name}',
+                  style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                if (!snap.hasData)
+                  const Center(
+                    child: CircularProgressIndicator(color: AppTheme.accent),
+                  )
+                else if (triggers.isEmpty)
+                  const Text(
+                    AppStrings.voiceNoTriggersPending,
+                    style: TextStyle(color: AppTheme.textSecondary),
+                  )
+                else
+                  ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: triggers.length,
+                    separatorBuilder: (_, __) => const Divider(
+                      height: 1,
+                      color: AppTheme.backgroundSurface,
+                    ),
+                    itemBuilder: (_, i) {
+                      final t = triggers[i];
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.bolt_outlined,
+                          color: AppTheme.accent,
+                        ),
+                        title: Text(
+                          t.title.isNotEmpty ? t.title : t.content,
+                          style: const TextStyle(
+                            color: AppTheme.textPrimary,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        subtitle: t.title.isNotEmpty
+                            ? Text(
+                                t.content,
+                                style: const TextStyle(
+                                  color: AppTheme.textSecondary,
+                                  fontSize: 12,
+                                ),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              )
+                            : null,
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ── Sheet de fallback (intenção não reconhecida) ──────────────────────────────
+
+// Exibido quando o Gemini retorna "nao_entendido".
+// O usuário pode editar o texto e re-analisar para corrigir erros de STT.
+class _FallbackSheet extends ConsumerStatefulWidget {
+  // Transcrição retornada pelo Gemini (pode ser vazia se STT falhou)
+  final String transcript;
+  // Callback com o resultado re-analisado para execução
+  final void Function(VoiceResult) onResult;
+
+  const _FallbackSheet({
+    required this.transcript,
+    required this.onResult,
+  });
+
+  @override
+  ConsumerState<_FallbackSheet> createState() => _FallbackSheetState();
+}
+
+class _FallbackSheetState extends ConsumerState<_FallbackSheet> {
+  late final TextEditingController _ctrl;
+  bool _reanalyzing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.transcript);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  // Envia o texto editado ao Gemini para nova tentativa de classificação
+  Future<void> _reanalyze() async {
+    final text = _ctrl.text.trim();
+    if (text.isEmpty) return;
+    setState(() => _reanalyzing = true);
+    try {
+      final result =
+          await ref.read(voiceServiceProvider).resolveIntentFromText(text);
+      if (!mounted) return;
+      Navigator.pop(context);
+      widget.onResult(result);
+    } finally {
+      if (mounted) setState(() => _reanalyzing = false);
     }
   }
 
@@ -496,246 +975,88 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.fromLTRB(
-        20, 20, 20,
+        20, 16, 20,
         20 + MediaQuery.of(context).viewInsets.bottom,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Alça visual do sheet
-          Container(
-            width: 36, height: 4,
-            margin: const EdgeInsets.only(bottom: 20),
-            decoration: BoxDecoration(
-              color: AppTheme.textDisabled,
-              borderRadius: BorderRadius.circular(2),
+          // Alça visual
+          Center(
+            child: Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: AppTheme.textDisabled,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
           ),
 
-          if (_unavailable) ...[
-            // ── Erro: microfone indisponível ─────────────────────────────
-            const Icon(Icons.mic_off_outlined, color: AppTheme.accent, size: 48),
-            const SizedBox(height: 12),
-            const Text(
-              AppStrings.voiceNotAvailable,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.textSecondary),
+          const Text(
+            AppStrings.voiceIntentFallback,
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
             ),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton(
-                onPressed: () => Navigator.pop(context),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppTheme.accent,
-                  side: const BorderSide(color: AppTheme.accent),
-                ),
-                child: const Text(AppStrings.voiceClose),
+          ),
+          const SizedBox(height: 6),
+          // Exemplos de comandos para guiar o usuário na re-digitação
+          const Text(
+            AppStrings.voiceExamples,
+            style: TextStyle(
+              color: AppTheme.textDisabled,
+              fontSize: 11,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Campo de texto editável com a transcrição do Gemini
+          TextField(
+            controller: _ctrl,
+            autofocus:  true,
+            style: const TextStyle(color: AppTheme.textPrimary),
+            maxLines: 3,
+            minLines: 1,
+            decoration: InputDecoration(
+              labelText:  AppStrings.voiceTranscriptLabel,
+              labelStyle: const TextStyle(color: AppTheme.textSecondary),
+              filled:     true,
+              fillColor:  AppTheme.backgroundSurface,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none,
               ),
             ),
+          ),
+          const SizedBox(height: 16),
 
-          ] else if (_processing) ...[
-            // ── Processando: aguarda Gemini Audio ─────────────────────────
-            const Text(
-              AppStrings.voiceProcessing,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
+          // Botão de re-análise: chama Gemini com o texto corrigido
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _reanalyzing ? null : _reanalyze,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.accent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
               ),
-            ),
-            const SizedBox(height: 24),
-            const CircularProgressIndicator(color: AppTheme.accent),
-            const SizedBox(height: 16),
-            Text(
-              'Analisando ${_recordingSeconds}s de áudio...',
-              style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 13),
-            ),
-            const SizedBox(height: 8),
-
-          ] else if (_processed) ...[
-            // ── Resultado: transcrição + intenção ─────────────────────────
-            const Text(
-              AppStrings.voiceResultTitle,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // Campo editável com a transcrição do Gemini.
-            // O usuário pode corrigir e tocar ↺ para re-analisar.
-            TextField(
-              controller: _transcriptController,
-              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-              maxLines: 2,
-              minLines: 1,
-              decoration: InputDecoration(
-                labelText:  AppStrings.voiceTranscriptLabel,
-                labelStyle: const TextStyle(color: AppTheme.textSecondary),
-                filled:     true,
-                fillColor:  AppTheme.backgroundSurface,
-                border:     OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
-                // Botão de re-análise: processa o texto editado
-                suffixIcon: IconButton(
-                  icon:    const Icon(Icons.refresh, size: 20),
-                  color:   AppTheme.accent,
-                  tooltip: AppStrings.voiceReanalyze,
-                  onPressed: _reanalyze,
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // Card com a ação reconhecida
-            if (_result != null)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppTheme.backgroundSurface,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 44, height: 44,
-                      decoration: BoxDecoration(
-                        color: AppTheme.accent.withOpacity(0.15),
-                        shape: BoxShape.circle,
+              child: _reanalyzing
+                  ? const SizedBox(
+                      width: 20, height: 20,
+                      child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2,
                       ),
-                      child: Icon(
-                        _intentIcon(_result!.intent),
-                        color: AppTheme.accent,
-                        size: 22,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        _intentLabel(_result!),
-                        style: const TextStyle(
-                          color: AppTheme.textPrimary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            const SizedBox(height: 20),
-
-            // Botões: Tentar novamente | Confirmar
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _reset,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppTheme.textSecondary,
-                      side: const BorderSide(color: AppTheme.backgroundElevated),
-                    ),
-                    child: const Text(AppStrings.voiceRetry),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _result != null ? _confirm : null,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.accent,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: const Text(
-                      AppStrings.voiceConfirm,
+                    )
+                  : const Text(
+                      AppStrings.voiceReanalyze,
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
-                  ),
-                ),
-              ],
             ),
-
-          ] else ...[
-            // ── Idle: botão de gravação (segure para gravar) ─────────────
-            const Text(
-              AppStrings.voiceHoldToSpeak,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              // Mostra "Gravando... Xs" quando _isRecording, senão dica de exemplos
-              _isRecording
-                  ? AppStrings.voiceListeningHint  // "Solte para processar"
-                  : AppStrings.voiceExamples,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: _isRecording ? AppTheme.accent : AppTheme.textDisabled,
-                fontSize: 12,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Botão de gravação: segure para gravar, solte para processar.
-            // Listener captura pointer events antes do GestureDetector do sheet.
-            Listener(
-              behavior: HitTestBehavior.opaque,
-              onPointerDown: (_) => _startRecording(),
-              onPointerUp:   (_) => _stopAndProcess(),
-              onPointerCancel: (_) => _cancelRecording(),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width:  88,
-                height: 88,
-                decoration: BoxDecoration(
-                  // Vermelho quando gravando, accent quando idle
-                  color: _isRecording
-                      ? const Color(0xFFE53935)
-                      : AppTheme.accent,
-                  shape: BoxShape.circle,
-                  boxShadow: _isRecording
-                      ? [BoxShadow(
-                          color: const Color(0xFFE53935).withOpacity(0.5),
-                          blurRadius: 20, spreadRadius: 4,
-                        )]
-                      : [],
-                ),
-                child: Icon(
-                  _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
-                  color: Colors.white,
-                  size:  40,
-                ),
-              ),
-            ),
-
-            // Contador de segundos durante gravação
-            if (_isRecording) ...[
-              const SizedBox(height: 12),
-              Text(
-                '$_recordingSeconds s',
-                style: const TextStyle(
-                  color: Color(0xFFE53935),
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-            const SizedBox(height: 24),
-          ],
-
+          ),
           const SizedBox(height: 8),
         ],
       ),
@@ -743,6 +1064,7 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
   }
 }
 
+// ── Estado vazio da lista de ambientes ───────────────────────────────────────
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState();

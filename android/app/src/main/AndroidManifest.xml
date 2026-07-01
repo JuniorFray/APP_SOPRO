@@ -46,6 +46,11 @@
     <!-- Microfone para reconhecimento de voz on-device (Sprint V2-Voz) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
 
+    <!-- Permite exibir janela flutuante sobre outros apps (V3 — botão global de voz).
+         Requer Settings.ACTION_MANAGE_OVERLAY_PERMISSION no Android 6+ (API 23+).
+         Adicionado preventivamente na V2 para que a permissão apareça no manifesto. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+
     <!-- Galeria de fotos para o perfil (image_picker) — Android 13+ usa READ_MEDIA_IMAGES -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <!-- Fallback para Android 12 e anteriores -->

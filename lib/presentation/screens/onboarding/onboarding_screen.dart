@@ -42,7 +42,8 @@ class _Step {
   });
 }
 
-// Conteúdo dos 4 passos — constante para evitar recriação a cada rebuild
+// Conteúdo dos 5 passos — constante para evitar recriação a cada rebuild.
+// Passo 4 é opcional/informativo (sem permissão obrigatória), antecipa V3.
 const _steps = [
   _Step(
     icon: Icons.air,
@@ -67,6 +68,12 @@ const _steps = [
     iconColor: Color(0xFF42A5F5), // azul — Bluetooth
     title: AppStrings.obBleTitle,
     body: AppStrings.obBleBody,
+  ),
+  _Step(
+    icon: Icons.mic_external_on_outlined,
+    iconColor: AppTheme.accent, // accent — botão de voz
+    title: AppStrings.obOverlayTitle,
+    body: AppStrings.obOverlayBody,
   ),
 ];
 
@@ -160,7 +167,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   // Solicita BLUETOOTH_SCAN e BLUETOOTH_ADVERTISE (Android 12+ / API 31+).
-  // Conclui o onboarding se concedido; exibe mensagem de impacto se negado.
+  // Avança para o passo de overlay (informativo) se concedido; exibe mensagem de impacto se negado.
   Future<void> _requestBle() async {
     setState(() => _actionInProgress = true);
     bool granted = false;
@@ -173,7 +180,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
     if (!mounted) return;
     if (granted) {
-      _goHome();
+      // Avança para o passo 4 (overlay informativo) em vez de ir direto ao home
+      _nextPage();
     } else {
       // Mostra aviso e aguarda o usuário pressionar "Continuar assim mesmo"
       setState(() => _denialMessage = AppStrings.obBleDenied);
@@ -188,6 +196,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       case 1:  return AppStrings.obLocationBtn;
       case 2:  return AppStrings.obNotifBtn;
       case 3:  return AppStrings.obBleBtn;
+      // Passo 4: overlay informativo (sem permissão obrigatória)
+      case 4:  return AppStrings.obOverlayBtn;
       default: return AppStrings.obNext;
     }
   }
@@ -205,6 +215,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       case 1:  return _requestLocation;
       case 2:  return _requestNotifications;
       case 3:  return _requestBle;
+      // Passo 4: informativo — botão "Entendido" apenas conclui o onboarding
+      case 4:  return _goHome;
       default: return _nextPage;
     }
   }

@@ -254,4 +254,29 @@ class AppStrings {
   static const voiceTranscriptLabel    = 'O que você disse';
   // Tooltip do botão de re-análise no campo de transcrição
   static const voiceReanalyze         = 'Re-analisar';
+
+  // ── Voz — fluxo sem confirmação (Sprint V2-VoicePro) ─────────────────────
+  // Prefixo do snackbar de sucesso ao criar gatilho por voz
+  static const voiceTriggerSavedIn     = 'Gatilho criado em';
+  // Mensagem ao desativar gatilho por voz
+  static const voiceTriggerDeactivated = 'Desativado';
+  // Mensagem quando o gatilho não é encontrado para resolução
+  static const voiceTriggerNotFound    = 'Gatilho não encontrado';
+  // Título do seletor de ambiente quando o Gemini não encontra o local
+  static const voiceEnvPickerTitle     = 'Em qual ambiente?';
+  // Título do seletor quando o usuário pede pendências de um local
+  static const voiceEnvPickerAction    = 'Pendências de qual ambiente?';
+  // Título da lista inline de gatilhos (listar_triggers)
+  static const voiceTriggerListTitle   = 'Pendências';
+  // Exibido quando o ambiente não tem gatilhos ativos
+  static const voiceNoTriggersPending  = 'Nenhum gatilho ativo neste ambiente';
+
+  // ── Onboarding — passo 4: overlay (V3) ───────────────────────────────────
+  // Passo opcional que informa sobre o botão flutuante global previsto para V3
+  static const obOverlayTitle = 'Acesso rápido (em breve)';
+  static const obOverlayBody  =
+      'Na próxima versão, o Sopro terá um botão flutuante que aparece em '
+      'qualquer tela do celular — sem precisar abrir o app. '
+      'Você pode habilitar essa permissão agora ou depois nas Configurações.';
+  static const obOverlayBtn   = 'Entendido';
 }
