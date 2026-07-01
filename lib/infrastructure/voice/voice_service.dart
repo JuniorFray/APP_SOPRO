@@ -6,6 +6,7 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
 import 'package:sopro/core/constants/app_constants.dart';
+import 'package:sopro/infrastructure/logging/app_logger.dart';
 
 // Intenções de voz que o app sabe executar.
 enum VoiceIntent {
@@ -42,7 +43,7 @@ class VoiceResult {
 
 // Gerencia reconhecimento de fala (STT) e síntese de voz (TTS) on-device.
 // Processamento primário via Gemini API; fallback para regex local se offline
-// ou se GEMINI_API_KEY estiver vazio.
+// ou se geminiApiKey estiver vazio em AppConstants.
 class VoiceService {
   // Engine de reconhecimento de fala (on-device)
   final _stt = SpeechToText();
@@ -103,7 +104,7 @@ class VoiceService {
         }
       }
       // Nenhum locale português encontrado → usa padrão do sistema
-      debugPrint('[VoiceService] pt-BR não encontrado. Locales disponíveis: '
+      debugPrint('[VoiceService] pt-BR não encontrado. Locales: '
           '${locales.map((l) => l.localeId).join(', ')}');
     } catch (e) {
       // Falha silenciosa — localeId null faz o STT usar o padrão do sistema
@@ -122,7 +123,7 @@ class VoiceService {
     if (_sttReady) {
       // Detecta locale pt-BR uma única vez após inicialização bem-sucedida
       await _findPtBrLocale();
-      debugPrint('[VoiceService] Locale pt-BR: $_ptBrLocaleId');
+      debugPrint('[VoiceService] Locale pt-BR detectado: $_ptBrLocaleId');
     }
     return _sttReady;
   }
@@ -195,33 +196,74 @@ class VoiceService {
   // ── Processamento de intenção ─────────────────────────────────────────────
 
   // Ponto de entrada principal para processar uma transcrição.
-  // 1. Tenta Gemini API se a chave estiver configurada.
-  // 2. Faz fallback para regex local se Gemini falhar ou não houver internet.
+  // 1. Tenta Gemini API se geminiApiKey estiver configurado.
+  // 2. Faz fallback para regex local se Gemini falhar ou sem internet.
+  // 3. Loga um evento 'voice_debug' no Supabase com todo o diagnóstico.
   Future<VoiceResult> resolveIntent(String transcript) async {
+    // Mapa de diagnóstico — preenchido ao longo do fluxo e logado no final
+    final debug = <String, dynamic>{
+      'transcript':     transcript,
+      // Não logamos a chave em si — apenas se está preenchida (true/false)
+      'has_key':        AppConstants.geminiApiKey.isNotEmpty,
+      'locale_used':    _ptBrLocaleId ?? 'system_default',
+      'gemini_called':  false,
+      'gemini_http':    null,  // status HTTP da chamada Gemini
+      'gemini_raw':     null,  // texto bruto retornado pelo modelo
+      'gemini_error':   null,  // mensagem de erro, se houve
+      'final_intent':   null,  // nome do enum VoiceIntent escolhido
+      'environment':    null,
+      'trigger_action': null,
+    };
+
     // Sem texto não há o que processar
     if (transcript.trim().isEmpty) {
+      debug['final_intent'] = 'fallback_empty';
+      AppLogger.log('voice_debug', debug);
       return VoiceResult(intent: VoiceIntent.fallback, transcript: transcript);
     }
 
+    VoiceResult? geminiResult;
+
     // Tenta Gemini apenas se a chave estiver preenchida
     if (AppConstants.geminiApiKey.isNotEmpty) {
+      debug['gemini_called'] = true;
       try {
-        final geminiResult = await _processIntentWithGemini(transcript);
-        if (geminiResult != null) return geminiResult;
+        // _processIntentWithGemini retorna (resultado, rawJson, httpStatus)
+        final (result, raw, httpStatus) =
+            await _processIntentWithGemini(transcript);
+        geminiResult          = result;
+        debug['gemini_raw']   = raw;
+        debug['gemini_http']  = httpStatus;
       } catch (e) {
-        // Gemini falhou (sem internet, cota excedida, etc.) → usa regex
-        debugPrint('[VoiceService] Gemini indisponível, usando regex: $e');
+        // Gemini falhou (sem internet, timeout, etc.) → usa regex
+        debug['gemini_error'] = e.toString();
+        debugPrint('[VoiceService] Gemini indisponível: $e');
       }
     }
 
-    // Fallback: regex on-device, determinístico e offline
-    return parseIntent(transcript);
+    // Fallback para regex se Gemini não retornou resultado válido
+    final finalResult = geminiResult ?? parseIntent(transcript);
+
+    // Preenche campos de diagnóstico com o resultado final
+    debug['final_intent']   = finalResult.intent.name;
+    debug['environment']    = finalResult.environmentName;
+    debug['trigger_action'] = finalResult.triggerAction;
+
+    // Log de diagnóstico no Supabase (fire-and-forget, nunca bloqueia UI)
+    AppLogger.log('voice_debug', debug);
+    debugPrint('[VoiceService] voice_debug: $debug');
+
+    return finalResult;
   }
 
-  // Envia a transcrição ao Gemini Flash Lite e interpreta a resposta JSON.
-  // Retorna null se a resposta for inválida ou a chamada falhar.
-  Future<VoiceResult?> _processIntentWithGemini(String transcript) async {
+  // Envia a transcrição ao Gemini e interpreta a resposta JSON.
+  // Retorna um record (VoiceResult?, String? rawText, int? httpStatus).
+  // VoiceResult é null se a resposta for inválida ou a chamada falhar.
+  Future<(VoiceResult?, String?, int?)> _processIntentWithGemini(
+    String transcript,
+  ) async {
     final client = HttpClient();
+    // Timeout de 8 s — latência típica do Gemini Flash é ~300-500 ms
     client.connectionTimeout = const Duration(seconds: 8);
 
     try {
@@ -239,69 +281,97 @@ class VoiceService {
           {
             'role': 'user',
             'parts': [
-              // O system prompt ensina o modelo o contrato de resposta JSON
+              // System prompt define o contrato de resposta JSON
               {'text': AppConstants.geminiSystemPrompt},
-              // Transcrição real do usuário que o modelo deve classificar
+              // Transcrição real que deve ser classificada
               {'text': transcript},
             ],
           },
         ],
-        // Configuração de geração: temperatura 0 = determinístico / sem criatividade
+        // Temperatura 0 = determinístico, sem criatividade — queremos JSON exato
         'generationConfig': {
-          'temperature': 0,
-          'maxOutputTokens': 128,
+          'temperature':     0,
+          'maxOutputTokens': 200,
         },
       });
 
-      request.write(body);
-      final response = await request.close();
+      // Define Content-Length explicitamente (necessário para dart:io)
+      final bodyBytes = utf8.encode(body);
+      request.contentLength = bodyBytes.length;
+      request.add(bodyBytes);
 
-      // Qualquer status diferente de 200 é tratado como falha
-      if (response.statusCode != 200) {
-        debugPrint('[VoiceService] Gemini HTTP ${response.statusCode}');
-        return null;
+      final response = await request.close();
+      final httpStatus = response.statusCode;
+
+      // Lê o corpo completo da resposta
+      final raw = await response.transform(utf8.decoder).join();
+
+      // Status diferente de 200 = erro da API (cota, chave inválida, etc.)
+      if (httpStatus != 200) {
+        debugPrint('[VoiceService] Gemini HTTP $httpStatus: $raw');
+        // Retorna (null, raw para diagnóstico, httpStatus)
+        return (null, 'HTTP $httpStatus: $raw', httpStatus);
       }
 
-      // Lê o corpo da resposta e decodifica o JSON externo (envelope Gemini)
-      final raw = await response.transform(utf8.decoder).join();
+      // Decodifica o envelope externo do Gemini
       final envelope = jsonDecode(raw) as Map<String, dynamic>;
 
-      // Extrai o texto gerado dentro do envelope padrão da API Gemini
+      // Navega pela estrutura: candidates[0].content.parts[0].text
       final text = (((envelope['candidates'] as List?)?.firstOrNull
               as Map?)?['content'] as Map?)?['parts']
           ?[0]?['text'] as String?;
 
-      if (text == null || text.trim().isEmpty) return null;
+      if (text == null || text.trim().isEmpty) {
+        return (null, 'empty_candidates', httpStatus);
+      }
 
-      // Remove possíveis blocos markdown que o modelo pode adicionar por engano
-      final clean = text.replaceAll(RegExp(r'```[a-z]*\n?|```'), '').trim();
+      // Remove marcadores markdown que o modelo pode adicionar por engano
+      // Ex.: ```json\n{"intent":...}\n``` → {"intent":...}
+      final clean = _stripMarkdown(text);
+      debugPrint('[VoiceService] Gemini texto limpo: $clean');
 
       // Decodifica o JSON interno (objeto de intenção)
       final Map<String, dynamic> parsed;
       try {
         parsed = jsonDecode(clean) as Map<String, dynamic>;
-      } catch (_) {
-        // Gemini retornou algo que não é JSON — ignora e vai para regex
-        debugPrint('[VoiceService] Gemini resposta não-JSON: $clean');
-        return null;
+      } catch (e) {
+        // Modelo retornou algo que não é JSON — fallback para regex
+        debugPrint('[VoiceService] JSON inválido da Gemini: $clean');
+        return (null, 'invalid_json: $clean', httpStatus);
       }
 
-      // Converte o objeto JSON para VoiceResult
-      return _mapGeminiResponse(parsed, transcript);
+      // Converte o objeto JSON para VoiceResult tipado
+      final result = _mapGeminiResponse(parsed, transcript);
+      return (result, clean, httpStatus);
     } finally {
-      // Fecha o cliente HTTP em qualquer caso (sucesso ou erro)
+      // Fecha o HttpClient em qualquer caso (sucesso ou erro)
       client.close();
     }
+  }
+
+  // Remove blocos de markdown de código que o modelo pode adicionar.
+  // Trata variações: ```json, ```JSON, ```, com ou sem quebra de linha.
+  static String _stripMarkdown(String text) {
+    return text
+        // Remove abertura de bloco (```json, ```JSON, ``` etc.)
+        .replaceAll(RegExp(r'```[a-zA-Z]*[\r\n]*'), '')
+        // Remove fechamento de bloco (```)
+        .replaceAll('```', '')
+        // Remove espaços e quebras de linha desnecessárias
+        .trim();
   }
 
   // Converte o objeto JSON retornado pelo Gemini em VoiceResult tipado.
   // [json]: mapa com chaves 'intent', 'ambiente', 'titulo', 'conteudo'.
   // [transcript]: transcrição original para preservar no resultado.
-  VoiceResult _mapGeminiResponse(Map<String, dynamic> json, String transcript) {
+  VoiceResult _mapGeminiResponse(
+    Map<String, dynamic> json,
+    String transcript,
+  ) {
     // Valor padrão 'nao_entendido' se a chave estiver ausente
-    final intentStr     = (json['intent']   as String?) ?? 'nao_entendido';
-    final ambiente      = json['ambiente']  as String?;
-    final titulo        = json['titulo']    as String?;
+    final intentStr = (json['intent'] as String?) ?? 'nao_entendido';
+    final ambiente  = json['ambiente'] as String?;
+    final titulo    = json['titulo']   as String?;
 
     // Mapeamento das strings de intenção do Gemini para o enum local
     final VoiceIntent intent;

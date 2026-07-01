@@ -14,6 +14,7 @@ import 'package:uuid/uuid.dart';
 //   geofence_exit  — usuário saiu de um ambiente (GeofenceManager)
 //   trigger_fired  — notificação de trigger disparada (FireTriggersUseCase)
 //   ble_error      — falha em operação BLE (BleService)
+//   voice_debug    — diagnóstico de intenção de voz (VoiceService.resolveIntent)
 class AppLogger {
   AppLogger._();
 
