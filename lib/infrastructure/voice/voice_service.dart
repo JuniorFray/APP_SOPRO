@@ -139,14 +139,17 @@ class VoiceService {
   // ── Gemini Audio ──────────────────────────────────────────────────────────
 
   // Lê o arquivo de áudio, envia ao Gemini Audio API e retorna VoiceResult.
-  // Loga 'voice_debug' no Supabase com: audio_size_bytes, gemini_http,
-  // gemini_raw (resposta bruta), gemini_error e final_intent.
+  // Loga 'voice_debug' no Supabase com: audio_size_bytes, model_used,
+  // gemini_http, gemini_raw (resposta bruta), gemini_error e final_intent.
   Future<VoiceResult> processAudio(String filePath) async {
     final file = File(filePath);
 
-    // Mapa de diagnóstico logado no Supabase ao final
+    // Mapa de diagnóstico logado no Supabase ao final.
+    // model_used confirma qual endpoint foi chamado (diagnóstico de 404).
+    // audio_size_bytes=0 indica falha na gravação, não na API.
     final debug = <String, dynamic>{
       'audio_size_bytes': 0,
+      'model_used':       AppConstants.geminiModel,
       'gemini_http':      null,
       'gemini_raw':       null,
       'gemini_error':     null,
@@ -159,9 +162,20 @@ class VoiceService {
       return const VoiceResult(intent: VoiceIntent.fallback, transcript: '');
     }
 
-    // Lê bytes do arquivo e codifica em base64 para o payload do Gemini
+    // Lê bytes do arquivo e codifica em base64 para o payload do Gemini.
+    // audio_size_bytes=0 significa que o AudioRecorder não gravou nada —
+    // investigar permissão de microfone ou problema no pacote record.
     final audioBytes  = await file.readAsBytes();
     debug['audio_size_bytes'] = audioBytes.length;
+
+    if (audioBytes.isEmpty) {
+      // Arquivo existe mas está vazio: falha na gravação, não na API
+      debug['gemini_error'] = 'empty_audio_file';
+      AppLogger.log('voice_debug', debug);
+      debugPrint('[VoiceService] Arquivo de áudio vazio — falha na gravação');
+      return const VoiceResult(intent: VoiceIntent.fallback, transcript: '');
+    }
+
     final audioBase64 = base64Encode(audioBytes);
 
     VoiceResult? geminiResult;

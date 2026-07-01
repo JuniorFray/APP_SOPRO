@@ -13,12 +13,14 @@ class AppConstants {
   static String get geminiApiKey =>
       dotenv.env['GEMINI_API_KEY'] ?? '';
 
-  // Endpoint do modelo Gemini 2.5 Flash (suporta áudio inline em base64).
-  // gemini-2.5-flash-preview-05-20 processa áudio + NLU em uma única chamada —
-  // elimina a necessidade de STT on-device separado.
+  // Modelo Gemini ativo. gemini-1.5-flash e gemini-2.0-flash foram desligados
+  // em junho de 2026 e retornam 404. gemini-2.5-flash é o substituto estável.
+  static const geminiModel = 'gemini-2.5-flash';
+
+  // Endpoint do Gemini 2.5 Flash (suporta áudio inline em base64 + NLU).
   static const geminiEndpoint =
       'https://generativelanguage.googleapis.com/v1beta/models/'
-      'gemini-2.5-flash-preview-05-20:generateContent';
+      '$geminiModel:generateContent';
 
   // System prompt enviado junto com o áudio ao Gemini.
   // Contrato de resposta JSON com campo 'transcricao' obrigatório:
