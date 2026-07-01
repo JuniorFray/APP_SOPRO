@@ -228,11 +228,24 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     ));
   }
 
-  // Long press reconhecido (>= 500 ms) → inicia gravação
+  // Long press reconhecido (>= 500 ms) → configura estado e inicia gravação.
+  // IMPORTANTE: setState de recording acontece AQUI, antes de qualquer await,
+  // para que _isRecording() retorne true imediatamente. Sem isso há race
+  // condition: se o usuário soltar entre o long press (t=0) e o await de
+  // startRecording() terminar (~50-200ms), onLongPressEnd via _isRecording=false
+  // retorna sem chamar _stopAndProcess() e o botão fica preso em "gravando".
   void _onLongPressStart(LongPressStartDetails _) {
     if (_fabState != _FabState.idle) return;
     _inCancelZone = false;
-    _startRecording();
+    // Seta recording ANTES do await em _startRecording()
+    setState(() { _fabState = _FabState.recording; _recordingSeconds = 0; });
+    _pulseCtrl.repeat(reverse: true);
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _recordingSeconds++);
+      if (_recordingSeconds >= _maxSeconds) { t.cancel(); _stopAndProcess(); }
+    });
+    _startRecording(); // dispara nativo async — erro reverte o estado
   }
 
   // Dedo movendo durante o long press → detecta zona de cancelamento
@@ -257,35 +270,28 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   // ── Ciclo de gravação ──────────────────────────────────────────────────────
 
-  // Inicia gravação e contador de segundos
+  // Ativa o microfone nativo (async). Estado e timer já foram configurados
+  // em _onLongPressStart — este método só precisa lidar com falha de init.
   Future<void> _startRecording() async {
     final service = ref.read(voiceServiceProvider);
     final ok      = await service.startRecording();
     if (!mounted) return;
 
-    if (!ok) {
-      // Permissão de microfone negada ou hardware indisponível
-      setState(() => _fabState = _FabState.error);
-      await Future.delayed(const Duration(milliseconds: 800));
-      if (mounted) setState(() => _fabState = _FabState.idle);
+    if (ok) {
+      // Sucesso: se o usuário já soltou enquanto o mic iniciava,
+      // _stopAndProcess() já foi chamado e o estado não é mais recording —
+      // nesse caso a gravação real começa mas será parada no fluxo normal.
       return;
     }
 
-    setState(() {
-      _fabState         = _FabState.recording;
-      _recordingSeconds = 0;
-    });
-    _pulseCtrl.repeat(reverse: true);
-
-    // Contador de segundos com auto-stop aos 30 s
-    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (!mounted) { t.cancel(); return; }
-      setState(() => _recordingSeconds++);
-      if (_recordingSeconds >= _maxSeconds) {
-        t.cancel();
-        _stopAndProcess();
-      }
-    });
+    // Falha (permissão negada / hardware): reverte tudo
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+    _pulseCtrl.stop();
+    _pulseCtrl.reset();
+    setState(() => _fabState = _FabState.error);
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (mounted) setState(() => _fabState = _FabState.idle);
   }
 
   // Para gravação e envia áudio ao Gemini para processar + auto-executar
@@ -364,7 +370,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     switch (result.intent) {
       case VoiceIntent.createTrigger:
         await _handleCreateTrigger(result);
-      case VoiceIntent.openEnvironment:
+      case VoiceIntent.createEnvironment:
         await _handleOpenEnvironment(result);
       case VoiceIntent.createEnvironmentWithTrigger:
         await _handleCreateEnvironmentWithTrigger(result);

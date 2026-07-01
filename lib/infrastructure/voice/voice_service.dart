@@ -15,7 +15,7 @@ enum VoiceIntent {
   // "lembra de X quando eu chegar em Y"
   createTrigger,
   // "salva esse lugar como X" / "cria um ambiente chamado X"
-  openEnvironment,
+  createEnvironment,
   // "quando eu chegar em X lembra de Y e também Z" — cria ambiente + gatilhos juntos
   createEnvironmentWithTrigger,
   // "muda o raio de X para 200" / "atualiza o ambiente X"
@@ -443,7 +443,7 @@ class VoiceService {
         final envName = env is Map ? env['name'] as String? : env as String?;
         final radius  = env is Map ? (env['radius'] as num?)?.toInt() : null;
         return VoiceResult(
-          intent:            VoiceIntent.openEnvironment,
+          intent:            VoiceIntent.createEnvironment,
           transcript:        transcricao,
           environmentName:   envName,
           environmentRadius: radius,
@@ -515,7 +515,7 @@ class VoiceService {
 
       case 'criar_ambiente':
         return VoiceResult(
-          intent:          VoiceIntent.openEnvironment,
+          intent:          VoiceIntent.createEnvironment,
           transcript:      transcricao,
           environmentName: json['ambiente'] as String?,
         );
@@ -586,7 +586,7 @@ class VoiceService {
     final envMatch = _regexOpenEnv.firstMatch(lower);
     if (envMatch != null) {
       return VoiceResult(
-        intent:          VoiceIntent.openEnvironment,
+        intent:          VoiceIntent.createEnvironment,
         transcript:      transcript,
         environmentName: _capitalize(envMatch.group(1)?.trim() ?? ''),
       );
