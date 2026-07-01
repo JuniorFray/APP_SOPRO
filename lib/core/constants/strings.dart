@@ -216,4 +216,34 @@ class AppStrings {
   static const editEnvironmentTitle = 'Editar Ambiente';
   static const editTriggerTitle     = 'Editar Gatilho';
   static const editTooltip          = 'Editar';
+
+  // ── Voz (Sprint V2-Voz) ─────────────────────────────────────────────────
+  static const voiceSection            = 'Interação por voz';
+  static const voiceAudioResponse      = 'Resposta em áudio';
+  static const voiceAudioResponseDesc  = 'Sopro fala a confirmação da ação reconhecida';
+  static const voiceTextResponse       = 'Resposta em texto';
+  static const voiceTextResponseDesc   = 'Exibe a confirmação na tela';
+  static const voiceSpeechRate         = 'Velocidade da fala';
+  static const voiceRateSlow           = 'Lenta';
+  static const voiceRateNormal         = 'Normal';
+  static const voiceRateFast           = 'Rápida';
+  static const voiceListeningTitle     = 'Ouvindo...';
+  static const voiceListeningHint      = 'Fale um comando';
+  static const voiceResultTitle        = 'Ação reconhecida';
+  static const voiceConfirm            = 'Confirmar';
+  static const voiceRetry              = 'Tentar novamente';
+  static const voiceClose              = 'Fechar';
+  static const voiceNotAvailable       = 'Reconhecimento de voz não disponível neste dispositivo';
+  static const voicePermissionDenied   = 'Permissão de microfone necessária para usar a voz';
+  static const voiceExamples           =
+      '"Lembra de ligar para o médico quando eu chegar em casa"\n'
+      '"Cria um ambiente aqui chamado Mercado"\n'
+      '"O que tenho pendente em Trabalho?"';
+  static const voiceIntentCreate       = 'Criar gatilho';
+  static const voiceIntentEnv          = 'Criar ambiente';
+  static const voiceIntentResolve      = 'Marcar como resolvido';
+  static const voiceIntentList         = 'Ver pendências do ambiente';
+  static const voiceIntentFallback     = 'Criar gatilho com texto livre';
+  static const voiceMicTooltip         = 'Falar';
+  static const voiceFillHint           = 'Ditando...';
 }

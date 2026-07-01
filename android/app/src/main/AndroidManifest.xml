@@ -43,6 +43,9 @@
          No Android 11+, o usuário concede via Configurações > Localização > "Sempre". -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
 
+    <!-- Microfone para reconhecimento de voz on-device (Sprint V2-Voz) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
     <!-- Galeria de fotos para o perfil (image_picker) — Android 13+ usa READ_MEDIA_IMAGES -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <!-- Fallback para Android 12 e anteriores -->

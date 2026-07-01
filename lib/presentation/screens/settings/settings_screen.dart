@@ -7,6 +7,7 @@ import '../../../core/navigation/app_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/settings_providers.dart';
+import '../../providers/voice_providers.dart';
 import '../encounters/encounters_screen.dart';
 
 // Tela de Configurações do Sopro.
@@ -23,6 +24,9 @@ class SettingsScreen extends ConsumerWidget {
     final notifEnabled  = ref.watch(notificationsEnabledProvider);
     final notifSound    = ref.watch(notificationSoundProvider);
     final notifCooldown = ref.watch(notificationCooldownMinutesProvider);
+    final voiceAudio    = ref.watch(voiceAudioResponseProvider);
+    final voiceText     = ref.watch(voiceTextResponseProvider);
+    final voiceRate     = ref.watch(voiceSpeechRateProvider);
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
@@ -99,6 +103,45 @@ class SettingsScreen extends ConsumerWidget {
               ref.read(notificationCooldownMinutesProvider.notifier).state = v;
               final prefs = await SharedPreferences.getInstance();
               await prefs.setInt('notification_cooldown_minutes', v);
+            },
+          ),
+
+          const _Divider(),
+
+          // ─── Seção: Interação por voz ──────────────────────────────────────
+          const _SectionHeader(label: AppStrings.voiceSection),
+
+          _SwitchTile(
+            icon: Icons.record_voice_over_outlined,
+            title: AppStrings.voiceAudioResponse,
+            subtitle: AppStrings.voiceAudioResponseDesc,
+            value: voiceAudio,
+            onChanged: (v) async {
+              ref.read(voiceAudioResponseProvider.notifier).state = v;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('voice_audio_response', v);
+            },
+          ),
+
+          _SwitchTile(
+            icon: Icons.subtitles_outlined,
+            title: AppStrings.voiceTextResponse,
+            subtitle: AppStrings.voiceTextResponseDesc,
+            value: voiceText,
+            onChanged: (v) async {
+              ref.read(voiceTextResponseProvider.notifier).state = v;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('voice_text_response', v);
+            },
+          ),
+
+          // Seletor de velocidade de fala com DropdownButton
+          _VoiceRateTile(
+            value: voiceRate,
+            onChanged: (v) async {
+              ref.read(voiceSpeechRateProvider.notifier).state = v;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setDouble('voice_speech_rate', v);
             },
           ),
 
@@ -320,6 +363,50 @@ class _CooldownTile extends StatelessWidget {
           DropdownMenuItem(value: 15, child: Text('15 min')),
           DropdownMenuItem(value: 30, child: Text('30 min')),
           DropdownMenuItem(value: 60, child: Text('1 hora')),
+        ],
+        onChanged: (v) => onChanged(v!),
+      ),
+    );
+  }
+}
+
+// Seletor de velocidade de síntese de voz (TTS): Lenta / Normal / Rápida
+class _VoiceRateTile extends StatelessWidget {
+  final double value;
+  final ValueChanged<double> onChanged;
+
+  const _VoiceRateTile({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppTheme.backgroundElevated,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Icon(Icons.speed_outlined, color: AppTheme.accent, size: 20),
+      ),
+      title: const Text(
+        AppStrings.voiceSpeechRate,
+        style: TextStyle(
+          color: AppTheme.textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+      ),
+      trailing: DropdownButton<double>(
+        value: value,
+        dropdownColor: AppTheme.backgroundElevated,
+        underline: const SizedBox.shrink(),
+        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        items: const [
+          DropdownMenuItem(value: 0.3, child: Text(AppStrings.voiceRateSlow)),
+          DropdownMenuItem(value: 0.5, child: Text(AppStrings.voiceRateNormal)),
+          DropdownMenuItem(value: 0.7, child: Text(AppStrings.voiceRateFast)),
         ],
         onChanged: (v) => onChanged(v!),
       ),

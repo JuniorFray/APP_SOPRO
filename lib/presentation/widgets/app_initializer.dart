@@ -9,6 +9,7 @@ import '../../infrastructure/notifications/notification_service.dart';
 import '../providers/database_provider.dart';
 import '../providers/location_providers.dart';
 import '../providers/settings_providers.dart';
+import '../providers/voice_providers.dart';
 
 // Widget que inicializa serviços assíncronos dentro do ProviderScope.
 // Deve ser o primeiro widget construído depois do ProviderScope para que o
@@ -129,6 +130,22 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     final shareWhatsApp = prefs.getBool('share_whatsapp') ?? true;
     if (!shareWhatsApp) {
       ref.read(shareWhatsAppProvider.notifier).state = false;
+    }
+
+    // Restaura preferências de voz (Sprint V2-Voz)
+    final voiceAudio = prefs.getBool('voice_audio_response') ?? true;
+    if (!voiceAudio) {
+      ref.read(voiceAudioResponseProvider.notifier).state = false;
+    }
+
+    final voiceText = prefs.getBool('voice_text_response') ?? true;
+    if (!voiceText) {
+      ref.read(voiceTextResponseProvider.notifier).state = false;
+    }
+
+    final voiceRate = prefs.getDouble('voice_speech_rate') ?? 0.5;
+    if (voiceRate != 0.5) {
+      ref.read(voiceSpeechRateProvider.notifier).state = voiceRate;
     }
 
     // 7. Inicia o foreground service apenas se o onboarding já foi concluído.

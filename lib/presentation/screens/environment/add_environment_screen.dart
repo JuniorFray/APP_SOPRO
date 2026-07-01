@@ -11,6 +11,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
+import '../../providers/voice_providers.dart';
 
 // Tela de criação OU edição de Environment com mapa interativo.
 //
@@ -25,8 +26,10 @@ import '../../providers/location_providers.dart';
 class AddEnvironmentScreen extends ConsumerStatefulWidget {
   // null = criação de novo ambiente; não-null = edição de ambiente existente
   final EnvironmentEntity? environment;
+  // Nome pré-preenchido quando criado via comando de voz (Sprint V2-Voz)
+  final String? initialName;
 
-  const AddEnvironmentScreen({super.key, this.environment});
+  const AddEnvironmentScreen({super.key, this.environment, this.initialName});
 
   @override
   ConsumerState<AddEnvironmentScreen> createState() =>
@@ -43,6 +46,8 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   LatLng? _selectedPoint;
   bool _isSaving        = false;
   bool _loadingLocation = false;
+  // true enquanto o STT está escutando para preencher o nome via voz
+  bool _listeningName   = false;
 
   // Estado da busca por endereço via Nominatim
   bool _searching = false;
@@ -59,9 +64,9 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   @override
   void initState() {
     super.initState();
-    // Pré-preenche com os dados do ambiente ao editar; vazio ao criar
+    // Pré-preenche com os dados do ambiente ao editar; initialName (voz) ao criar; vazio caso contrário
     _nameController = TextEditingController(
-      text: widget.environment?.name ?? '',
+      text: widget.environment?.name ?? widget.initialName ?? '',
     );
     _radiusController = TextEditingController(
       text: widget.environment != null
@@ -132,7 +137,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
         key: _formKey,
         child: Column(
           children: [
-            // Campo nome do ambiente
+            // Campo nome do ambiente com botão de microfone para ditar o nome
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: TextFormField(
@@ -144,7 +149,28 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                     : null,
                 decoration: _inputDecoration(
                   label: AppStrings.environmentNameLabel,
-                  hint: AppStrings.environmentNameHint,
+                  hint: _listeningName
+                      ? AppStrings.voiceFillHint
+                      : AppStrings.environmentNameHint,
+                ).copyWith(
+                  suffixIcon: _listeningName
+                      ? const Padding(
+                          padding: EdgeInsets.all(12),
+                          child: SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppTheme.accent,
+                            ),
+                          ),
+                        )
+                      : IconButton(
+                          icon: const Icon(Icons.mic_outlined,
+                              color: AppTheme.accent, size: 20),
+                          tooltip: AppStrings.voiceMicTooltip,
+                          onPressed: _listenForName,
+                        ),
                 ),
               ),
             ),
@@ -374,6 +400,38 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
         ),
       ),
     );
+  }
+
+  // Inicia STT para preencher o campo de nome do ambiente por voz.
+  // Ouve por até 7 s; preenche _nameController com a transcrição final.
+  Future<void> _listenForName() async {
+    final service = ref.read(voiceServiceProvider);
+    setState(() => _listeningName = true);
+
+    final ok = await service.startListening(
+      onPartial: (t) {
+        if (mounted) setState(() => _nameController.text = t);
+      },
+      onFinal: (t) {
+        if (mounted) {
+          setState(() {
+            _listeningName = false;
+            if (t.isNotEmpty) {
+              // Capitaliza a primeira letra do nome ditado
+              _nameController.text = t[0].toUpperCase() + t.substring(1);
+            }
+          });
+        }
+      },
+      listenFor: const Duration(seconds: 7),
+    );
+
+    if (!ok && mounted) {
+      setState(() => _listeningName = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(AppStrings.voiceNotAvailable)),
+      );
+    }
   }
 
   // Busca um endereço usando Photon como fonte primária e Nominatim como fallback.

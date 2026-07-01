@@ -371,7 +371,7 @@ PARTE 2 — Auditoria de seguranca:
   limitacao conhecida da V1 na secao STATUS V1.
 - flutter analyze lib/: No issues found. flutter build apk --release --split-per-abi: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: 17 - Fechamento V1 - CONCLUIDO (2026-06-30)
 Entregue:
 
@@ -393,6 +393,83 @@ TAREFA 3 — Documentacao V1 finalizada:
   teste, arquitetura final e secao V2 Proximos Passos.
 - flutter analyze lib/: No issues found. flutter build apk --release --split-per-abi: success.
 
+## Sprint Atual
+Sprint: V2-Voz - Interacao por Voz - CONCLUIDO (2026-07-01)
+Entregue:
+
+REGRAS V2 APLICADAS:
+- Todo codigo comentado sem excecao (regra V2).
+- CLAUDE.md atualizado ao final do sprint (regra V2).
+- Commit e push ao final do sprint (regra V2).
+- Titulo do trigger NAO e obrigatorio: removido validator do campo titulo em
+  _TriggerSheet (environment_detail_screen.dart). O usuario pode criar gatilho
+  apenas com conteudo.
+
+1. PACOTES DE VOZ:
+   - speech_to_text: ^6.6.2 adicionado ao pubspec.yaml.
+   - flutter_tts: ^3.6.3 adicionado (v3.x compativel com Kotlin 1.8.22 e compileSdk=35).
+   - RECORD_AUDIO adicionado ao AndroidManifest.xml.
+
+2. VOICE SERVICE (lib/infrastructure/voice/voice_service.dart):
+   - VoiceIntent enum: createTrigger, openEnvironment, resolveTrigger, listTriggers, fallback.
+   - VoiceResult: intent + transcript + triggerAction + environmentName.
+   - VoiceService: STT via SpeechToText (localeId='pt_BR', SpeechListenOptions),
+     TTS via FlutterTts (setLanguage('pt-BR')), processamento por regex on-device.
+   - Regex de intenções (pt-BR):
+     createTrigger:   "lembra de X quando eu chegar em Y"
+     openEnvironment: "salva esse lugar como X" / "cria um ambiente chamado X"
+     resolveTrigger:  "resolvi X" / "pode apagar X"
+     listTriggers:    "o que tenho pendente em X?"
+     fallback:        texto livre
+
+3. PROVIDERS DE VOZ (lib/presentation/providers/voice_providers.dart):
+   - voiceServiceProvider (Provider<VoiceService>): singleton com onDispose.
+   - voiceAudioResponseProvider (StateProvider<bool>, default=true).
+   - voiceTextResponseProvider (StateProvider<bool>, default=true).
+   - voiceSpeechRateProvider (StateProvider<double>, default=0.5).
+   - Persistencia: SharedPreferences 'voice_audio_response', 'voice_text_response',
+     'voice_speech_rate'. Restaurados em AppInitializer._init().
+
+4. FAB DE VOZ NA HOME (home_screen.dart):
+   - FloatingActionButton.small (mic_outlined) acima do FAB principal.
+   - heroTag='voice_fab' para evitar conflito de hero animation.
+   - Abre _VoiceBottomSheet via showModalBottomSheet.
+   - _VoiceBottomSheet: escuta, anima, mostra resultado, executa acao confirmada.
+   - _SoundWave: 5 barras com AnimationController senoidal + modulacao por soundLevel.
+   - _handleVoiceResult(): navega para tela correta conforme VoiceIntent:
+     createTrigger → EnvironmentDetailScreen (fuzzy match por nome) ou AddEnvironmentScreen.
+     openEnvironment → AddEnvironmentScreen com initialName pre-preenchido.
+     resolveTrigger → busca trigger em todos os ambientes e desativa o primeiro match.
+     listTriggers → EnvironmentDetailScreen (fuzzy match por nome).
+     fallback → SnackBar sugerindo selecionar um ambiente.
+
+5. BOTOES DE MICROFONE NOS FORMULARIOS:
+   - AddEnvironmentScreen: suffixIcon com mic_outlined no campo "Nome do local".
+     _listenForName() ouve 7s e preenche _nameController.
+     initialName: String? adicionado ao constructor para pre-preenchimento por voz.
+   - environment_detail_screen.dart (_TriggerSheet): suffixIcon mic em titulo E conteudo.
+     _listenForField() generico ouve 8s e preenche o controller do campo tocado.
+     Spinner de loading enquanto _listeningTitle ou _listeningContent == true.
+
+6. CONFIGURACOES DE VOZ (settings_screen.dart):
+   - Nova secao "Interacao por voz" com:
+     Toggle voiceAudioResponseProvider (resposta em audio).
+     Toggle voiceTextResponseProvider (resposta em texto).
+     _VoiceRateTile: dropdown Lenta(0.3)/Normal(0.5)/Rapida(0.7) para velocidade TTS.
+   - Persistencia via SharedPreferences; restaurados em AppInitializer.
+
+7. STRINGS:
+   - Adicionado em lib/core/constants/strings.dart:
+     voiceSection, voiceAudioResponse/Desc, voiceTextResponse/Desc, voiceSpeechRate,
+     voiceRateSlow/Normal/Fast, voiceListeningTitle/Hint, voiceResultTitle,
+     voiceConfirm, voiceRetry, voiceClose, voiceNotAvailable, voicePermissionDenied,
+     voiceExamples, voiceIntentCreate/Env/Resolve/List/Fallback, voiceMicTooltip, voiceFillHint.
+
+8. CORRECAO: flutter_tts v4.2.5 requer Kotlin 2.2 e compileSdk=36 (incompativel).
+   Solucao: downgrade para flutter_tts: ^3.6.3 (Kotlin 1.8 compativel, API identica).
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## V1 FINALIZADA — Sopro 0.1.0
 
 ### Historico de Sprints
@@ -413,7 +490,8 @@ Sprint 13 — Notif + WhatsApp: canal Importance.MAX, debounce de trigger, TX Po
 Sprint 14 — GATT Retry: auto-retry 3x + closeZombieGatts; linguagem sem jargao tecnico na UI.
 Sprint 15 — Cartao completo: _ContextCardSheet com todos os campos; toggle WhatsApp independente.
 Sprint 16 — Dedup BLE: dedup por card.id, TTL 10s, refresh 30s, auditoria de seguranca.
-Sprint 17 — Fechamento V1: fix GeofenceReceiver (IMPORTANCE_MAX), refresh BLE 10s, docs finais.
+Sprint 17      — Fechamento V1: fix GeofenceReceiver (IMPORTANCE_MAX), refresh BLE 10s, docs finais.
+Sprint V2-Voz  — Voz: speech_to_text + flutter_tts, FAB mic na Home, regex on-device, mic nos formularios, configuracoes de voz.
 
 ### Bugs Corrigidos em Campo (Motorola G52, Android 12)
 

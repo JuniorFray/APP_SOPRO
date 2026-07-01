@@ -10,6 +10,7 @@ import '../../../domain/entities/trigger_entity.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/trigger_providers.dart';
+import '../../providers/voice_providers.dart';
 import 'add_environment_screen.dart';
 
 // Tela de detalhe de um Environment.
@@ -394,7 +395,10 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
   final _formKey     = GlobalKey<FormState>();
   late final TextEditingController _titleCtrl;
   late final TextEditingController _contentCtrl;
-  bool _isSaving     = false;
+  bool _isSaving        = false;
+  // Flags de escuta ativa por campo para animação de loading no ícone
+  bool _listeningTitle   = false;
+  bool _listeningContent = false;
 
   bool get _isEditing => widget.existingTrigger != null;
 
@@ -450,23 +454,43 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
             ),
             const SizedBox(height: 16),
 
-            // Campo título
+            // Campo título — opcional; botão de microfone preenche por voz
             TextFormField(
               controller: _titleCtrl,
               style: const TextStyle(color: AppTheme.textPrimary),
               textCapitalization: TextCapitalization.sentences,
-              validator: (v) =>
-                  (v == null || v.trim().isEmpty)
-                      ? AppStrings.triggerTitleRequired
-                      : null,
               decoration: _fieldDecoration(
                 label: AppStrings.triggerTitleLabel,
-                hint: AppStrings.triggerTitleHint,
+                hint: _listeningTitle
+                    ? AppStrings.voiceFillHint
+                    : AppStrings.triggerTitleHint,
+              ).copyWith(
+                suffixIcon: _listeningTitle
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppTheme.accent,
+                          ),
+                        ),
+                      )
+                    : IconButton(
+                        icon: const Icon(Icons.mic_outlined,
+                            color: AppTheme.accent, size: 20),
+                        tooltip: AppStrings.voiceMicTooltip,
+                        onPressed: () => _listenForField(
+                          _titleCtrl,
+                          (v) => setState(() => _listeningTitle = v),
+                        ),
+                      ),
               ),
             ),
             const SizedBox(height: 12),
 
-            // Campo conteúdo (multi-linha)
+            // Campo conteúdo (multi-linha) com botão de microfone para ditar
             TextFormField(
               controller: _contentCtrl,
               style: const TextStyle(color: AppTheme.textPrimary),
@@ -478,7 +502,31 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
                       : null,
               decoration: _fieldDecoration(
                 label: AppStrings.triggerContentLabel,
-                hint: AppStrings.triggerContentHint,
+                hint: _listeningContent
+                    ? AppStrings.voiceFillHint
+                    : AppStrings.triggerContentHint,
+              ).copyWith(
+                suffixIcon: _listeningContent
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppTheme.accent,
+                          ),
+                        ),
+                      )
+                    : IconButton(
+                        icon: const Icon(Icons.mic_outlined,
+                            color: AppTheme.accent, size: 20),
+                        tooltip: AppStrings.voiceMicTooltip,
+                        onPressed: () => _listenForField(
+                          _contentCtrl,
+                          (v) => setState(() => _listeningContent = v),
+                        ),
+                      ),
               ),
             ),
             const SizedBox(height: 20),
@@ -515,6 +563,40 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
         ),
       ),
     );
+  }
+
+  // Inicia STT para preencher [ctrl] por voz. [setListening] atualiza o flag
+  // de estado do campo correspondente para animar o ícone de microfone.
+  Future<void> _listenForField(
+    TextEditingController ctrl,
+    void Function(bool) setListening,
+  ) async {
+    final service = ref.read(voiceServiceProvider);
+    setListening(true);
+
+    final ok = await service.startListening(
+      onPartial: (t) {
+        if (mounted) setState(() => ctrl.text = t);
+      },
+      onFinal: (t) {
+        if (mounted) {
+          setState(() {
+            if (t.isNotEmpty) {
+              ctrl.text = t[0].toUpperCase() + t.substring(1);
+            }
+          });
+          setListening(false);
+        }
+      },
+      listenFor: const Duration(seconds: 8),
+    );
+
+    if (!ok && mounted) {
+      setListening(false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(AppStrings.voiceNotAvailable)),
+      );
+    }
   }
 
   Future<void> _submit() async {
