@@ -300,11 +300,19 @@ class _VoiceBottomSheet extends ConsumerStatefulWidget {
 }
 
 class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
+  // Texto transcrito pelo STT (parcial durante escuta, final ao terminar)
   String _transcript = '';
+  // true enquanto o engine STT está escutando ativamente
   bool _listening = false;
+  // true após STT devolver resultado final E Gemini/regex terminarem
   bool _processed = false;
+  // true enquanto Gemini (ou regex) processa a transcrição (spinner)
+  bool _processing = false;
+  // true se o STT não estiver disponível no dispositivo
   bool _unavailable = false;
+  // Resultado final com intenção detectada
   VoiceResult? _result;
+  // Nível de som atual para animação de ondas (0.0 – 1.0+)
   double _soundLevel = 0;
 
   @override
@@ -321,10 +329,12 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
   }
 
   Future<void> _startListening() async {
+    // Reseta todos os estados antes de iniciar nova escuta
     setState(() {
       _transcript = '';
       _listening  = false;
       _processed  = false;
+      _processing = false;
       _result     = null;
       _soundLevel = 0;
     });
@@ -344,24 +354,45 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
     }
   }
 
+  // Chamado quando o STT entrega o resultado final (sem mais parciais).
+  // Inicia o processamento assíncrono de intenção (Gemini ou regex).
   void _onFinal(String transcript) {
     setState(() {
       _listening   = false;
       _transcript  = transcript;
-      _processed   = true;
+      // Mostra spinner enquanto Gemini/regex processa
+      _processing  = true;
     });
+    // Despacha resolução assíncrona — não bloqueia a UI
+    _resolveIntent(transcript);
+  }
 
-    if (transcript.isEmpty) return;
-
-    final service = ref.read(voiceServiceProvider);
-    final result  = service.parseIntent(transcript);
-    setState(() => _result = result);
-
-    // TTS: fala a confirmação se o toggle estiver ativo
-    final audioOn   = ref.read(voiceAudioResponseProvider);
-    final speechRate = ref.read(voiceSpeechRateProvider);
-    if (audioOn) {
-      service.speak(_intentLabel(result), rate: speechRate);
+  // Processa a intenção via Gemini (com fallback para regex).
+  // Atualiza _result e libera o spinner ao terminar.
+  Future<void> _resolveIntent(String transcript) async {
+    if (transcript.trim().isEmpty) {
+      // Nada a processar — fecha spinner sem resultado
+      if (mounted) setState(() { _processing = false; _processed = true; });
+      return;
+    }
+    try {
+      final service = ref.read(voiceServiceProvider);
+      // resolveIntent: tenta Gemini primeiro, fallback regex
+      final result  = await service.resolveIntent(transcript);
+      if (!mounted) return;
+      setState(() {
+        _result     = result;
+        _processing = false;
+        _processed  = true;
+      });
+      // TTS: fala a confirmação se o toggle estiver ativo
+      final audioOn    = ref.read(voiceAudioResponseProvider);
+      final speechRate = ref.read(voiceSpeechRateProvider);
+      if (audioOn) service.speak(_intentLabel(result), rate: speechRate);
+    } catch (e) {
+      // Erro inesperado — fecha spinner sem travar a UI
+      debugPrint('[VoiceBottomSheet] Erro ao resolver intenção: $e');
+      if (mounted) setState(() { _processing = false; _processed = true; });
     }
   }
 
@@ -432,7 +463,7 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
           ),
 
           if (_unavailable) ...[
-            // STT não disponível
+            // STT não disponível no dispositivo
             const Icon(Icons.mic_off_outlined, color: AppTheme.accent, size: 48),
             const SizedBox(height: 12),
             const Text(
@@ -452,6 +483,34 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
                 child: const Text(AppStrings.voiceClose),
               ),
             ),
+          ] else if (_processing) ...[
+            // Estado: processando com Gemini ou regex (spinner)
+            const Text(
+              AppStrings.voiceProcessing,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 24),
+            // Spinner circular enquanto aguarda resposta da API
+            const CircularProgressIndicator(color: AppTheme.accent),
+            const SizedBox(height: 24),
+            // Mostra o que foi ouvido para o usuário confirmar visualmente
+            if (_transcript.isNotEmpty)
+              Text(
+                '"$_transcript"',
+                textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                  height: 1.5,
+                ),
+              ),
+            const SizedBox(height: 8),
           ] else if (!_processed) ...[
             // Estado: escutando
             const Text(
@@ -491,12 +550,17 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
             ),
             const SizedBox(height: 24),
 
-            // Botão para parar a escuta manualmente
+            // Botão para parar a escuta manualmente e iniciar processamento
             OutlinedButton.icon(
               onPressed: () async {
                 await ref.read(voiceServiceProvider).stopListening();
-                setState(() => _listening = false);
-                if (_transcript.isNotEmpty) _onFinal(_transcript);
+                if (_transcript.isNotEmpty) {
+                  // _onFinal inicia o spinner e chama _resolveIntent assíncrono
+                  _onFinal(_transcript);
+                } else {
+                  // Nada foi ouvido → volta ao estado de escuta
+                  setState(() => _listening = false);
+                }
               },
               icon: const Icon(Icons.stop_circle_outlined, size: 18),
               label: const Text('Parar'),

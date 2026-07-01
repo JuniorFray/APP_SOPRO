@@ -246,4 +246,6 @@ class AppStrings {
   static const voiceIntentFallback     = 'Criar gatilho com texto livre';
   static const voiceMicTooltip         = 'Falar';
   static const voiceFillHint           = 'Ditando...';
+  // Exibido enquanto o Gemini processa a transcrição (spinner)
+  static const voiceProcessing         = 'Processando...';
 }

@@ -393,7 +393,7 @@ TAREFA 3 — Documentacao V1 finalizada:
   teste, arquitetura final e secao V2 Proximos Passos.
 - flutter analyze lib/: No issues found. flutter build apk --release --split-per-abi: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-Voz - Interacao por Voz - CONCLUIDO (2026-07-01)
 Entregue:
 
@@ -415,7 +415,7 @@ REGRAS V2 APLICADAS:
    - VoiceResult: intent + transcript + triggerAction + environmentName.
    - VoiceService: STT via SpeechToText (localeId='pt_BR', SpeechListenOptions),
      TTS via FlutterTts (setLanguage('pt-BR')), processamento por regex on-device.
-   - Regex de intenções (pt-BR):
+   - Regex de intencoes (pt-BR):
      createTrigger:   "lembra de X quando eu chegar em Y"
      openEnvironment: "salva esse lugar como X" / "cria um ambiente chamado X"
      resolveTrigger:  "resolvi X" / "pode apagar X"
@@ -470,6 +470,46 @@ REGRAS V2 APLICADAS:
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: V2-Voz-Fix - Locale pt-BR + Gemini API - CONCLUIDO (2026-07-01)
+Entregue:
+
+1. LOCALE PT-BR DINAMICO (voice_service.dart):
+   - _ptBrLocaleId: String? detectado em tempo de execucao via _findPtBrLocale().
+   - _findPtBrLocale(): chama _stt.locales() apos initStt(); busca por 'pt_BR',
+     'pt-BR' (iOS), depois qualquer locale comecando com 'pt' (fallback por-BRA etc.).
+   - startListening() usa localeId: _ptBrLocaleId (null = padrao do sistema).
+   - Resolve captura em ingles que ocorria com localeId hardcoded = 'pt_BR'.
+
+2. GEMINI API PARA INTENCAO DE VOZ (voice_service.dart + app_constants.dart):
+   - lib/core/constants/app_constants.dart (novo): AppConstants com geminiApiKey
+     (vazio por padrao), geminiEndpoint (gemini-2.0-flash-lite) e geminiSystemPrompt.
+     Instrucao comentada para obter chave em https://aistudio.google.com.
+   - resolveIntent(transcript): async, tenta Gemini se chave preenchida, fallback
+     para parseIntent() (regex) se falhar ou sem internet.
+   - _processIntentWithGemini(): POST via dart:io HttpClient (sem dependencia nova),
+     timeout 8s, temperatura 0 para resposta deterministica, remove markdown se
+     o modelo adicionar por engano, retorna null em qualquer falha silenciosa.
+   - _mapGeminiResponse(): converte JSON {intent, ambiente, titulo, conteudo} para
+     VoiceResult com mapeamento: criar_trigger→createTrigger, criar_ambiente→
+     openEnvironment, resolver_trigger→resolveTrigger, listar_triggers→listTriggers,
+     nao_entendido→fallback.
+   - parseIntent() mantido como fallback offline (sem alteracao de logica).
+
+3. ESTADO _processing NO BOTTOM SHEET (home_screen.dart):
+   - _processing: bool — true enquanto Gemini/regex processa a transcricao.
+   - _onFinal(): agora define _processing=true e dispara _resolveIntent() async.
+   - _resolveIntent(): await service.resolveIntent(), depois define _result +
+     _processing=false + _processed=true; TTS se audioOn.
+   - Build: novo branch `_processing` exibe CircularProgressIndicator + transcript
+     entre o estado "escutando" e o estado "resultado".
+   - Botao "Parar": se transcript vazio nao chama _onFinal (evita spinner sem texto).
+
+4. STRINGS:
+   - voiceProcessing = 'Processando...' adicionado em strings.dart.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## V1 FINALIZADA — Sopro 0.1.0
 
 ### Historico de Sprints
@@ -492,6 +532,7 @@ Sprint 15 — Cartao completo: _ContextCardSheet com todos os campos; toggle Wha
 Sprint 16 — Dedup BLE: dedup por card.id, TTL 10s, refresh 30s, auditoria de seguranca.
 Sprint 17      — Fechamento V1: fix GeofenceReceiver (IMPORTANCE_MAX), refresh BLE 10s, docs finais.
 Sprint V2-Voz  — Voz: speech_to_text + flutter_tts, FAB mic na Home, regex on-device, mic nos formularios, configuracoes de voz.
+Sprint V2-Voz-Fix — Locale pt-BR dinamico via locales() + Gemini API para intencao com fallback regex; _processing spinner no sheet.
 
 ### Bugs Corrigidos em Campo (Motorola G52, Android 12)
 
