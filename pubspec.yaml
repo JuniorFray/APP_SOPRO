@@ -58,6 +58,10 @@ dependencies:
   # v3.x compatível com Kotlin 1.8.22 e compileSdk 35 do projeto
   flutter_tts: ^3.6.3
 
+  # Carrega variáveis de ambiente do arquivo .env em runtime
+  # Usado para a chave Gemini — nunca hardcode de secrets no fonte
+  flutter_dotenv: ^5.2.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -87,3 +91,4 @@ flutter:
     - assets/images/
     - assets/models/
     - assets/icon/
+    - .env

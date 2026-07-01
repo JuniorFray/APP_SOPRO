@@ -1,14 +1,17 @@
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 // Constantes globais do app Sopro.
 // Separadas de strings.dart (que contém textos visíveis ao usuário).
 class AppConstants {
   AppConstants._(); // Construtor privado — classe usada apenas como namespace
 
-  // Chave da API Gemini para processamento de intenção de voz.
-  // Obtenha em: https://aistudio.google.com (gratuita, 1 M tokens/dia).
-  // Deixe em branco e o app usa apenas regex local (funciona offline).
-  // IMPORTANTE: nunca comitar a chave no repositório.
-  // Preencha localmente no arquivo app_constants.dart após clonar.
-  static const geminiApiKey = '';
+  // Chave da API Gemini lida do arquivo .env em runtime.
+  // .env está no .gitignore — nunca aparece no repositório.
+  // .env.example (sem a chave real) serve de referência para novos devs.
+  // Retorna '' se .env não existir ou a variável não estiver definida —
+  // nesse caso o app usa apenas regex local (funciona offline).
+  static String get geminiApiKey =>
+      dotenv.env['GEMINI_API_KEY'] ?? '';
 
   // Endpoint do modelo Gemini 2.0 Flash (mais rápido, gratuito, suporta pt-BR).
   // gemini-2.0-flash-lite foi descontinuado — usar gemini-2.0-flash.

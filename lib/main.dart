@@ -3,6 +3,7 @@
 // O AppInitializer inicializa serviços assíncronos dentro do escopo dos providers.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/constants/strings.dart';
@@ -18,6 +19,11 @@ import 'presentation/widgets/app_initializer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Carrega variáveis de ambiente do arquivo .env (incluído como Flutter asset).
+  // mergeWith: {} evita exceção se .env não existir (instalação sem dotenv local).
+  // A chave Gemini é lida em AppConstants.geminiApiKey via dotenv.env[].
+  await dotenv.load(fileName: '.env', mergeWith: {});
 
   // Registra o entry-point do foreground service ANTES do runApp().
   // O canal de notificação é criado no AppInitializer._init() (após initialize()),
