@@ -13,6 +13,26 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Fix para plugins que usam `flutter.compileSdkVersion` dentro de android {}.
+// Com o novo settings.gradle (flutter-plugin-loader), a extensão `flutter` só é
+// injetada no :app. Subprojetos de biblioteca (ex: record_android) precisam de
+// um objeto `flutter` acessível via project scope. Criamos um objeto Groovy simples
+// no ext de cada subprojeto antes que seu build.gradle seja avaliado.
+class FlutterCompat {
+    int compileSdkVersion = 35
+    int targetSdkVersion  = 35
+    int minSdkVersion     = 21
+    String ndkVersion     = '27.0.12077973'
+    String versionCode    = '1'
+    String versionName    = '1.0'
+}
+subprojects {
+    // :app usa a extensão real do flutter-gradle-plugin; outros usam este shim
+    if (project.name != 'app') {
+        project.ext.flutter = new FlutterCompat()
+    }
+}
+
 tasks.register("clean", Delete) {
     delete rootProject.buildDir
 }
