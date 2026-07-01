@@ -188,10 +188,10 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   Timer? _recordingTimer;
   static const _maxSeconds = 30; // auto-stop após 30 s
 
-  // Rastreamento do gesto de cancelar (arrastar para cima)
-  double _dragDeltaY   = 0;   // negativo = arrastado para cima
+  // Rastreamento da zona de cancelamento (arrastar para cima durante long press)
   bool   _inCancelZone = false;
-  static const _cancelThreshold = 60.0; // dp para ativar zona de cancelamento
+  // Distância mínima (dp) para cima para ativar zona de cancelamento
+  static const _cancelThreshold = 60.0;
 
   @override
   void initState() {
@@ -216,28 +216,37 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   bool get _isRecording => _fabState == _FabState.recording;
 
-  // ── Pointer events ─────────────────────────────────────────────────────────
+  // ── Gestos de toque (CORRECAO 5 — GestureDetector) ─────────────────────────
 
-  // Pressão inicial → inicia gravação
-  void _onPointerDown(PointerDownEvent _) {
+  // Toque curto (< 500 ms) → tooltip orientando o usuário a segurar
+  void _onTap() {
     if (_fabState != _FabState.idle) return;
-    _dragDeltaY   = 0;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text(AppStrings.voiceHoldToRecord),
+      duration: Duration(seconds: 2),
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  // Long press reconhecido (>= 500 ms) → inicia gravação
+  void _onLongPressStart(LongPressStartDetails _) {
+    if (_fabState != _FabState.idle) return;
     _inCancelZone = false;
     _startRecording();
   }
 
-  // Movimento do dedo → detecta zona de cancelamento (arrastar ≥ 60 dp para cima)
-  void _onPointerMove(PointerMoveEvent event) {
+  // Dedo movendo durante o long press → detecta zona de cancelamento
+  // offsetFromOrigin.dy negativo = moveu para cima desde o início do long press
+  void _onLongPressMoveUpdate(LongPressMoveUpdateDetails details) {
     if (!_isRecording) return;
-    _dragDeltaY += event.delta.dy; // dy negativo = arrastar para cima
-    final inCancel = _dragDeltaY < -_cancelThreshold;
+    final inCancel = details.offsetFromOrigin.dy < -_cancelThreshold;
     if (inCancel != _inCancelZone && mounted) {
       setState(() => _inCancelZone = inCancel);
     }
   }
 
-  // Soltar o dedo → cancela se na zona de cancelamento, caso contrário processa
-  void _onPointerUp(PointerUpEvent _) {
+  // Dedo levantado → cancela na zona de cancelamento, processa fora dela
+  void _onLongPressEnd(LongPressEndDetails _) {
     if (!_isRecording) return;
     if (_inCancelZone) {
       _cancelRecording();
@@ -245,9 +254,6 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       _stopAndProcess();
     }
   }
-
-  // Evento cancelado pelo sistema (ex: ligação recebida)
-  void _onPointerCancel(PointerCancelEvent _) => _cancelRecording();
 
   // ── Ciclo de gravação ──────────────────────────────────────────────────────
 
@@ -307,10 +313,17 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       await Future.delayed(const Duration(milliseconds: 300));
       if (!mounted) return;
 
-      final result = await service.processAudio(filePath);
+      // CORRECAO 2: busca nomes dos ambientes antes de chamar o Gemini
+      // para que o modelo retorne o nome EXATO como está no banco
+      final envs     = await ref.read(environmentRepositoryProvider).getAll();
+      final envNames = envs.map((e) => e.name).toList();
+
+      final result = await service.processAudio(
+        filePath,
+        existingEnvironments: envNames,
+      );
       if (!mounted) return;
 
-      // Executa ação sem esperar confirmação do usuário
       await _executeResult(result);
     } catch (e) {
       debugPrint('[_VoiceFab] Erro ao processar áudio: $e');
@@ -345,7 +358,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   // ── Auto-execução de intenções (zero confirmação) ─────────────────────────
 
-  // Despacha o resultado do Gemini para o handler correto.
+  // CORRECAO 4: Despacha o resultado do Gemini para o handler correto.
   // Cada handler executa a ação diretamente ou abre um sheet de continuação.
   Future<void> _executeResult(VoiceResult result) async {
     switch (result.intent) {
@@ -353,6 +366,12 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         await _handleCreateTrigger(result);
       case VoiceIntent.openEnvironment:
         await _handleOpenEnvironment(result);
+      case VoiceIntent.createEnvironmentWithTrigger:
+        await _handleCreateEnvironmentWithTrigger(result);
+      case VoiceIntent.updateEnvironment:
+        await _handleUpdateEnvironment(result);
+      case VoiceIntent.listEnvironments:
+        await _handleListEnvironments();
       case VoiceIntent.resolveTrigger:
         await _handleResolveTrigger(result);
       case VoiceIntent.listTriggers:
@@ -530,6 +549,74 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     }
   }
 
+  // "cria o ambiente X e lembra de Y" → abre AddEnvironmentScreen + snackbar com gatilho pendente.
+  // Limitação: AddEnvironmentScreen não retorna resultado — gatilho é adicionado
+  // manualmente pelo usuário após criar o ambiente.
+  Future<void> _handleCreateEnvironmentWithTrigger(VoiceResult result) async {
+    await _handleOpenEnvironment(result);
+    if (mounted && result.triggerTitles.isNotEmpty) {
+      final list = result.triggerTitles.join(', ');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${AppStrings.voicePendingTriggers} $list'),
+        duration: const Duration(seconds: 5),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ));
+    }
+  }
+
+  // "muda o raio de X para 200" → atualiza diretamente se raio fornecido,
+  // caso contrário abre AddEnvironmentScreen em modo edição.
+  Future<void> _handleUpdateEnvironment(VoiceResult result) async {
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    final env  = _matchEnv(envs, result.environmentName);
+    if (!mounted) return;
+
+    if (env != null && result.environmentRadius != null) {
+      // Raio fornecido pelo Gemini → atualiza via upsert (mantém lat/lon/nome)
+      final updated = EnvironmentEntity(
+        id:           env.id,
+        name:         env.name,
+        latitude:     env.latitude,
+        longitude:    env.longitude,
+        radiusMeters: result.environmentRadius!.toDouble(),
+        createdAt:    env.createdAt,
+      );
+      await ref.read(environmentRepositoryProvider).save(updated);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${AppStrings.voiceEnvUpdated}: ${env.name} ✓'),
+        // ignore: deprecated_member_use
+        backgroundColor: Colors.green.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ));
+      await _setSuccess();
+    } else if (env != null) {
+      // Mudança não mapeada → abre tela de edição do ambiente
+      setState(() => _fabState = _FabState.idle);
+      // ignore: use_build_context_synchronously
+      pushScreen(context, AddEnvironmentScreen(environment: env));
+    } else {
+      // Ambiente não encontrado → seletor de ambiente
+      setState(() => _fabState = _FabState.idle);
+      _showSheet(_EnvPickerSheet(
+        title:    'Qual ambiente atualizar?',
+        subtitle: result.transcript,
+        onEnvSelected: (e) {
+          if (mounted) pushScreen(context, AddEnvironmentScreen(environment: e));
+        },
+      ));
+    }
+  }
+
+  // "quais são meus locais" → lista todos os ambientes num sheet inline
+  Future<void> _handleListEnvironments() async {
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+    _showSheet(const _EnvsListSheet());
+  }
+
   // Intenção não reconhecida → sheet com campo de texto editável
   Future<void> _handleFallback(VoiceResult result) async {
     if (!mounted) return;
@@ -602,13 +689,14 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           const SizedBox(height: 12),
         ],
 
-        // Botão principal com detector de eventos de toque
-        Listener(
-          behavior:        HitTestBehavior.opaque,
-          onPointerDown:   _onPointerDown,
-          onPointerMove:   _onPointerMove,
-          onPointerUp:     _onPointerUp,
-          onPointerCancel: _onPointerCancel,
+        // CORRECAO 5: GestureDetector com long press (≥500ms = gravar,
+        // toque curto = tooltip) em vez de Listener com pointer events brutos.
+        GestureDetector(
+          onTap:               _onTap,
+          onLongPressStart:    _onLongPressStart,
+          onLongPressMoveUpdate: _onLongPressMoveUpdate,
+          onLongPressEnd:      _onLongPressEnd,
+          onLongPressCancel:   _cancelRecording,
           child: AnimatedBuilder(
             animation: _pulseAnim,
             builder: (context, child) {
@@ -955,14 +1043,19 @@ class _FallbackSheetState extends ConsumerState<_FallbackSheet> {
     super.dispose();
   }
 
-  // Envia o texto editado ao Gemini para nova tentativa de classificação
+  // CORRECAO 2: Envia o texto editado ao Gemini para nova tentativa de classificação,
+  // passando a lista de ambientes existentes para o modelo retornar o nome exato.
   Future<void> _reanalyze() async {
     final text = _ctrl.text.trim();
     if (text.isEmpty) return;
     setState(() => _reanalyzing = true);
     try {
-      final result =
-          await ref.read(voiceServiceProvider).resolveIntentFromText(text);
+      final envs     = await ref.read(environmentRepositoryProvider).getAll();
+      final envNames = envs.map((e) => e.name).toList();
+      final result   = await ref.read(voiceServiceProvider).resolveIntentFromText(
+        text,
+        existingEnvironments: envNames,
+      );
       if (!mounted) return;
       Navigator.pop(context);
       widget.onResult(result);
@@ -1059,6 +1152,97 @@ class _FallbackSheetState extends ConsumerState<_FallbackSheet> {
           ),
           const SizedBox(height: 8),
         ],
+      ),
+    );
+  }
+}
+
+// ── Lista inline de todos os ambientes ───────────────────────────────────────
+
+// Exibido pela intenção "list_environments" sem navegar para outra tela.
+// Mostra nome e raio de cada ambiente cadastrado.
+class _EnvsListSheet extends ConsumerWidget {
+  const _EnvsListSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final envsAsync = ref.watch(environmentsProvider);
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: AppTheme.textDisabled,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const Text(
+              AppStrings.voiceEnvListTitle,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            envsAsync.when(
+              loading: () => const Center(
+                child: CircularProgressIndicator(color: AppTheme.accent),
+              ),
+              error: (_, __) => const Text(
+                AppStrings.errorGeneric,
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+              data: (envs) => envs.isEmpty
+                  ? const Text(
+                      AppStrings.homeEmptyTitle,
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: envs.length,
+                      itemBuilder: (_, i) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Container(
+                          width: 36, height: 36,
+                          decoration: BoxDecoration(
+                            // ignore: deprecated_member_use
+                            color: AppTheme.accent.withOpacity(0.12),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.location_on_outlined,
+                            color: AppTheme.accent,
+                            size: 18,
+                          ),
+                        ),
+                        title: Text(
+                          envs[i].name,
+                          style: const TextStyle(color: AppTheme.textPrimary),
+                        ),
+                        subtitle: Text(
+                          '${envs[i].radiusMeters.toInt()} m de raio',
+                          style: const TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

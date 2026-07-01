@@ -279,4 +279,14 @@ class AppStrings {
       'qualquer tela do celular — sem precisar abrir o app. '
       'Você pode habilitar essa permissão agora ou depois nas Configurações.';
   static const obOverlayBtn   = 'Entendido';
+
+  // ── Voz — novos intents (Sprint V2-VoicePro Etapa 1) ─────────────────────
+  // Tooltip exibido ao tocar rapidamente o botão (sem segurar)
+  static const voiceHoldToRecord   = 'Segure para gravar';
+  // Título do sheet que lista todos os ambientes (list_environments)
+  static const voiceEnvListTitle   = 'Meus locais';
+  // Prefixo do snackbar ao atualizar ambiente por voz
+  static const voiceEnvUpdated     = 'Ambiente atualizado';
+  // Lembrete exibido após abrir AddEnvironmentScreen via create_environment_with_trigger
+  static const voicePendingTriggers = 'Após salvar, adicione o gatilho:';
 }

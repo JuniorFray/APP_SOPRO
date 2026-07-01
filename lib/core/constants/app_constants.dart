@@ -22,43 +22,56 @@ class AppConstants {
       'https://generativelanguage.googleapis.com/v1beta/models/'
       '$geminiModel:generateContent';
 
-  // System prompt enviado junto com o áudio ao Gemini.
-  // Contrato de resposta JSON com campo 'transcricao' obrigatório:
-  //   - transcricao: o que o usuário disse (pt-BR, texto limpo)
-  //   - intent: ação identificada
-  //   - ambiente: nome do local mencionado
-  //   - titulo: título do lembrete / ação a executar
-  //   - conteudo: detalhe adicional opcional
+  // System prompt enviado junto com o áudio ao Gemini (CORRECAO 3 — schemas padronizados).
+  // Define 7 schemas JSON fixos. A lista de ambientes existentes é injetada
+  // dinamicamente pelo VoiceService._buildEnvContext() antes de cada chamada.
   static const geminiSystemPrompt =
       'Voce e o assistente do app Sopro de lembretes por localizacao. '
       'O usuario falou algo em portugues brasileiro. '
       'Transcreva o que foi dito e identifique a intencao. '
-      'Retorne APENAS JSON valido (sem markdown, sem explicacao):\n'
-      '{"transcricao":"texto exato falado","intent":"string","ambiente":"string|null","titulo":"string|null","conteudo":"string|null"}\n'
-      'Intencoes possiveis:\n'
-      '  criar_trigger    = criar lembrete para disparar quando chegar num local\n'
-      '  criar_ambiente   = salvar/cadastrar um novo local no app\n'
-      '  resolver_trigger = marcar lembrete como resolvido ou apagar\n'
-      '  listar_triggers  = ver lembretes pendentes de um local\n'
-      '  nao_entendido    = nao foi possivel identificar\n'
+      'Retorne APENAS JSON valido (sem markdown, sem explicacao). '
+      'Use EXATAMENTE um dos schemas abaixo:\n\n'
+      // Criar lembrete para local existente
+      '{"intent":"create_trigger","transcricao":"texto falado","environment":"nome_exato_do_banco","trigger":{"title":"titulo do lembrete","content":"detalhe opcional ou null"}}\n'
+      // Cadastrar novo local
+      '{"intent":"create_environment","transcricao":"texto falado","environment":{"name":"nome do local","location":"endereco ou null","radius":100}}\n'
+      // Criar local e lembrete juntos
+      '{"intent":"create_environment_with_trigger","transcricao":"texto falado","environment":{"name":"nome","location":null,"radius":100},"triggers":[{"title":"titulo"}]}\n'
+      // Atualizar local existente
+      '{"intent":"update_environment","transcricao":"texto falado","environment":{"name":"nome_exato_do_banco","changes":{"radius":200}}}\n'
+      // Listar locais cadastrados
+      '{"intent":"list_environments","transcricao":"texto falado"}\n'
+      // Ver lembretes de um local
+      '{"intent":"list_triggers","transcricao":"texto falado","environment":"nome_exato_do_banco"}\n'
+      // Marcar lembrete como resolvido
+      '{"intent":"resolve_trigger","transcricao":"texto falado","environment":"nome_exato_do_banco","trigger_title":"titulo do lembrete"}\n'
+      // Nao entendido
+      '{"intent":"unknown","transcricao":"texto original falado"}\n\n'
       'Exemplos:\n'
-      '- audio: "lembra de falar com joao quando chegar na obra" '
-      '→ {"transcricao":"lembra de falar com joao quando chegar na obra","intent":"criar_trigger","ambiente":"obra","titulo":"Falar com Joao","conteudo":null}\n'
-      '- audio: "salva esse lugar como academia" '
-      '→ {"transcricao":"salva esse lugar como academia","intent":"criar_ambiente","ambiente":"academia","titulo":null,"conteudo":null}\n'
-      '- audio: "o que tenho pendente em casa" '
-      '→ {"transcricao":"o que tenho pendente em casa","intent":"listar_triggers","ambiente":"casa","titulo":null,"conteudo":null}\n'
-      '- audio: "resolvi o lembrete da obra" '
-      '→ {"transcricao":"resolvi o lembrete da obra","intent":"resolver_trigger","ambiente":"obra","titulo":null,"conteudo":null}\n'
-      'Retorne APENAS o JSON.';
+      '- "lembra de falar com joao quando chegar na obra" '
+      '→ {"intent":"create_trigger","transcricao":"lembra de falar com joao quando chegar na obra","environment":"obra","trigger":{"title":"Falar com Joao","content":null}}\n'
+      '- "salva esse lugar como academia" '
+      '→ {"intent":"create_environment","transcricao":"salva esse lugar como academia","environment":{"name":"academia","location":null,"radius":100}}\n'
+      '- "quais sao meus locais" '
+      '→ {"intent":"list_environments","transcricao":"quais sao meus locais"}\n'
+      '- "o que tenho pendente em casa" '
+      '→ {"intent":"list_triggers","transcricao":"o que tenho pendente em casa","environment":"casa"}\n'
+      '- "resolvi o lembrete da obra" '
+      '→ {"intent":"resolve_trigger","transcricao":"resolvi o lembrete da obra","environment":"obra","trigger_title":""}\n'
+      'Retorne APENAS o JSON valido.';
 
   // System prompt para processamento de TEXTO (re-análise após edição manual).
-  // Usado quando o usuário corrige a transcrição e toca "Re-analisar".
+  // Versão compacta com os mesmos schemas do geminiSystemPrompt.
   static const geminiTextPrompt =
       'Voce e o assistente do app Sopro de lembretes por localizacao. '
-      'Analise o texto abaixo (digitado ou corrigido pelo usuario) e identifique a intencao. '
-      'Retorne APENAS JSON valido (sem markdown):\n'
-      '{"transcricao":"texto recebido","intent":"string","ambiente":"string|null","titulo":"string|null","conteudo":"string|null"}\n'
-      'Intencoes: criar_trigger, criar_ambiente, resolver_trigger, listar_triggers, nao_entendido.\n'
+      'Analise o texto abaixo e identifique a intencao. '
+      'Retorne APENAS JSON valido (sem markdown). '
+      'Schemas possiveis: create_trigger, create_environment, '
+      'create_environment_with_trigger, update_environment, '
+      'list_environments, list_triggers, resolve_trigger, unknown. '
+      'Campos obrigatorios: intent, transcricao. '
+      'Para create_trigger: environment (string exata) + trigger.title. '
+      'Para create_environment: environment.name. '
+      'Para list_triggers / resolve_trigger: environment (string). '
       'Retorne APENAS o JSON.';
 }

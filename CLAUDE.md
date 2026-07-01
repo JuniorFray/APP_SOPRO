@@ -521,7 +521,7 @@ Entregue:
 
 - flutter analyze lib/: No issues found.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-VoicePro - Botao WhatsApp + Zero Confirmacao + Busca Case-Insensitive - CONCLUIDO (2026-07-01)
 Entregue:
 
@@ -779,6 +779,61 @@ Cenarios validados:
 - Background service mais robusto: reinicio apos OEM kill via WorkManager (fallback).
 - iOS: camada nativa (Core Bluetooth, CoreLocation, UNUserNotificationCenter).
 - Supabase RLS: confirmar INSERT-only em app_logs; adicionar indice em device_id.
+
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa1 - Correcoes Criticas do Assistente de Voz - CONCLUIDO (2026-07-01)
+Entregue:
+
+CORRECAO 1 — Truncamento de JSON (causa raiz de ~80% das falhas de voz):
+- voice_service.dart: substituiu response.transform(utf8.decoder).join() por
+  consolidateHttpClientResponseBytes(response) + utf8.decode(bodyBytes) em
+  _sendAudioToGemini() e _sendTextToGemini(). Garante leitura de todos os
+  bytes antes de decodificar — evita respostas Gemini cortadas em payloads grandes.
+
+CORRECAO 2 — Contexto de ambientes injetado no Gemini:
+- VoiceService._buildEnvContext(): constroi suffix com lista de nomes dos ambientes
+  existentes, injetado no prompt antes de cada chamada Gemini (audio e texto).
+- processAudio() e resolveIntentFromText() recebem existingEnvironments: List<String>.
+- _VoiceFabState._stopAndProcess(): busca envs via environmentRepositoryProvider
+  ANTES de chamar processAudio() e passa envNames.
+- _FallbackSheetState._reanalyze(): idem para re-analise por texto.
+- Resultado: Gemini retorna nome EXATO do banco (ex: "Casa" e nao "casa"),
+  eliminando falhas de _matchEnv() sem depender do regex case-insensitive como fallback.
+
+CORRECAO 3 — Schemas JSON padronizados no system prompt:
+- app_constants.dart: geminiSystemPrompt e geminiTextPrompt reescritos com
+  7 schemas fixos: create_trigger, create_environment, create_environment_with_trigger,
+  update_environment, list_environments, list_triggers, resolve_trigger, unknown.
+- maxOutputTokens: 256 → 512 no audio (schemas novos sao mais verbosos).
+
+CORRECAO 4 — Mapeamento dos novos schemas:
+- VoiceIntent enum: adicionados createEnvironmentWithTrigger, updateEnvironment,
+  listEnvironments (totalizando 8 intents).
+- VoiceResult: adicionados triggerContent (String?), environmentRadius (int?),
+  triggerTitles (List<String>) para carregar dados dos novos schemas.
+- _mapGeminiResponse(): reescrito com suporte aos 7 novos schemas + retro-
+  compatibilidade com schema legado (criar_trigger, criar_ambiente, etc).
+- _executeResult(): novos cases para createEnvironmentWithTrigger,
+  updateEnvironment, listEnvironments.
+- _handleCreateEnvironmentWithTrigger(): abre AddEnvironmentScreen com GPS auto +
+  SnackBar listando os gatilhos pendentes (limitacao: nav nao retorna resultado).
+- _handleUpdateEnvironment(): atualiza raio diretamente via upsert se Gemini
+  forneceu novo valor; caso contrario abre AddEnvironmentScreen em modo edicao.
+- _handleListEnvironments(): exibe _EnvsListSheet (novo widget inline).
+- _EnvsListSheet: lista nome e raio de todos os ambientes cadastrados num sheet.
+
+CORRECAO 5 — GestureDetector com long press:
+- _VoiceFab substituiu Listener (pointer events brutos) por GestureDetector
+  com onLongPressStart/onLongPressMoveUpdate/onLongPressEnd/onLongPressCancel.
+- Toque curto (< 500ms) dispara onTap → SnackBar "Segure para gravar".
+- Long press (>= 500ms) inicia gravacao.
+- Gesto de cancelar usa details.offsetFromOrigin.dy (mais preciso que delta acumulado).
+- Removido _dragDeltaY (campo desnecessario com GestureDetector).
+
+CORRECOES 6-7: GPS auto ao criar ambiente e SYSTEM_ALERT_WINDOW ja entregues
+no sprint V2-VoicePro anterior (verificado sem regressao).
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
