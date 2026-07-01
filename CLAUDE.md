@@ -470,45 +470,56 @@ REGRAS V2 APLICADAS:
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-Voz-Fix - Locale pt-BR + Gemini API - CONCLUIDO (2026-07-01)
 Entregue:
 
 1. LOCALE PT-BR DINAMICO (voice_service.dart):
-   - _ptBrLocaleId: String? detectado em tempo de execucao via _findPtBrLocale().
-   - _findPtBrLocale(): chama _stt.locales() apos initStt(); busca por 'pt_BR',
-     'pt-BR' (iOS), depois qualquer locale comecando com 'pt' (fallback por-BRA etc.).
+   - _ptBrLocaleId detectado em runtime via _findPtBrLocale() (locales(), fallback 'pt*').
    - startListening() usa localeId: _ptBrLocaleId (null = padrao do sistema).
-   - Resolve captura em ingles que ocorria com localeId hardcoded = 'pt_BR'.
 
-2. GEMINI API PARA INTENCAO DE VOZ (voice_service.dart + app_constants.dart):
-   - lib/core/constants/app_constants.dart (novo): AppConstants com geminiApiKey
-     (vazio por padrao), geminiEndpoint (gemini-2.0-flash-lite) e geminiSystemPrompt.
-     Instrucao comentada para obter chave em https://aistudio.google.com.
-   - resolveIntent(transcript): async, tenta Gemini se chave preenchida, fallback
-     para parseIntent() (regex) se falhar ou sem internet.
-   - _processIntentWithGemini(): POST via dart:io HttpClient (sem dependencia nova),
-     timeout 8s, temperatura 0 para resposta deterministica, remove markdown se
-     o modelo adicionar por engano, retorna null em qualquer falha silenciosa.
-   - _mapGeminiResponse(): converte JSON {intent, ambiente, titulo, conteudo} para
-     VoiceResult com mapeamento: criar_trigger→createTrigger, criar_ambiente→
-     openEnvironment, resolver_trigger→resolveTrigger, listar_triggers→listTriggers,
-     nao_entendido→fallback.
-   - parseIntent() mantido como fallback offline (sem alteracao de logica).
+2. GEMINI API PARA INTENCAO DE VOZ:
+   - app_constants.dart: geminiApiKey (dotenv), geminiEndpoint, geminiSystemPrompt.
+   - resolveIntent(): async, tenta Gemini, fallback regex.
+   - _processIntentWithGemini(): POST HttpClient, timeout 8s, temperatura 0, strip markdown.
+   - voice_debug logado no Supabase com transcript, has_key, gemini_http, gemini_raw,
+     gemini_error, final_intent.
+   - Chave Gemini via flutter_dotenv (.env no .gitignore, .env.example no repo).
 
-3. ESTADO _processing NO BOTTOM SHEET (home_screen.dart):
-   - _processing: bool — true enquanto Gemini/regex processa a transcricao.
-   - _onFinal(): agora define _processing=true e dispara _resolveIntent() async.
-   - _resolveIntent(): await service.resolveIntent(), depois define _result +
-     _processing=false + _processed=true; TTS se audioOn.
-   - Build: novo branch `_processing` exibe CircularProgressIndicator + transcript
-     entre o estado "escutando" e o estado "resultado".
-   - Botao "Parar": se transcript vazio nao chama _onFinal (evita spinner sem texto).
+3. _processing spinner no bottom sheet; campo de transcript no spinner state.
+
+- flutter analyze lib/: No issues found.
+
+## Sprint Atual
+Sprint: V2-Gemini-Robustez - Modelo correto + Ingles STT + Transcript editavel - CONCLUIDO (2026-07-01)
+Entregue:
+
+1. MODELO GEMINI CORRETO (app_constants.dart):
+   - gemini-2.0-flash → gemini-1.5-flash (2.0-flash retornava 404 neste tier).
+
+2. HEURISTICA STT EM INGLES (voice_service.dart):
+   - _mightBeEnglish(): detecta se transcript foi capturado em ingles pelo STT.
+     Criterios: sem acentos (áéíóú etc.) E sem palavras funcionais portuguesas
+     (de, em, no, lembra, criar, casa, trabalho...). Conservador — false positives
+     aceitaveis (pior caso: envia contexto extra desnecessariamente ao Gemini).
+   - _englishHint: nota injetada no texto do usuario ao Gemini quando ingles detectado.
+     Exemplos: "create" → "criar", "environment" → "ambiente", "creative cousin" → "criar ambiente casa".
+   - _processIntentWithGemini(transcript, {maybeEnglish}): aceita flag e injeta hint.
+   - resolveIntent(): detecta _mightBeEnglish(), passa flag, loga 'maybe_english' no Supabase.
+
+3. TRANSCRIPT EDITAVEL NO BOTTOM SHEET (home_screen.dart):
+   - _transcriptController: TextEditingController no estado de resultado.
+   - Campo TextField editavel com label "O que voce disse" e botao refresh (re-analisar).
+   - _reanalyze(): processa o texto editado pelo usuario, permite corrigir ingles errado.
+   - _onFinal(): popula _transcriptController com o texto do STT.
+   - Transcript removido do interior do card de intencao (agora no TextField acima).
+   - textOn (voiceTextResponseProvider) removido do build() — transcript sempre visivel.
 
 4. STRINGS:
-   - voiceProcessing = 'Processando...' adicionado em strings.dart.
+   - voiceTranscriptLabel = 'O que voce disse'.
+   - voiceReanalyze = 'Re-analisar'.
 
-- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+- flutter analyze lib/: No issues found.
 
 ## V1 FINALIZADA — Sopro 0.1.0
 
@@ -532,7 +543,8 @@ Sprint 15 — Cartao completo: _ContextCardSheet com todos os campos; toggle Wha
 Sprint 16 — Dedup BLE: dedup por card.id, TTL 10s, refresh 30s, auditoria de seguranca.
 Sprint 17      — Fechamento V1: fix GeofenceReceiver (IMPORTANCE_MAX), refresh BLE 10s, docs finais.
 Sprint V2-Voz  — Voz: speech_to_text + flutter_tts, FAB mic na Home, regex on-device, mic nos formularios, configuracoes de voz.
-Sprint V2-Voz-Fix — Locale pt-BR dinamico via locales() + Gemini API para intencao com fallback regex; _processing spinner no sheet.
+Sprint V2-Voz-Fix     — Locale pt-BR dinamico via locales() + Gemini API para intencao com fallback regex; _processing spinner no sheet.
+Sprint V2-Gemini-Robustez — Modelo gemini-1.5-flash, heuristica STT ingles, transcript editavel com re-analisar.
 
 ### Bugs Corrigidos em Campo (Motorola G52, Android 12)
 

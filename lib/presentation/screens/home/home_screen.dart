@@ -314,6 +314,10 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
   VoiceResult? _result;
   // Nível de som atual para animação de ondas (0.0 – 1.0+)
   double _soundLevel = 0;
+  // Controller do campo editável de transcrição no estado de resultado.
+  // Permite que o usuário corrija o texto capturado (ex.: inglês errado)
+  // e re-analise antes de confirmar.
+  final _transcriptController = TextEditingController();
 
   @override
   void initState() {
@@ -325,6 +329,8 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
   @override
   void dispose() {
     ref.read(voiceServiceProvider).stopListening();
+    // Descarta o controller do campo editável de transcrição
+    _transcriptController.dispose();
     super.dispose();
   }
 
@@ -338,6 +344,8 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
       _result     = null;
       _soundLevel = 0;
     });
+    // Limpa o campo editável de transcrição
+    _transcriptController.clear();
 
     final service = ref.read(voiceServiceProvider);
     final ok = await service.startListening(
@@ -357,6 +365,8 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
   // Chamado quando o STT entrega o resultado final (sem mais parciais).
   // Inicia o processamento assíncrono de intenção (Gemini ou regex).
   void _onFinal(String transcript) {
+    // Popula o campo editável com o texto capturado pelo STT
+    _transcriptController.text = transcript;
     setState(() {
       _listening   = false;
       _transcript  = transcript;
@@ -365,6 +375,20 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
     });
     // Despacha resolução assíncrona — não bloqueia a UI
     _resolveIntent(transcript);
+  }
+
+  // Re-analisa o texto editado pelo usuário no campo de transcrição.
+  // Chamado pelo botão de refresh no campo — permite corrigir inglês errado.
+  Future<void> _reanalyze() async {
+    final text = _transcriptController.text.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      _transcript = text;
+      _processing = true;
+      _processed  = false;
+      _result     = null;
+    });
+    await _resolveIntent(text);
   }
 
   // Processa a intenção via Gemini (com fallback para regex).
@@ -441,7 +465,8 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final textOn = ref.watch(voiceTextResponseProvider);
+    // voiceTextResponseProvider não é mais lido aqui: o transcript está sempre
+    // visível no campo editável — o toggle de texto afeta apenas o TTS.
 
     return Padding(
       padding: EdgeInsets.fromLTRB(
@@ -579,7 +604,36 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+
+            // Campo editável com o texto capturado pelo STT.
+            // Permite corrigir erros de reconhecimento (ex.: inglês em vez de pt-BR)
+            // e re-analisar com o botão de refresh antes de confirmar.
+            TextField(
+              controller: _transcriptController,
+              style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+              maxLines:   2,
+              minLines:   1,
+              decoration: InputDecoration(
+                labelText:     AppStrings.voiceTranscriptLabel,
+                labelStyle:    const TextStyle(color: AppTheme.textSecondary),
+                filled:        true,
+                fillColor:     AppTheme.backgroundSurface,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
+                // Botão de re-análise: permite processar o texto editado
+                suffixIcon: IconButton(
+                  icon:    const Icon(Icons.refresh, size: 20),
+                  color:   AppTheme.accent,
+                  tooltip: AppStrings.voiceReanalyze,
+                  onPressed: _reanalyze,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
 
             // Card mostrando a intenção detectada
             if (_result != null)
@@ -607,30 +661,13 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _intentLabel(_result!),
-                            style: const TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
-                          if (textOn && _transcript.isNotEmpty) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              '"$_transcript"',
-                              style: const TextStyle(
-                                color: AppTheme.textSecondary,
-                                fontSize: 12,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ],
+                      child: Text(
+                        _intentLabel(_result!),
+                        style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
                   ],

@@ -195,17 +195,51 @@ class VoiceService {
 
   // ── Processamento de intenção ─────────────────────────────────────────────
 
+  // Detecta se o transcript provavelmente foi capturado em inglês pelo STT.
+  // Heurística conservadora: retorna true somente se NÃO houver nenhum
+  // indicador claro de português (acentos, palavras comuns).
+  // False positives são aceitáveis — o pior caso é enviar contexto extra
+  // para o Gemini desnecessariamente.
+  bool _mightBeEnglish(String transcript) {
+    final lower = transcript.toLowerCase().trim();
+    if (lower.isEmpty) return false;
+
+    // Presença de acento ou cedilha = texto claramente em português
+    if (lower.contains(RegExp(r'[áéíóúãõâêôàçü]'))) return false;
+
+    // Palavras funcionais portuguesas que dificilmente aparecem em inglês
+    const ptMarkers = {
+      'de', 'em', 'no', 'na', 'para', 'quando', 'eu', 'você', 'que',
+      'um', 'uma', 'com', 'por', 'isso', 'esse', 'essa', 'aqui', 'ali',
+      'lembra', 'criar', 'cria', 'salva', 'apaga', 'resolvi', 'tenho',
+      'casa', 'trabalho', 'escola', 'mercado', 'obra', 'lugar', 'ambiente',
+      'gatilho', 'lembrete', 'pendente', 'fazer',
+    };
+    for (final word in lower.split(RegExp(r'\s+'))) {
+      if (ptMarkers.contains(word)) return false;
+    }
+
+    // Nenhum marcador de português encontrado → suspeita de inglês
+    return true;
+  }
+
   // Ponto de entrada principal para processar uma transcrição.
-  // 1. Tenta Gemini API se geminiApiKey estiver configurado.
-  // 2. Faz fallback para regex local se Gemini falhar ou sem internet.
-  // 3. Loga um evento 'voice_debug' no Supabase com todo o diagnóstico.
+  // 1. Detecta se o STT capturou em inglês (heurística).
+  // 2. Tenta Gemini API se geminiApiKey estiver configurado.
+  // 3. Faz fallback para regex local se Gemini falhar ou sem internet.
+  // 4. Loga um evento 'voice_debug' no Supabase com todo o diagnóstico.
   Future<VoiceResult> resolveIntent(String transcript) async {
+    // Detecta possível captura em inglês antes de qualquer processamento
+    final maybeEnglish = _mightBeEnglish(transcript);
+
     // Mapa de diagnóstico — preenchido ao longo do fluxo e logado no final
     final debug = <String, dynamic>{
       'transcript':     transcript,
       // Não logamos a chave em si — apenas se está preenchida (true/false)
       'has_key':        AppConstants.geminiApiKey.isNotEmpty,
       'locale_used':    _ptBrLocaleId ?? 'system_default',
+      // true se a heurística detectou possível inglês
+      'maybe_english':  maybeEnglish,
       'gemini_called':  false,
       'gemini_http':    null,  // status HTTP da chamada Gemini
       'gemini_raw':     null,  // texto bruto retornado pelo modelo
@@ -228,9 +262,9 @@ class VoiceService {
     if (AppConstants.geminiApiKey.isNotEmpty) {
       debug['gemini_called'] = true;
       try {
-        // _processIntentWithGemini retorna (resultado, rawJson, httpStatus)
+        // Passa maybeEnglish para que o Gemini receba contexto extra se necessário
         final (result, raw, httpStatus) =
-            await _processIntentWithGemini(transcript);
+            await _processIntentWithGemini(transcript, maybeEnglish: maybeEnglish);
         geminiResult          = result;
         debug['gemini_raw']   = raw;
         debug['gemini_http']  = httpStatus;
@@ -256,12 +290,24 @@ class VoiceService {
     return finalResult;
   }
 
+  // Nota injetada no prompt quando o STT provavelmente capturou em inglês.
+  // Exemplos ajudam o Gemini a correlacionar sons ingleses com intenções pt-BR.
+  static const _englishHint =
+      '\n\n[NOTA DO SISTEMA: O reconhecimento de voz pode ter transcrito em '
+      'inglês palavras faladas em português. Interprete a intenção como se '
+      'fosse português brasileiro falado em voz alta. Exemplos de erros comuns: '
+      '"create" → "criar", "environment" → "ambiente", "trigger" → "gatilho", '
+      '"remember" → "lembra", "creative cousin" → "criar ambiente casa", '
+      '"solve" → "resolvi". Tente identificar a intenção real mesmo com texto em inglês.]';
+
   // Envia a transcrição ao Gemini e interpreta a resposta JSON.
+  // [maybeEnglish]: se true, injeta _englishHint no prompt para STT em inglês.
   // Retorna um record (VoiceResult?, String? rawText, int? httpStatus).
   // VoiceResult é null se a resposta for inválida ou a chamada falhar.
   Future<(VoiceResult?, String?, int?)> _processIntentWithGemini(
-    String transcript,
-  ) async {
+    String transcript, {
+    bool maybeEnglish = false,
+  }) async {
     final client = HttpClient();
     // Timeout de 8 s — latência típica do Gemini Flash é ~300-500 ms
     client.connectionTimeout = const Duration(seconds: 8);
@@ -275,6 +321,10 @@ class VoiceService {
       final request = await client.postUrl(uri);
       request.headers.contentType = ContentType.json;
 
+      // Se provavelmente capturado em inglês, adiciona nota ao texto do usuário
+      // para que o Gemini tente interpretar a intenção correta em pt-BR
+      final userText = maybeEnglish ? '$transcript$_englishHint' : transcript;
+
       // Corpo da requisição: system prompt + transcrição do usuário
       final body = jsonEncode({
         'contents': [
@@ -283,8 +333,8 @@ class VoiceService {
             'parts': [
               // System prompt define o contrato de resposta JSON
               {'text': AppConstants.geminiSystemPrompt},
-              // Transcrição real que deve ser classificada
-              {'text': transcript},
+              // Transcrição real (com nota de inglês se detectado)
+              {'text': userText},
             ],
           },
         ],

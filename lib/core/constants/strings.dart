@@ -248,4 +248,8 @@ class AppStrings {
   static const voiceFillHint           = 'Ditando...';
   // Exibido enquanto o Gemini processa a transcrição (spinner)
   static const voiceProcessing         = 'Processando...';
+  // Label do campo editável de transcrição no estado de resultado
+  static const voiceTranscriptLabel    = 'O que você disse';
+  // Tooltip do botão de re-análise no campo de transcrição
+  static const voiceReanalyze         = 'Re-analisar';
 }

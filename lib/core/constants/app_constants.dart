@@ -13,11 +13,11 @@ class AppConstants {
   static String get geminiApiKey =>
       dotenv.env['GEMINI_API_KEY'] ?? '';
 
-  // Endpoint do modelo Gemini 2.0 Flash (mais rápido, gratuito, suporta pt-BR).
-  // gemini-2.0-flash-lite foi descontinuado — usar gemini-2.0-flash.
+  // Endpoint do modelo Gemini 1.5 Flash (estável, gratuito, suporta pt-BR).
+  // gemini-2.0-flash retorna 404 neste tier — usar gemini-1.5-flash.
   static const geminiEndpoint =
       'https://generativelanguage.googleapis.com/v1beta/models/'
-      'gemini-2.0-flash:generateContent';
+      'gemini-1.5-flash:generateContent';
 
   // System prompt enviado ao Gemini antes da transcrição do usuário.
   // Regras críticas:
