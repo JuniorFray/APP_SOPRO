@@ -188,10 +188,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   Timer? _recordingTimer;
   static const _maxSeconds = 30; // auto-stop após 30 s
 
-  // Rastreamento da zona de cancelamento (arrastar para cima durante long press)
-  bool   _inCancelZone = false;
-  // Distância mínima (dp) para cima para ativar zona de cancelamento
-  static const _cancelThreshold = 60.0;
+  // Momento em que o dedo pressionou o botão — usado para verificar mínimo de 500 ms
+  DateTime? _pressStartTime;
 
   @override
   void initState() {
@@ -216,28 +214,16 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   bool get _isRecording => _fabState == _FabState.recording;
 
-  // ── Gestos de toque (CORRECAO 5 — GestureDetector) ─────────────────────────
+  // ── Eventos de ponteiro (Listener — baixo nível, confiável no Android) ──────
+  //
+  // Listener usa eventos raw do sistema operacional (PointerDown / PointerUp),
+  // sem nenhum threshold de tempo. Isso elimina a ambiguidade do GestureDetector
+  // (onLongPressEnd não era disparado confiavelmente no Motorola G52 / Android 12).
 
-  // Toque curto (< 500 ms) → tooltip orientando o usuário a segurar
-  void _onTap() {
+  // Dedo toca o botão → inicia gravação imediatamente e registra o instante
+  void _onPressStart() {
     if (_fabState != _FabState.idle) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text(AppStrings.voiceHoldToRecord),
-      duration: Duration(seconds: 2),
-      behavior: SnackBarBehavior.floating,
-    ));
-  }
-
-  // Long press reconhecido (>= 500 ms) → configura estado e inicia gravação.
-  // IMPORTANTE: setState de recording acontece AQUI, antes de qualquer await,
-  // para que _isRecording() retorne true imediatamente. Sem isso há race
-  // condition: se o usuário soltar entre o long press (t=0) e o await de
-  // startRecording() terminar (~50-200ms), onLongPressEnd via _isRecording=false
-  // retorna sem chamar _stopAndProcess() e o botão fica preso em "gravando".
-  void _onLongPressStart(LongPressStartDetails _) {
-    if (_fabState != _FabState.idle) return;
-    _inCancelZone = false;
-    // Seta recording ANTES do await em _startRecording()
+    _pressStartTime = DateTime.now();
     setState(() { _fabState = _FabState.recording; _recordingSeconds = 0; });
     _pulseCtrl.repeat(reverse: true);
     _recordingTimer = Timer.periodic(const Duration(seconds: 1), (t) {
@@ -245,28 +231,32 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       setState(() => _recordingSeconds++);
       if (_recordingSeconds >= _maxSeconds) { t.cancel(); _stopAndProcess(); }
     });
-    _startRecording(); // dispara nativo async — erro reverte o estado
+    _startRecording(); // dispara nativo async — falha reverte o estado
   }
 
-  // Dedo movendo durante o long press → detecta zona de cancelamento
-  // offsetFromOrigin.dy negativo = moveu para cima desde o início do long press
-  void _onLongPressMoveUpdate(LongPressMoveUpdateDetails details) {
+  // Dedo levanta → verifica duração mínima (500 ms) antes de processar
+  void _onPressEnd() {
     if (!_isRecording) return;
-    final inCancel = details.offsetFromOrigin.dy < -_cancelThreshold;
-    if (inCancel != _inCancelZone && mounted) {
-      setState(() => _inCancelZone = inCancel);
-    }
-  }
-
-  // Dedo levantado → cancela na zona de cancelamento, processa fora dela
-  void _onLongPressEnd(LongPressEndDetails _) {
-    if (!_isRecording) return;
-    if (_inCancelZone) {
+    final elapsed = DateTime.now()
+        .difference(_pressStartTime ?? DateTime.now())
+        .inMilliseconds;
+    if (elapsed < 500) {
+      // Gravação muito curta — cancela e orienta o usuário
       _cancelRecording();
-    } else {
-      _stopAndProcess();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(AppStrings.voiceHoldLonger),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+      return;
     }
+    _stopAndProcess();
   }
+
+  // Evento de cancelamento do SO (ligação, notificação que roubou o foco, etc.)
+  void _onPressCancel() => _cancelRecording();
 
   // ── Ciclo de gravação ──────────────────────────────────────────────────────
 
@@ -302,7 +292,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     _pulseCtrl.stop();
     _pulseCtrl.reset();
     if (!mounted) return;
-    setState(() { _fabState = _FabState.processing; _inCancelZone = false; });
+    setState(() => _fabState = _FabState.processing);
 
     final service  = ref.read(voiceServiceProvider);
     final filePath = await service.stopRecording();
@@ -350,7 +340,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     _pulseCtrl.reset();
     ref.read(voiceServiceProvider).cancelRecording();
     if (mounted) {
-      setState(() { _fabState = _FabState.idle; _inCancelZone = false; });
+      setState(() => _fabState = _FabState.idle);
     }
   }
 
@@ -673,43 +663,18 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // Ícone de lixeira: aparece acima do botão durante gravação.
-        // Fica vermelho quando o dedo arrasta para cima (zona de cancelamento).
-        if (_isRecording) ...[
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            width:  44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: _inCancelZone
-                  ? Colors.red.shade700
-                  : AppTheme.backgroundSurface,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              Icons.delete_outline_rounded,
-              color: _inCancelZone ? Colors.white : AppTheme.textSecondary,
-              size: 22,
-            ),
-          ),
-          const SizedBox(height: 12),
-        ],
-
-        // CORRECAO 5: GestureDetector com long press (≥500ms = gravar,
-        // toque curto = tooltip) em vez de Listener com pointer events brutos.
-        GestureDetector(
-          onTap:               _onTap,
-          onLongPressStart:    _onLongPressStart,
-          onLongPressMoveUpdate: _onLongPressMoveUpdate,
-          onLongPressEnd:      _onLongPressEnd,
-          onLongPressCancel:   _cancelRecording,
+        // Listener usa PointerDown/PointerUp — eventos de baixo nível do SO,
+        // sem threshold de tempo. Mais confiável que GestureDetector no Android.
+        Listener(
+          behavior: HitTestBehavior.opaque,
+          onPointerDown:   (_) => _onPressStart(),
+          onPointerUp:     (_) => _onPressEnd(),
+          onPointerCancel: (_) => _onPressCancel(),
           child: AnimatedBuilder(
             animation: _pulseAnim,
             builder: (context, child) {
-              // Pulso apenas ao gravar e fora da zona de cancelamento
-              final scale = (_isRecording && !_inCancelZone)
-                  ? _pulseAnim.value
-                  : 1.0;
+              // Pulso visível apenas durante gravação
+              final scale = _isRecording ? _pulseAnim.value : 1.0;
               return Transform.scale(scale: scale, child: child);
             },
             child: _buildButtonBody(),
@@ -721,10 +686,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           const SizedBox(height: 8),
           Text(
             _formatSeconds(_recordingSeconds),
-            style: TextStyle(
-              color: _inCancelZone
-                  ? AppTheme.textDisabled
-                  : const Color(0xFFE53935),
+            style: const TextStyle(
+              color: Color(0xFFE53935),
               fontSize: 12,
               fontWeight: FontWeight.bold,
             ),
@@ -745,11 +708,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         child   = const Icon(Icons.mic_rounded, color: Colors.white, size: 28);
 
       case _FabState.recording:
-        // Cinza quando na zona de cancelamento; vermelho quando gravando
-        bgColor = _inCancelZone
-            ? Colors.grey.shade600
-            : const Color(0xFFE53935);
-        child = const Icon(Icons.mic_rounded, color: Colors.white, size: 28);
+        bgColor = const Color(0xFFE53935); // vermelho durante gravação
+        child   = const Icon(Icons.mic_rounded, color: Colors.white, size: 28);
 
       case _FabState.processing:
         bgColor = AppTheme.accent;

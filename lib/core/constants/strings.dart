@@ -283,6 +283,8 @@ class AppStrings {
   // ── Voz — novos intents (Sprint V2-VoicePro Etapa 1) ─────────────────────
   // Tooltip exibido ao tocar rapidamente o botão (sem segurar)
   static const voiceHoldToRecord   = 'Segure para gravar';
+  // Exibido quando o usuário solta antes de 500 ms (gravação muito curta)
+  static const voiceHoldLonger     = 'Segure por mais tempo para gravar';
   // Título do sheet que lista todos os ambientes (list_environments)
   static const voiceEnvListTitle   = 'Meus locais';
   // Prefixo do snackbar ao atualizar ambiente por voz
