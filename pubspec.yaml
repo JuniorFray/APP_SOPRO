@@ -51,8 +51,9 @@ dependencies:
   # Abre URLs externas (WhatsApp, browser) a partir do app
   url_launcher: ^6.3.0
 
-  # Reconhecimento de fala on-device para interação por voz (Sprint V2-Voz)
-  speech_to_text: ^6.6.0
+  # Gravação de áudio para envio ao Gemini Audio API (Sprint V2-GeminiAudio)
+  # Substitui speech_to_text — o Gemini faz STT + NLU em uma única chamada
+  record: ^5.1.2
 
   # Síntese de voz on-device em português (Sprint V2-Voz)
   # v3.x compatível com Kotlin 1.8.22 e compileSdk 35 do projeto

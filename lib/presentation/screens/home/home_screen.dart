@@ -8,7 +8,7 @@
 //   3. Navegar para PeopleNearbyScreen e ProfileScreen
 //   4. FAB secundário de voz: abre _VoiceBottomSheet para comandos por fala
 
-import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -300,110 +300,87 @@ class _VoiceBottomSheet extends ConsumerStatefulWidget {
 }
 
 class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
-  // Texto transcrito pelo STT (parcial durante escuta, final ao terminar)
-  String _transcript = '';
-  // true enquanto o engine STT está escutando ativamente
-  bool _listening = false;
-  // true após STT devolver resultado final E Gemini/regex terminarem
-  bool _processed = false;
-  // true enquanto Gemini (ou regex) processa a transcrição (spinner)
-  bool _processing = false;
-  // true se o STT não estiver disponível no dispositivo
+  // true enquanto o AudioRecorder está gravando ativamente
+  bool _isRecording = false;
+  // true enquanto o Gemini processa o áudio enviado (spinner)
+  bool _processing  = false;
+  // true após Gemini retornar resultado e bottom sheet mostrar ação
+  bool _processed   = false;
+  // true se permissão de microfone foi negada
   bool _unavailable = false;
-  // Resultado final com intenção detectada
+  // Resultado final com intenção detectada e transcrição do Gemini
   VoiceResult? _result;
-  // Nível de som atual para animação de ondas (0.0 – 1.0+)
-  double _soundLevel = 0;
+  // Segundos gravados — mostrado no contador durante gravação
+  int _recordingSeconds = 0;
+  // Timer que incrementa _recordingSeconds a cada segundo
+  Timer? _recordingTimer;
+  // Limite de gravação automático (30 s) para evitar arquivos gigantes
+  static const _maxRecordingSeconds = 30;
   // Controller do campo editável de transcrição no estado de resultado.
-  // Permite que o usuário corrija o texto capturado (ex.: inglês errado)
-  // e re-analise antes de confirmar.
+  // Permite corrigir a transcrição do Gemini e re-analisar.
   final _transcriptController = TextEditingController();
 
   @override
-  void initState() {
-    super.initState();
-    // Inicia escuta imediatamente ao abrir o sheet
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startListening());
-  }
-
-  @override
   void dispose() {
-    ref.read(voiceServiceProvider).stopListening();
-    // Descarta o controller do campo editável de transcrição
+    // Para gravação se o sheet for fechado durante gravação
+    _recordingTimer?.cancel();
+    ref.read(voiceServiceProvider).cancelRecording();
     _transcriptController.dispose();
     super.dispose();
   }
 
-  Future<void> _startListening() async {
-    // Reseta todos os estados antes de iniciar nova escuta
-    setState(() {
-      _transcript = '';
-      _listening  = false;
-      _processed  = false;
-      _processing = false;
-      _result     = null;
-      _soundLevel = 0;
-    });
-    // Limpa o campo editável de transcrição
-    _transcriptController.clear();
-
+  // Inicia gravação ao pressionar o botão (onPointerDown).
+  Future<void> _startRecording() async {
+    if (_isRecording || _processing) return;
     final service = ref.read(voiceServiceProvider);
-    final ok = await service.startListening(
-      onPartial:    (t) => setState(() => _transcript = t),
-      onFinal:      _onFinal,
-      onSoundLevel: (l) => setState(() => _soundLevel = l),
-    );
-
-    if (ok) {
-      setState(() => _listening = true);
-    } else {
-      // STT não disponível no dispositivo
+    final ok      = await service.startRecording();
+    if (!mounted) return;
+    if (!ok) {
+      // Permissão negada ou microfone indisponível
       setState(() => _unavailable = true);
-    }
-  }
-
-  // Chamado quando o STT entrega o resultado final (sem mais parciais).
-  // Inicia o processamento assíncrono de intenção (Gemini ou regex).
-  void _onFinal(String transcript) {
-    // Popula o campo editável com o texto capturado pelo STT
-    _transcriptController.text = transcript;
-    setState(() {
-      _listening   = false;
-      _transcript  = transcript;
-      // Mostra spinner enquanto Gemini/regex processa
-      _processing  = true;
-    });
-    // Despacha resolução assíncrona — não bloqueia a UI
-    _resolveIntent(transcript);
-  }
-
-  // Re-analisa o texto editado pelo usuário no campo de transcrição.
-  // Chamado pelo botão de refresh no campo — permite corrigir inglês errado.
-  Future<void> _reanalyze() async {
-    final text = _transcriptController.text.trim();
-    if (text.isEmpty) return;
-    setState(() {
-      _transcript = text;
-      _processing = true;
-      _processed  = false;
-      _result     = null;
-    });
-    await _resolveIntent(text);
-  }
-
-  // Processa a intenção via Gemini (com fallback para regex).
-  // Atualiza _result e libera o spinner ao terminar.
-  Future<void> _resolveIntent(String transcript) async {
-    if (transcript.trim().isEmpty) {
-      // Nada a processar — fecha spinner sem resultado
-      if (mounted) setState(() { _processing = false; _processed = true; });
       return;
     }
+    setState(() {
+      _isRecording      = true;
+      _recordingSeconds = 0;
+    });
+    // Conta os segundos e aplica limite máximo de 30 s
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) { t.cancel(); return; }
+      setState(() => _recordingSeconds++);
+      if (_recordingSeconds >= _maxRecordingSeconds) {
+        t.cancel();
+        // Tempo máximo atingido — processa automaticamente
+        _stopAndProcess();
+      }
+    });
+  }
+
+  // Para gravação ao soltar o botão (onPointerUp) e envia ao Gemini.
+  Future<void> _stopAndProcess() async {
+    if (!_isRecording) return;
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+    setState(() {
+      _isRecording = false;
+      _processing  = true;
+    });
+    // Para gravação e obtém o caminho do arquivo
+    final service  = ref.read(voiceServiceProvider);
+    final filePath = await service.stopRecording();
+    if (!mounted) return;
+
+    if (filePath == null) {
+      setState(() { _processing = false; _processed = true; });
+      return;
+    }
+
+    // Envia áudio ao Gemini Audio API
     try {
-      final service = ref.read(voiceServiceProvider);
-      // resolveIntent: tenta Gemini primeiro, fallback regex
-      final result  = await service.resolveIntent(transcript);
+      final result = await service.processAudio(filePath);
       if (!mounted) return;
+      // Preenche o campo editável com a transcrição do Gemini
+      _transcriptController.text = result.transcript;
       setState(() {
         _result     = result;
         _processing = false;
@@ -412,15 +389,67 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
       // TTS: fala a confirmação se o toggle estiver ativo
       final audioOn    = ref.read(voiceAudioResponseProvider);
       final speechRate = ref.read(voiceSpeechRateProvider);
-      if (audioOn) service.speak(_intentLabel(result), rate: speechRate);
+      if (audioOn && result.intent != VoiceIntent.fallback) {
+        service.speak(_intentLabel(result), rate: speechRate);
+      }
     } catch (e) {
-      // Erro inesperado — fecha spinner sem travar a UI
-      debugPrint('[VoiceBottomSheet] Erro ao resolver intenção: $e');
+      debugPrint('[VoiceBottomSheet] Erro ao processar áudio: $e');
       if (mounted) setState(() { _processing = false; _processed = true; });
     }
   }
 
-  // Confirma a ação e fecha o sheet
+  // Cancela gravação sem processar (ex.: sheet fechado com PointerCancel).
+  void _cancelRecording() {
+    if (!_isRecording) return;
+    _recordingTimer?.cancel();
+    _recordingTimer = null;
+    ref.read(voiceServiceProvider).cancelRecording();
+    if (mounted) setState(() { _isRecording = false; });
+  }
+
+  // Reinicia o sheet para o estado inicial (botão "Tentar novamente").
+  void _reset() {
+    _transcriptController.clear();
+    setState(() {
+      _isRecording      = false;
+      _processing       = false;
+      _processed        = false;
+      _unavailable      = false;
+      _result           = null;
+      _recordingSeconds = 0;
+    });
+  }
+
+  // Re-analisa o texto editado manualmente no campo de transcrição.
+  // Usa Gemini Text API com fallback regex — sem nova gravação.
+  Future<void> _reanalyze() async {
+    final text = _transcriptController.text.trim();
+    if (text.isEmpty) return;
+    setState(() {
+      _processing = true;
+      _processed  = false;
+      _result     = null;
+    });
+    try {
+      final service = ref.read(voiceServiceProvider);
+      final result  = await service.resolveIntentFromText(text);
+      if (!mounted) return;
+      setState(() {
+        _result     = result;
+        _processing = false;
+        _processed  = true;
+      });
+      final audioOn = ref.read(voiceAudioResponseProvider);
+      if (audioOn && result.intent != VoiceIntent.fallback) {
+        service.speak(_intentLabel(result),
+            rate: ref.read(voiceSpeechRateProvider));
+      }
+    } catch (e) {
+      if (mounted) setState(() { _processing = false; _processed = true; });
+    }
+  }
+
+  // Confirma a ação detectada e fecha o sheet
   void _confirm() {
     final result = _result;
     if (result == null) return;
@@ -465,9 +494,6 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
 
   @override
   Widget build(BuildContext context) {
-    // voiceTextResponseProvider não é mais lido aqui: o transcript está sempre
-    // visível no campo editável — o toggle de texto afeta apenas o TTS.
-
     return Padding(
       padding: EdgeInsets.fromLTRB(
         20, 20, 20,
@@ -476,10 +502,9 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Alça visual
+          // Alça visual do sheet
           Container(
-            width: 36,
-            height: 4,
+            width: 36, height: 4,
             margin: const EdgeInsets.only(bottom: 20),
             decoration: BoxDecoration(
               color: AppTheme.textDisabled,
@@ -488,7 +513,7 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
           ),
 
           if (_unavailable) ...[
-            // STT não disponível no dispositivo
+            // ── Erro: microfone indisponível ─────────────────────────────
             const Icon(Icons.mic_off_outlined, color: AppTheme.accent, size: 48),
             const SizedBox(height: 12),
             const Text(
@@ -508,8 +533,9 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
                 child: const Text(AppStrings.voiceClose),
               ),
             ),
+
           ] else if (_processing) ...[
-            // Estado: processando com Gemini ou regex (spinner)
+            // ── Processando: aguarda Gemini Audio ─────────────────────────
             const Text(
               AppStrings.voiceProcessing,
               style: TextStyle(
@@ -519,83 +545,17 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
               ),
             ),
             const SizedBox(height: 24),
-            // Spinner circular enquanto aguarda resposta da API
             const CircularProgressIndicator(color: AppTheme.accent),
-            const SizedBox(height: 24),
-            // Mostra o que foi ouvido para o usuário confirmar visualmente
-            if (_transcript.isNotEmpty)
-              Text(
-                '"$_transcript"',
-                textAlign: TextAlign.center,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 13,
-                  height: 1.5,
-                ),
-              ),
+            const SizedBox(height: 16),
+            Text(
+              'Analisando ${_recordingSeconds}s de áudio...',
+              style: const TextStyle(
+                color: AppTheme.textSecondary, fontSize: 13),
+            ),
             const SizedBox(height: 8),
-          ] else if (!_processed) ...[
-            // Estado: escutando
-            const Text(
-              AppStrings.voiceListeningTitle,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              AppStrings.voiceListeningHint,
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-            ),
-            const SizedBox(height: 24),
 
-            // Animação de ondas sonoras
-            _SoundWave(active: _listening, soundLevel: _soundLevel),
-            const SizedBox(height: 24),
-
-            // Transcrição parcial em tempo real
-            AnimatedOpacity(
-              opacity: _transcript.isNotEmpty ? 1.0 : 0.4,
-              duration: const Duration(milliseconds: 200),
-              child: Text(
-                _transcript.isNotEmpty ? _transcript : AppStrings.voiceExamples,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: _transcript.isNotEmpty
-                      ? AppTheme.textPrimary
-                      : AppTheme.textDisabled,
-                  fontSize: _transcript.isNotEmpty ? 15 : 12,
-                  height: 1.5,
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Botão para parar a escuta manualmente e iniciar processamento
-            OutlinedButton.icon(
-              onPressed: () async {
-                await ref.read(voiceServiceProvider).stopListening();
-                if (_transcript.isNotEmpty) {
-                  // _onFinal inicia o spinner e chama _resolveIntent assíncrono
-                  _onFinal(_transcript);
-                } else {
-                  // Nada foi ouvido → volta ao estado de escuta
-                  setState(() => _listening = false);
-                }
-              },
-              icon: const Icon(Icons.stop_circle_outlined, size: 18),
-              label: const Text('Parar'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppTheme.accent,
-                side: const BorderSide(color: AppTheme.accent),
-              ),
-            ),
-          ] else ...[
-            // Estado: resultado processado
+          ] else if (_processed) ...[
+            // ── Resultado: transcrição + intenção ─────────────────────────
             const Text(
               AppStrings.voiceResultTitle,
               style: TextStyle(
@@ -606,25 +566,24 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
             ),
             const SizedBox(height: 12),
 
-            // Campo editável com o texto capturado pelo STT.
-            // Permite corrigir erros de reconhecimento (ex.: inglês em vez de pt-BR)
-            // e re-analisar com o botão de refresh antes de confirmar.
+            // Campo editável com a transcrição do Gemini.
+            // O usuário pode corrigir e tocar ↺ para re-analisar.
             TextField(
               controller: _transcriptController,
               style: const TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-              maxLines:   2,
-              minLines:   1,
+              maxLines: 2,
+              minLines: 1,
               decoration: InputDecoration(
-                labelText:     AppStrings.voiceTranscriptLabel,
-                labelStyle:    const TextStyle(color: AppTheme.textSecondary),
-                filled:        true,
-                fillColor:     AppTheme.backgroundSurface,
-                border: OutlineInputBorder(
+                labelText:  AppStrings.voiceTranscriptLabel,
+                labelStyle: const TextStyle(color: AppTheme.textSecondary),
+                filled:     true,
+                fillColor:  AppTheme.backgroundSurface,
+                border:     OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
                   borderSide: BorderSide.none,
                 ),
                 contentPadding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
-                // Botão de re-análise: permite processar o texto editado
+                // Botão de re-análise: processa o texto editado
                 suffixIcon: IconButton(
                   icon:    const Icon(Icons.refresh, size: 20),
                   color:   AppTheme.accent,
@@ -635,7 +594,7 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
             ),
             const SizedBox(height: 12),
 
-            // Card mostrando a intenção detectada
+            // Card com a ação reconhecida
             if (_result != null)
               Container(
                 width: double.infinity,
@@ -647,8 +606,7 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
                 child: Row(
                   children: [
                     Container(
-                      width: 44,
-                      height: 44,
+                      width: 44, height: 44,
                       decoration: BoxDecoration(
                         color: AppTheme.accent.withOpacity(0.15),
                         shape: BoxShape.circle,
@@ -675,12 +633,12 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
               ),
             const SizedBox(height: 20),
 
-            // Botões de ação
+            // Botões: Tentar novamente | Confirmar
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _startListening,
+                    onPressed: _reset,
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppTheme.textSecondary,
                       side: const BorderSide(color: AppTheme.backgroundElevated),
@@ -705,6 +663,77 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
                 ),
               ],
             ),
+
+          ] else ...[
+            // ── Idle: botão de gravação (segure para gravar) ─────────────
+            const Text(
+              AppStrings.voiceHoldToSpeak,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              // Mostra "Gravando... Xs" quando _isRecording, senão dica de exemplos
+              _isRecording
+                  ? AppStrings.voiceListeningHint  // "Solte para processar"
+                  : AppStrings.voiceExamples,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: _isRecording ? AppTheme.accent : AppTheme.textDisabled,
+                fontSize: 12,
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Botão de gravação: segure para gravar, solte para processar.
+            // Listener captura pointer events antes do GestureDetector do sheet.
+            Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: (_) => _startRecording(),
+              onPointerUp:   (_) => _stopAndProcess(),
+              onPointerCancel: (_) => _cancelRecording(),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width:  88,
+                height: 88,
+                decoration: BoxDecoration(
+                  // Vermelho quando gravando, accent quando idle
+                  color: _isRecording
+                      ? const Color(0xFFE53935)
+                      : AppTheme.accent,
+                  shape: BoxShape.circle,
+                  boxShadow: _isRecording
+                      ? [BoxShadow(
+                          color: const Color(0xFFE53935).withOpacity(0.5),
+                          blurRadius: 20, spreadRadius: 4,
+                        )]
+                      : [],
+                ),
+                child: Icon(
+                  _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
+                  color: Colors.white,
+                  size:  40,
+                ),
+              ),
+            ),
+
+            // Contador de segundos durante gravação
+            if (_isRecording) ...[
+              const SizedBox(height: 12),
+              Text(
+                '$_recordingSeconds s',
+                style: const TextStyle(
+                  color: Color(0xFFE53935),
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+            const SizedBox(height: 24),
           ],
 
           const SizedBox(height: 8),
@@ -714,79 +743,6 @@ class _VoiceBottomSheetState extends ConsumerState<_VoiceBottomSheet> {
   }
 }
 
-// ── Animação de ondas sonoras ─────────────────────────────────────────────────
-
-// Cinco barras verticais com animação senoidal desfasada que pulsam
-// enquanto o microfone está ativo. A altura é modulada pelo nível de som.
-class _SoundWave extends StatefulWidget {
-  final bool active;
-  // Nível de som em dB do STT, tipicamente de -2.0 a 10.0+
-  final double soundLevel;
-
-  const _SoundWave({required this.active, required this.soundLevel});
-
-  @override
-  State<_SoundWave> createState() => _SoundWaveState();
-}
-
-class _SoundWaveState extends State<_SoundWave>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 60,
-      child: AnimatedBuilder(
-        animation: _ctrl,
-        builder: (_, __) {
-          // Amplitude relativa baseada no nível de som (0.2 a 1.0)
-          final amplitude = widget.active
-              ? 0.2 + ((widget.soundLevel.clamp(-2.0, 10.0) + 2) / 12).clamp(0.0, 0.8)
-              : 0.1;
-
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: List.generate(5, (i) {
-              // Cada barra tem uma fase diferente para criar o efeito de onda
-              final phase = (_ctrl.value + i * 0.2) % 1.0;
-              final sineVal = (sin(phase * 2 * pi) + 1) / 2; // 0 a 1
-              final height = 10.0 + sineVal * 40.0 * amplitude;
-
-              return Container(
-                margin: const EdgeInsets.symmetric(horizontal: 4),
-                width: 6,
-                height: height,
-                decoration: BoxDecoration(
-                  color: AppTheme.accent.withOpacity(
-                    widget.active ? (0.5 + sineVal * 0.5) : 0.3,
-                  ),
-                  borderRadius: BorderRadius.circular(3),
-                ),
-              );
-            }),
-          );
-        },
-      ),
-    );
-  }
-}
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState();

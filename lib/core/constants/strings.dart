@@ -227,8 +227,10 @@ class AppStrings {
   static const voiceRateSlow           = 'Lenta';
   static const voiceRateNormal         = 'Normal';
   static const voiceRateFast           = 'Rápida';
-  static const voiceListeningTitle     = 'Ouvindo...';
-  static const voiceListeningHint      = 'Fale um comando';
+  // Sprint V2-GeminiAudio: gravação substituiu STT on-device
+  static const voiceListeningTitle     = 'Gravando...';
+  static const voiceListeningHint      = 'Solte para processar';
+  static const voiceHoldToSpeak        = 'Segure o botão para falar';
   static const voiceResultTitle        = 'Ação reconhecida';
   static const voiceConfirm            = 'Confirmar';
   static const voiceRetry              = 'Tentar novamente';

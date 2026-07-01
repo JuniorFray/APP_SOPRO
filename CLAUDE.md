@@ -490,7 +490,7 @@ Entregue:
 
 - flutter analyze lib/: No issues found.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-Gemini-Robustez - Modelo correto + Ingles STT + Transcript editavel - CONCLUIDO (2026-07-01)
 Entregue:
 
@@ -521,6 +521,71 @@ Entregue:
 
 - flutter analyze lib/: No issues found.
 
+## Sprint Atual
+Sprint: V2-GeminiAudio - Gravacao de audio + Gemini Audio API - CONCLUIDO (2026-07-01)
+Entregue:
+
+### Mudanca de estrategia
+STT on-device (speech_to_text) substituido por gravacao de audio + Gemini Audio API.
+Uma unica chamada faz STT + NLU simultaneamente. Resolve o problema de locale pt-BR
+ignorado no Motorola (engine STT nativo capturava em ingles independente da config).
+
+1. PACOTES (pubspec.yaml):
+   - REMOVIDO: speech_to_text ^6.6.2.
+   - ADICIONADO: record ^5.1.2 — AudioRecorder para M4A/AAC 16kHz 64kbps.
+
+2. VOICE SERVICE REESCRITO (lib/infrastructure/voice/voice_service.dart):
+   - AudioRecorder substitui SpeechToText. Gravacao em M4A (RecordConfig: aacLc, 16000 Hz, 64kbps).
+   - startRecording(): inicia gravacao em getTemporaryDirectory()/sopro_voice.m4a.
+     Retorna bool (false se permissao negada).
+   - stopRecording(): para gravacao, retorna caminho do arquivo ou null.
+   - cancelRecording(): descarta gravacao sem processar.
+   - isRecording: Future<bool> via _recorder.isRecording().
+   - processAudio(filePath): le arquivo, base64 encoda, envia ao Gemini 2.5 Flash Preview.
+     JSON contract: {transcricao, intent, ambiente, titulo, conteudo}. Loga voice_debug.
+   - transcribeAudio(filePath): chama processAudio e retorna so result.transcript (String?).
+     Usado pelos campos de formulario (nome do ambiente, titulo/conteudo do gatilho).
+   - resolveIntentFromText(transcript): Gemini Text API + fallback regex para re-analise
+     apos edicao manual. Substitui o antigo resolveIntent(transcript).
+   - _sendAudioToGemini(base64): POST inline_data audio/m4a, timeout 30s.
+   - _sendTextToGemini(transcript): POST text parts, timeout 10s (re-analise).
+   - Regex parseIntent() mantido como fallback offline.
+   - TTS (speak/stopSpeaking) inalterado.
+   - REMOVIDOS: SpeechToText, _findPtBrLocale, startListening, stopListening.
+
+3. ENDPOINT GEMINI AUDIO:
+   - gemini-2.5-flash-preview-05-20:generateContent (suporta inline_data de audio).
+   - geminiSystemPrompt: solicita campo 'transcricao' + intent + ambiente + titulo + conteudo.
+   - geminiTextPrompt: versao texto para re-analise po edicao manual.
+
+4. HOME SCREEN - BOTTOM SHEET REESCRITO (home_screen.dart):
+   - UX: botao grande (88px) — SEGURAR para gravar, SOLTAR para processar.
+     Listener (onPointerDown/Up/Cancel) em vez de GestureDetector.
+   - Icone muda mic→stop; fundo accent→vermelho (#E53935) com glow enquanto grava.
+   - Contador de segundos em tempo real. Auto-stop aos 30s (Timer.periodic).
+   - Estados: idle | gravando | processando (spinner) | resultado | erro.
+   - Resultado: TextField editavel com transcricao + botao re-analisar + card de intencao.
+   - _reanalyze(): chama service.resolveIntentFromText() (nao grava novamente).
+   - _SoundWave removida (nao faz sentido sem nivel de som do STT).
+   - import dart:math removido.
+
+5. FORMULARIOS COM MICROFONE ATUALIZADOS:
+   - add_environment_screen.dart: _recordForName() substitui _listenForName().
+     Tap → grava 7 s → para automaticamente → transcribeAudio() → preenche _nameController.
+     Segundo tap cancela gravacao em andamento.
+   - environment_detail_screen.dart: _recordForField() substitui _listenForField().
+     Mesma logica, 8 s por campo. Cancela corretamente no dispose().
+   - import dart:async adicionado em ambos os arquivos.
+
+6. LOGS SUPABASE (voice_debug):
+   - audio_size_bytes: tamanho do arquivo gravado em bytes.
+   - gemini_http: status HTTP da resposta do Gemini.
+   - gemini_raw: JSON bruto retornado pelo Gemini.
+   - gemini_error: descricao do erro se houver falha.
+   - final_intent: intencao final (apos fallback).
+
+- flutter analyze lib/: No issues found.
+
 ## V1 FINALIZADA — Sopro 0.1.0
 
 ### Historico de Sprints
@@ -545,6 +610,7 @@ Sprint 17      — Fechamento V1: fix GeofenceReceiver (IMPORTANCE_MAX), refresh
 Sprint V2-Voz  — Voz: speech_to_text + flutter_tts, FAB mic na Home, regex on-device, mic nos formularios, configuracoes de voz.
 Sprint V2-Voz-Fix     — Locale pt-BR dinamico via locales() + Gemini API para intencao com fallback regex; _processing spinner no sheet.
 Sprint V2-Gemini-Robustez — Modelo gemini-1.5-flash, heuristica STT ingles, transcript editavel com re-analisar.
+Sprint V2-GeminiAudio  — Substitui STT por gravacao de audio + Gemini 2.5 Flash Audio API. UX: segure para gravar, solte para processar.
 
 ### Bugs Corrigidos em Campo (Motorola G52, Android 12)
 

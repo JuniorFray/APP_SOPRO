@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -46,8 +47,10 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   LatLng? _selectedPoint;
   bool _isSaving        = false;
   bool _loadingLocation = false;
-  // true enquanto o STT está escutando para preencher o nome via voz
-  bool _listeningName   = false;
+  // true enquanto o AudioRecorder está gravando para preencher o nome
+  bool _recordingName   = false;
+  // Timer de auto-stop para gravação de nome (7 s máximo)
+  Timer? _nameRecordTimer;
 
   // Estado da busca por endereço via Nominatim
   bool _searching = false;
@@ -88,6 +91,8 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
 
   @override
   void dispose() {
+    _nameRecordTimer?.cancel();
+    ref.read(voiceServiceProvider).cancelRecording();
     _nameController.dispose();
     _radiusController.dispose();
     _searchCtrl.dispose();
@@ -149,11 +154,11 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                     : null,
                 decoration: _inputDecoration(
                   label: AppStrings.environmentNameLabel,
-                  hint: _listeningName
+                  hint: _recordingName
                       ? AppStrings.voiceFillHint
                       : AppStrings.environmentNameHint,
                 ).copyWith(
-                  suffixIcon: _listeningName
+                  suffixIcon: _recordingName
                       ? const Padding(
                           padding: EdgeInsets.all(12),
                           child: SizedBox(
@@ -169,7 +174,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                           icon: const Icon(Icons.mic_outlined,
                               color: AppTheme.accent, size: 20),
                           tooltip: AppStrings.voiceMicTooltip,
-                          onPressed: _listenForName,
+                          onPressed: _recordForName,
                         ),
                 ),
               ),
@@ -402,36 +407,43 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     );
   }
 
-  // Inicia STT para preencher o campo de nome do ambiente por voz.
-  // Ouve por até 7 s; preenche _nameController com a transcrição final.
-  Future<void> _listenForName() async {
+  // Grava 7 s de áudio e usa Gemini para transcrever o nome do ambiente.
+  // Toque no mic inicia; auto-para após 7 s. Toque novamente cancela.
+  Future<void> _recordForName() async {
+    if (_recordingName) {
+      // Segundo toque: cancela gravação em andamento
+      _nameRecordTimer?.cancel();
+      ref.read(voiceServiceProvider).cancelRecording();
+      if (mounted) setState(() => _recordingName = false);
+      return;
+    }
+
     final service = ref.read(voiceServiceProvider);
-    setState(() => _listeningName = true);
-
-    final ok = await service.startListening(
-      onPartial: (t) {
-        if (mounted) setState(() => _nameController.text = t);
-      },
-      onFinal: (t) {
-        if (mounted) {
-          setState(() {
-            _listeningName = false;
-            if (t.isNotEmpty) {
-              // Capitaliza a primeira letra do nome ditado
-              _nameController.text = t[0].toUpperCase() + t.substring(1);
-            }
-          });
-        }
-      },
-      listenFor: const Duration(seconds: 7),
-    );
-
-    if (!ok && mounted) {
-      setState(() => _listeningName = false);
+    final ok = await service.startRecording();
+    if (!mounted) return;
+    if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text(AppStrings.voiceNotAvailable)),
       );
+      return;
     }
+    setState(() => _recordingName = true);
+
+    // Para automaticamente após 7 s e transcreve via Gemini
+    _nameRecordTimer = Timer(const Duration(seconds: 7), () async {
+      final path = await service.stopRecording();
+      if (!mounted) return;
+      setState(() => _recordingName = false);
+      if (path == null) return;
+      // transcribeAudio usa o Gemini para extrair apenas o texto falado
+      final transcript = await service.transcribeAudio(path);
+      if (!mounted || transcript == null || transcript.isEmpty) return;
+      setState(() {
+        // Capitaliza a inicial do nome ditado
+        _nameController.text =
+            transcript[0].toUpperCase() + transcript.substring(1);
+      });
+    });
   }
 
   // Busca um endereço usando Photon como fonte primária e Nominatim como fallback.

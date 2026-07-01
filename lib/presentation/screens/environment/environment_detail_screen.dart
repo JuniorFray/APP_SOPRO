@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -396,9 +398,11 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
   late final TextEditingController _titleCtrl;
   late final TextEditingController _contentCtrl;
   bool _isSaving        = false;
-  // Flags de escuta ativa por campo para animação de loading no ícone
-  bool _listeningTitle   = false;
-  bool _listeningContent = false;
+  // Flags de gravação ativa por campo para animação de loading no ícone
+  bool _recordingTitle   = false;
+  bool _recordingContent = false;
+  // Timer de auto-stop da gravação por campo (8 s máximo)
+  Timer? _fieldRecordTimer;
 
   bool get _isEditing => widget.existingTrigger != null;
 
@@ -412,6 +416,8 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
 
   @override
   void dispose() {
+    _fieldRecordTimer?.cancel();
+    ref.read(voiceServiceProvider).cancelRecording();
     _titleCtrl.dispose();
     _contentCtrl.dispose();
     super.dispose();
@@ -461,11 +467,11 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
               textCapitalization: TextCapitalization.sentences,
               decoration: _fieldDecoration(
                 label: AppStrings.triggerTitleLabel,
-                hint: _listeningTitle
+                hint: _recordingTitle
                     ? AppStrings.voiceFillHint
                     : AppStrings.triggerTitleHint,
               ).copyWith(
-                suffixIcon: _listeningTitle
+                suffixIcon: _recordingTitle
                     ? const Padding(
                         padding: EdgeInsets.all(12),
                         child: SizedBox(
@@ -481,9 +487,9 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
                         icon: const Icon(Icons.mic_outlined,
                             color: AppTheme.accent, size: 20),
                         tooltip: AppStrings.voiceMicTooltip,
-                        onPressed: () => _listenForField(
+                        onPressed: () => _recordForField(
                           _titleCtrl,
-                          (v) => setState(() => _listeningTitle = v),
+                          (v) => setState(() => _recordingTitle = v),
                         ),
                       ),
               ),
@@ -502,11 +508,11 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
                       : null,
               decoration: _fieldDecoration(
                 label: AppStrings.triggerContentLabel,
-                hint: _listeningContent
+                hint: _recordingContent
                     ? AppStrings.voiceFillHint
                     : AppStrings.triggerContentHint,
               ).copyWith(
-                suffixIcon: _listeningContent
+                suffixIcon: _recordingContent
                     ? const Padding(
                         padding: EdgeInsets.all(12),
                         child: SizedBox(
@@ -522,9 +528,9 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
                         icon: const Icon(Icons.mic_outlined,
                             color: AppTheme.accent, size: 20),
                         tooltip: AppStrings.voiceMicTooltip,
-                        onPressed: () => _listenForField(
+                        onPressed: () => _recordForField(
                           _contentCtrl,
-                          (v) => setState(() => _listeningContent = v),
+                          (v) => setState(() => _recordingContent = v),
                         ),
                       ),
               ),
@@ -565,38 +571,46 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
     );
   }
 
-  // Inicia STT para preencher [ctrl] por voz. [setListening] atualiza o flag
-  // de estado do campo correspondente para animar o ícone de microfone.
-  Future<void> _listenForField(
+  // Grava 8 s de áudio e usa Gemini para transcrever o campo [ctrl].
+  // [setRecording] atualiza o flag do campo para animar o ícone.
+  // Toque no mic inicia; toque novamente cancela antes dos 8 s.
+  Future<void> _recordForField(
     TextEditingController ctrl,
-    void Function(bool) setListening,
+    void Function(bool) setRecording,
   ) async {
+    // Segundo toque: cancela gravação em andamento
+    final isAlreadyRecording =
+        (_recordingTitle || _recordingContent) && !ctrl.text.endsWith('...');
+    if (isAlreadyRecording) {
+      _fieldRecordTimer?.cancel();
+      ref.read(voiceServiceProvider).cancelRecording();
+      setRecording(false);
+      return;
+    }
+
     final service = ref.read(voiceServiceProvider);
-    setListening(true);
-
-    final ok = await service.startListening(
-      onPartial: (t) {
-        if (mounted) setState(() => ctrl.text = t);
-      },
-      onFinal: (t) {
-        if (mounted) {
-          setState(() {
-            if (t.isNotEmpty) {
-              ctrl.text = t[0].toUpperCase() + t.substring(1);
-            }
-          });
-          setListening(false);
-        }
-      },
-      listenFor: const Duration(seconds: 8),
-    );
-
-    if (!ok && mounted) {
-      setListening(false);
+    final ok = await service.startRecording();
+    if (!mounted) return;
+    if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text(AppStrings.voiceNotAvailable)),
       );
+      return;
     }
+    setRecording(true);
+
+    // Para automaticamente após 8 s e transcreve via Gemini
+    _fieldRecordTimer = Timer(const Duration(seconds: 8), () async {
+      final path = await service.stopRecording();
+      if (!mounted) return;
+      setRecording(false);
+      if (path == null) return;
+      final transcript = await service.transcribeAudio(path);
+      if (!mounted || transcript == null || transcript.isEmpty) return;
+      setState(() {
+        ctrl.text = transcript[0].toUpperCase() + transcript.substring(1);
+      });
+    });
   }
 
   Future<void> _submit() async {
