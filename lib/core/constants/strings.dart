@@ -285,6 +285,18 @@ class AppStrings {
   static const voiceHoldToRecord   = 'Segure para gravar';
   // Exibido quando o usuário solta antes de 500 ms (gravação muito curta)
   static const voiceHoldLonger     = 'Segure por mais tempo para gravar';
+
+  // ── Voz — FIX 1/2 (auto-save GPS + env not found) ────────────────────────
+  // Prefixo do snackbar ao criar ambiente por voz via GPS
+  static const voiceEnvCreated          = 'Ambiente criado';
+  // Snackbar quando ambiente E gatilho são criados juntos
+  static const voiceEnvAndTriggerCreated = 'Ambiente e gatilho salvos';
+  // Fragmento usado no título do sheet quando ambiente não existe
+  static const voiceEnvNotExists        = 'ainda não existe';
+  // Botão primário do sheet "ambiente não existe"
+  static const voiceCreateEnvNow        = 'Criar ambiente agora';
+  // Botão secundário do sheet "ambiente não existe"
+  static const voiceChooseOther         = 'Escolher outro';
   // Título do sheet que lista todos os ambientes (list_environments)
   static const voiceEnvListTitle   = 'Meus locais';
   // Prefixo do snackbar ao atualizar ambiente por voz

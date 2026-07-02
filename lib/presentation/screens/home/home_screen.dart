@@ -14,7 +14,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -423,7 +422,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       ));
       await _setSuccess();
     } else {
-      // Ambiente não encontrado → log + seletor inline para o usuário escolher
+      // Ambiente não encontrado → oferece criar agora (GPS) ou escolher outro
       AppLogger.log('trigger_voice_failed', {
         'env_name_from_gemini': result.environmentName,
         'trigger_action':       result.triggerAction,
@@ -431,10 +430,21 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       });
       if (!mounted) return;
       setState(() => _fabState = _FabState.idle);
-      _showSheet(_EnvPickerSheet(
-        title:         AppStrings.voiceEnvPickerTitle,
-        subtitle:      result.triggerAction ?? result.transcript,
-        onEnvSelected: (env) => _saveAndConfirm(env, result),
+      _showSheet(_EnvNotFoundSheet(
+        envName:      result.environmentName ?? '',
+        triggerTitle: result.triggerAction ?? '',
+        onCreateNow: () {
+          Navigator.pop(context);
+          _saveAndConfirmWithGps(result);
+        },
+        onChooseOther: () {
+          Navigator.pop(context);
+          _showSheet(_EnvPickerSheet(
+            title:         AppStrings.voiceEnvPickerTitle,
+            subtitle:      result.triggerAction ?? result.transcript,
+            onEnvSelected: (env) => _saveAndConfirm(env, result),
+          ));
+        },
       ));
     }
   }
@@ -460,32 +470,121 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     ));
   }
 
-  // "salva esse lugar como X" → obtém GPS e abre AddEnvironmentScreen
-  Future<void> _handleOpenEnvironment(VoiceResult result) async {
-    if (!mounted) return;
-    setState(() => _fabState = _FabState.processing);
+  // ── Helpers de criação por GPS ─────────────────────────────────────────────
 
-    // Obtém posição GPS atual para pré-posicionar o pin no mapa
-    LatLng? gpsPosition;
+  // Obtém GPS, cria EnvironmentEntity no banco e registra o geofence nativo.
+  // Retorna a entidade criada, ou null se o GPS falhar.
+  Future<EnvironmentEntity?> _createEnvironmentFromGps(
+    String name, {
+    int radiusMeters = 100,
+  }) async {
     try {
       final loc = await ref
           .read(nativeLocationServiceProvider)
           .getCurrentPosition();
-      if (loc != null) gpsPosition = LatLng(loc.latitude, loc.longitude);
-    } catch (_) {
-      // GPS indisponível — AddEnvironmentScreen usa centro padrão (São Paulo)
-    }
+      if (loc == null) return null;
 
+      final env = EnvironmentEntity(
+        id:           const Uuid().v4(),
+        name:         _capitalize(name),
+        latitude:     loc.latitude,
+        longitude:    loc.longitude,
+        radiusMeters: radiusMeters.toDouble(),
+        createdAt:    DateTime.now(),
+      );
+      await ref.read(environmentRepositoryProvider).save(env);
+
+      // Registra no GeofencingClient para disparos com app morto
+      await ref.read(nativeGeofenceServiceProvider).addGeofence(
+        id:           env.id,
+        lat:          env.latitude,
+        lng:          env.longitude,
+        radiusMeters: env.radiusMeters,
+        name:         env.name,
+      );
+
+      AppLogger.log('env_created_by_voice', {
+        'env_id':   env.id,
+        'env_name': env.name,
+      });
+      return env;
+    } catch (e) {
+      debugPrint('[_VoiceFab] Erro ao criar ambiente via GPS: $e');
+      return null;
+    }
+  }
+
+  // Cria ambiente via GPS e salva o trigger nele (usado pelo _EnvNotFoundSheet).
+  // Exibe snackbar combinado e chama _setSuccess() ao concluir.
+  // Fallback: se GPS falhar, abre _EnvPickerSheet para o usuário escolher ambiente existente.
+  Future<void> _saveAndConfirmWithGps(VoiceResult result) async {
     if (!mounted) return;
-    setState(() => _fabState = _FabState.idle);
-    // ignore: use_build_context_synchronously
-    pushScreen(
-      context,
-      AddEnvironmentScreen(
-        initialName:     _capitalize(result.environmentName ?? ''),
-        initialPosition: gpsPosition,
-      ),
-    );
+    setState(() => _fabState = _FabState.processing);
+
+    final name = result.environmentName ?? '';
+    final env  = await _createEnvironmentFromGps(name);
+    if (!mounted) return;
+
+    if (env != null) {
+      await ref.read(triggerRepositoryProvider).save(TriggerEntity(
+        id:            const Uuid().v4(),
+        environmentId: env.id,
+        title:         result.triggerAction ?? '',
+        content:       result.transcript,
+        isActive:      true,
+        createdAt:     DateTime.now(),
+      ));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          '${AppStrings.voiceEnvAndTriggerCreated}: ${env.name} ✓',
+        ),
+        // ignore: deprecated_member_use
+        backgroundColor: Colors.green.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ));
+      await _setSuccess();
+    } else {
+      // GPS falhou → cai no seletor de ambientes existentes como fallback
+      setState(() => _fabState = _FabState.idle);
+      _showSheet(_EnvPickerSheet(
+        title:         AppStrings.voiceEnvPickerTitle,
+        subtitle:      result.triggerAction ?? result.transcript,
+        onEnvSelected: (e) => _saveAndConfirm(e, result),
+      ));
+    }
+  }
+
+  // "salva esse lugar como X" → cria ambiente diretamente via GPS.
+  // Abre AddEnvironmentScreen como fallback se o GPS falhar.
+  Future<void> _handleOpenEnvironment(VoiceResult result) async {
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.processing);
+
+    final name   = result.environmentName ?? '';
+    final radius = result.environmentRadius ?? 100;
+    final env    = await _createEnvironmentFromGps(name, radiusMeters: radius);
+    if (!mounted) return;
+
+    if (env != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${AppStrings.voiceEnvCreated}: ${env.name} ✓'),
+        // ignore: deprecated_member_use
+        backgroundColor: Colors.green.shade700,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ));
+      await _setSuccess();
+    } else {
+      // GPS falhou → abre tela de adição com nome pré-preenchido
+      setState(() => _fabState = _FabState.idle);
+      // ignore: use_build_context_synchronously
+      pushScreen(
+        context,
+        AddEnvironmentScreen(initialName: _capitalize(name)),
+      );
+    }
   }
 
   // "resolvi X" → desativa o primeiro trigger que corresponda ao título
@@ -545,19 +644,56 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     }
   }
 
-  // "cria o ambiente X e lembra de Y" → abre AddEnvironmentScreen + snackbar com gatilho pendente.
-  // Limitação: AddEnvironmentScreen não retorna resultado — gatilho é adicionado
-  // manualmente pelo usuário após criar o ambiente.
+  // "cria o ambiente X e lembra de Y" → cria via GPS e salva triggers automaticamente.
+  // Fallback: AddEnvironmentScreen + snackbar de lembrete se o GPS falhar.
   Future<void> _handleCreateEnvironmentWithTrigger(VoiceResult result) async {
-    await _handleOpenEnvironment(result);
-    if (mounted && result.triggerTitles.isNotEmpty) {
-      final list = result.triggerTitles.join(', ');
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.processing);
+
+    final name   = result.environmentName ?? '';
+    final radius = result.environmentRadius ?? 100;
+    final env    = await _createEnvironmentFromGps(name, radiusMeters: radius);
+    if (!mounted) return;
+
+    if (env != null) {
+      // Salva cada trigger mencionado no comando de voz
+      for (final title in result.triggerTitles) {
+        if (title.trim().isEmpty) continue;
+        await ref.read(triggerRepositoryProvider).save(TriggerEntity(
+          id:            const Uuid().v4(),
+          environmentId: env.id,
+          title:         title,
+          content:       '',
+          isActive:      true,
+          createdAt:     DateTime.now(),
+        ));
+      }
+      if (!mounted) return;
+      final msg = result.triggerTitles.isNotEmpty
+          ? '${AppStrings.voiceEnvAndTriggerCreated}: ${env.name} ✓'
+          : '${AppStrings.voiceEnvCreated}: ${env.name} ✓';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${AppStrings.voicePendingTriggers} $list'),
-        duration: const Duration(seconds: 5),
+        content: Text(msg),
+        // ignore: deprecated_member_use
+        backgroundColor: Colors.green.shade700,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ));
+      await _setSuccess();
+    } else {
+      // GPS falhou → fallback para AddEnvironmentScreen + lembrete dos gatilhos
+      setState(() => _fabState = _FabState.idle);
+      // ignore: use_build_context_synchronously
+      pushScreen(context, AddEnvironmentScreen(initialName: _capitalize(name)));
+      if (mounted && result.triggerTitles.isNotEmpty) {
+        final list = result.triggerTitles.join(', ');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${AppStrings.voicePendingTriggers} $list'),
+          duration: const Duration(seconds: 5),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ));
+      }
     }
   }
 
@@ -753,6 +889,109 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     final min = s ~/ 60;
     final sec = (s % 60).toString().padLeft(2, '0');
     return '$min:$sec';
+  }
+}
+
+// ── Sheet: ambiente não encontrado ────────────────────────────────────────────
+
+// Exibido quando o Gemini identifica um ambiente por nome mas ele não existe no banco.
+// Oferece duas saídas: criar o ambiente agora (via GPS) ou escolher um existente.
+class _EnvNotFoundSheet extends StatelessWidget {
+  // Nome retornado pelo Gemini — exibido na mensagem explicativa
+  final String envName;
+  // Título do trigger que aguarda um ambiente — exibido como contexto
+  final String triggerTitle;
+  // "Criar ambiente agora" → GPS + salvar trigger automaticamente
+  final VoidCallback onCreateNow;
+  // "Escolher outro" → abre o seletor de ambientes existentes
+  final VoidCallback onChooseOther;
+
+  const _EnvNotFoundSheet({
+    required this.envName,
+    required this.triggerTitle,
+    required this.onCreateNow,
+    required this.onChooseOther,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final displayName = envName.isEmpty ? '?' : '"$envName"';
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Alça visual do sheet
+            Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: AppTheme.textDisabled,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+
+            // Ícone representando localização ausente
+            const Icon(
+              Icons.location_off_outlined,
+              color: AppTheme.textSecondary,
+              size: 40,
+            ),
+            const SizedBox(height: 12),
+
+            // Mensagem principal
+            Text(
+              '$displayName ${AppStrings.voiceEnvNotExists}.',
+              style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+
+            // Contexto: título do trigger que precisa ser salvo
+            if (triggerTitle.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                '"$triggerTitle"',
+                style: const TextStyle(
+                  color: AppTheme.textSecondary,
+                  fontSize: 13,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+            const SizedBox(height: 20),
+
+            // Botão primário: usa GPS atual para criar o ambiente agora
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: onCreateNow,
+                icon: const Icon(Icons.add_location_alt_outlined),
+                label: const Text(AppStrings.voiceCreateEnvNow),
+              ),
+            ),
+            const SizedBox(height: 4),
+
+            // Botão secundário: seleciona entre ambientes já existentes
+            TextButton(
+              onPressed: onChooseOther,
+              child: const Text(
+                AppStrings.voiceChooseOther,
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
