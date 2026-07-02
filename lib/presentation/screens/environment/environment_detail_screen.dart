@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/strings.dart';
 import '../../../core/navigation/app_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/utils/environment_icon_mapper.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
 import '../../providers/database_provider.dart';
@@ -140,17 +141,17 @@ class _EnvironmentInfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final visual = EnvironmentIconMapper.getVisual(environment.name);
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: AppTheme.backgroundSurface,
-          borderRadius: BorderRadius.circular(12),
-        ),
+        decoration: AppTheme.cardDecoration(),
         child: Row(
           children: [
-            const Icon(Icons.place_outlined, color: AppTheme.accent, size: 20),
+            // Emoji ilustrativo do ambiente com cor do mapper
+            Text(visual.emoji, style: const TextStyle(fontSize: 18)),
             const SizedBox(width: 10),
             Expanded(
               child: Text(
@@ -164,13 +165,14 @@ class _EnvironmentInfoCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            // Raio do geofence
+            // Badge de raio do geofence
             Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: AppTheme.backgroundElevated,
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(AppTheme.radiusBadge),
+                border: Border.all(color: AppTheme.borderColor, width: 0.5),
               ),
               child: Text(
                 '${environment.radiusMeters.toStringAsFixed(0)} m',
@@ -208,8 +210,12 @@ class _TriggerTile extends ConsumerWidget {
       background: _DeleteBackground(),
       child: Card(
         color: AppTheme.backgroundSurface,
+        elevation: 0,
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radiusIcon),
+          side: const BorderSide(color: AppTheme.borderColor, width: 0.5),
+        ),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
           child: Row(

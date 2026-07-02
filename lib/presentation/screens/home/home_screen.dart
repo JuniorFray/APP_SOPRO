@@ -85,7 +85,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
-        title: const Text(AppStrings.homeTitle),
+        // 0.04em de letter-spacing no título "Sopro" — identidade visual do app
+        title: const Text(
+          AppStrings.homeTitle,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+            color: AppTheme.textPrimary,
+            letterSpacing: 0.8, // 0.04 × 20sp
+          ),
+        ),
         backgroundColor: AppTheme.backgroundSurface,
         actions: [
           // Abre a tela de BLE Social ("Pessoas Aqui")
@@ -873,10 +882,12 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         shape:  BoxShape.circle,
         boxShadow: [
           BoxShadow(
-            // ignore: deprecated_member_use
-            color:       bgColor.withOpacity(_isRecording ? 0.55 : 0.35),
-            blurRadius:  _isRecording ? 18 : 10,
-            spreadRadius: _isRecording ? 3 : 0,
+            // Glow suave: rgba(232,68,90,0.35) em idle, mais intenso ao gravar
+            color: _isRecording
+                ? const Color(0x8CE53935)  // vermelho de gravação 55% opacity
+                : const Color(0x59E8445A), // accent 35% opacity — glow padrão
+            blurRadius:   _isRecording ? 18 : 12,
+            spreadRadius: _isRecording ? 3  : 1,
           ),
         ],
       ),

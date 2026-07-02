@@ -835,5 +835,57 @@ no sprint V2-VoicePro anterior (verificado sem regressao).
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa2 - Notificacao Nativa + Redesign Soft Dark + Icones - CONCLUIDO (2026-07-02)
+Entregue:
+
+TAREFA 1 — Notificacao nativa com app fechado (BootReceiver):
+- FLAG_MUTABLE no PendingIntent ja estava correto em MainActivity.kt (confirmado).
+- BootReceiver.kt (novo): BroadcastReceiver que recebe BOOT_COMPLETED.
+  Abre sopro.db via SQLiteDatabase nativo (sem Flutter Engine).
+  Caminhos tentados: app_flutter/sopro.db, filesDir/sopro.db, getDatabasePath().
+  Re-registra todos os ambientes no GeofencingClient com FLAG_MUTABLE + NEVER_EXPIRE.
+  Atualiza SharedPreferences {envId → envName} para o GeofenceReceiver.
+  Loga 'geofence_boot_reregistered' com count no Supabase (fire-and-forget, falha silenciosa).
+- AndroidManifest: BootReceiver declarado com android:exported="true" +
+  intent-filter BOOT_COMPLETED. RECEIVE_BOOT_COMPLETED ja estava no manifesto.
+- Resolucao: geofences sao re-registrados apos reboot sem que o usuario precise
+  reabrir o app — notificacoes voltam a funcionar imediatamente.
+
+TAREFA 2 — Redesign "Soft Dark":
+- app_theme.dart: novo design system completo.
+  Cores: backgroundPrimary #12121A, backgroundSurface #1E1E2A,
+         backgroundElevated #252535, accent #E8445A, textPrimary #F0F0F5,
+         textSecondary #8A8A9A, textDisabled #3A3A4A.
+  Nova constante borderColor #2A2A38 (borda 0.5dp em cards).
+  Constantes de raio: radiusCard=16, radiusButton=20, radiusInput=14,
+                      radiusBadge=20, radiusIcon=12.
+  cardDecoration(): BoxDecoration padrao com cor + borda 0.5px + radius 16.
+  darkTheme: ElevatedButton com radius 20 (pilula suave); InputDecorationTheme
+             com radius 14, borda 0.5px em repouso e accent em foco;
+             AppBar titleTextStyle com letterSpacing 0.2 (0.01em).
+- environment_card.dart: Card com elevation=0, borda 0.5px, radius 16.
+  _DeleteBackground com radius 16. Container de icone com radius 12 e emoji.
+- environment_detail_screen.dart: _EnvironmentInfoCard usa AppTheme.cardDecoration().
+  Badge de raio com radius radiusBadge + borda 0.5px. _TriggerTile Card com
+  elevation=0, radius 12, borda 0.5px.
+- home_screen.dart: titulo "Sopro" no AppBar com letterSpacing 0.8 (0.04em a 20sp).
+  FAB glow: 0x59E8445A em idle (accent 35%), 0x8CE53935 ao gravar (55%).
+
+TAREFA 3 — Icones ilustrativos nos ambientes:
+- lib/core/utils/environment_icon_mapper.dart (novo): EnvironmentIconMapper com
+  typedef EnvironmentVisual = ({String emoji, Color color}).
+  getVisual(name): 14 categorias mapeadas por palavras-chave (case-insensitive,
+  sem acentos via _normalize()). Fallback: 📍 cinza.
+  Categorias: casa/lar, trabalho/empresa, mercado, farmacia, saude,
+              academia, escola, banco, posto/mecanico, obra, restaurante,
+              padaria/cafe, parque, loja/shopping.
+- environment_card.dart: leading substituido por Container 44x44 com emoji e
+  cor de fundo do mapper (radius 12px = AppTheme.radiusIcon).
+- environment_detail_screen.dart: _EnvironmentInfoCard exibe emoji do mapper
+  em vez do icone place_outlined.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

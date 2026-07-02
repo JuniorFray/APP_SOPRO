@@ -4,13 +4,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/strings.dart';
 import '../../core/navigation/app_router.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/environment_icon_mapper.dart';
 import '../../domain/entities/environment_entity.dart';
 import '../providers/database_provider.dart';
 import '../providers/trigger_providers.dart';
 import '../screens/environment/environment_detail_screen.dart';
 
 // Card que representa um Environment na lista da Home.
-// Exibe nome, raio e contagem de triggers. Permite excluir via swipe.
+// Usa EnvironmentIconMapper para emoji e cor de fundo ilustrativos.
+// Exibe nome, raio e contagem de triggers; permite excluir via swipe.
 class EnvironmentCard extends ConsumerWidget {
   final EnvironmentEntity environment;
 
@@ -18,14 +20,13 @@ class EnvironmentCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Observa os triggers para exibir a contagem no card
     final triggersAsync =
         ref.watch(triggersByEnvironmentProvider(environment.id));
+    final visual = EnvironmentIconMapper.getVisual(environment.name);
 
     return Dismissible(
       key: ValueKey(environment.id),
       direction: DismissDirection.endToStart,
-      // Confirmação antes de excluir para evitar exclusão acidental
       confirmDismiss: (_) => _confirmDelete(context),
       onDismissed: (_) {
         ref.read(environmentRepositoryProvider).delete(environment.id);
@@ -33,19 +34,25 @@ class EnvironmentCard extends ConsumerWidget {
       background: _DeleteBackground(),
       child: Card(
         color: AppTheme.backgroundSurface,
+        elevation: 0,
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+          side: const BorderSide(color: AppTheme.borderColor, width: 0.5),
+        ),
         child: ListTile(
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          // Container ilustrativo com emoji e cor do mapper
           leading: Container(
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: AppTheme.backgroundElevated,
-              borderRadius: BorderRadius.circular(10),
+              color: visual.color,
+              borderRadius: BorderRadius.circular(AppTheme.radiusIcon),
             ),
-            child: const Icon(Icons.place_outlined, color: AppTheme.accent),
+            alignment: Alignment.center,
+            child: Text(visual.emoji, style: const TextStyle(fontSize: 22)),
           ),
           title: Text(
             environment.name,
@@ -58,7 +65,6 @@ class EnvironmentCard extends ConsumerWidget {
             '${environment.radiusMeters.toStringAsFixed(0)}m de raio',
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
           ),
-          // Navega para a tela de detalhe com a lista de triggers
           onTap: () => pushScreen(
             context,
             EnvironmentDetailScreen(environment: environment),
@@ -143,7 +149,7 @@ class _DeleteBackground extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: BoxDecoration(
         color: AppTheme.accent,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
       ),
       alignment: Alignment.centerRight,
       padding: const EdgeInsets.only(right: 20),

@@ -100,6 +100,18 @@
             android:name=".GeofenceReceiver"
             android:exported="false"/>
 
+        <!-- BootReceiver — re-registra geofences após reinicialização do dispositivo.
+             O Android destrói todos os geofences do GeofencingClient no reboot;
+             este receiver restaura-os lendo o banco SQLite diretamente.
+             android:exported="true" é obrigatório para receber broadcasts do sistema. -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+        </receiver>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
