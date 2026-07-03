@@ -1058,7 +1058,7 @@ ARQUITETURA (sem duplicacao de codigo):
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-VoicePro-Etapa6 - Audio Otimizado + Botao Flutuante Redesenhado + Onboarding - CONCLUIDO (2026-07-03)
 Entregue:
 
@@ -1122,6 +1122,49 @@ FIX 3 — Onboarding "Acesso rapido" com permissao real:
 - strings.dart: obOverlayTitle sem "(em breve)", obOverlayBody atualizado,
   obOverlayBtn = "Ativar acesso rápido", obOverlaySkip = "Agora não",
   obOverlayActivated = "Botão flutuante ativado!".
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa7 - Botao Flutuante: Movimento Livre, Hold-to-Record, Voz sem Nome - CONCLUIDO (2026-07-03)
+Entregue:
+
+FIX 1 - MOVIMENTO LIVRE NA TELA TODA (FloatingVoiceService.kt):
+- gravity alterado de Gravity.BOTTOM|END para Gravity.TOP|START.
+  Com TOP|START, x e y sao offsets absolutos do canto superior esquerdo:
+  drag horizontal E vertical funcionam sem inversao de eixo.
+- ACTION_MOVE: dy = (event.rawY - dragStartY).toInt() (era invertido para BOTTOM).
+  Ambos os eixos atualizados: params.x = initParamX + dx; params.y = initParamY + dy.
+- Posicao padrao calculada dinamicamente (canto inferior direito):
+  defaultButtonPosition(wavePx): usa displayMetrics para calcular x/y com margem
+  24dp da direita e 96dp de baixo. Persiste ao arrastar (SharedPreferences).
+
+FIX 2 - GRAVACAO DENTRO DO SERVICE (FloatingVoiceService.kt):
+- ContextCompat.checkSelfPermission(RECORD_AUDIO) verificado antes de iniciar
+  MediaRecorder. Toast "Permissao de microfone necessaria" se negado.
+- Filename com timestamp: "floating_voice_${System.currentTimeMillis()}.m4a"
+  evita corrupcao de arquivo em gravacoes concorrentes.
+- Adicionado import androidx.core.content.ContextCompat.
+
+FIX 3 - SEGURAR FALAR SOLTAR (FloatingVoiceService.kt):
+- Logica de toque substituida por hold-to-record (estilo WhatsApp):
+  ACTION_DOWN: agenda startRecording() via mainHandler.postDelayed(300ms).
+  ACTION_MOVE >8dp: isDragging=true, cancela Runnable, reposiciona botao.
+  ACTION_UP !dragging && isRecording: stopAndProcess() (processa audio).
+  ACTION_UP !dragging && duration<300ms: Toast "Segure para gravar".
+  ACTION_UP dragging: salva posicao, reset drag.
+  ACTION_CANCEL: cancela Runnable + gravacao ativa.
+- Novos campos: pressStartTime: Long, recordingStartRunnable: Runnable?.
+
+FIX 4 - VOZ SEM NOME DE AMBIENTE (home_screen.dart):
+- Campo _pendingEnvCreate: bool = false adicionado ao _VoiceFabState.
+- _handleOpenEnvironment: quando environmentName nulo/vazio:
+  Fala via TTS "Qual o nome do ambiente?", seta _pendingEnvCreate=true,
+  aguarda 500ms e chama _onPressStart() para nova gravacao automatica.
+- _stopAndProcess: quando _pendingEnvCreate=true, trata resultado da segunda
+  gravacao como nome do ambiente: prefere environmentName (se Gemini entendeu
+  create_environment) ou transcript (fallback). Depois chama _handleOpenEnvironment
+  com o nome preenchido para criar o ambiente via GPS.
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 

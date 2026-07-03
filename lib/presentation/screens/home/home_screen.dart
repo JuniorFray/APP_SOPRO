@@ -207,6 +207,10 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Canal de comunicação com o FloatingVoiceService (overlay nativo)
   static const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
 
+  // FIX 4: quando true, a próxima gravação captura o nome do ambiente.
+  // Ativado por _handleOpenEnvironment quando Gemini não retorna environmentName.
+  bool _pendingEnvCreate = false;
+
   @override
   void initState() {
     super.initState();
@@ -352,6 +356,26 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         existingEnvironments: envNames,
       );
       if (!mounted) return;
+
+      // FIX 4: se estava aguardando nome de ambiente, trata o áudio como nome
+      if (_pendingEnvCreate) {
+        _pendingEnvCreate = false;
+        // Gemini pode ter entendido create_environment com nome, ou retornado fallback
+        // com o nome como transcript. Em ambos os casos extraímos o melhor nome disponível.
+        final envName = (result.intent == VoiceIntent.createEnvironment &&
+                (result.environmentName?.isNotEmpty ?? false))
+            ? result.environmentName!
+            : result.transcript.trim();
+        if (envName.isNotEmpty) {
+          await _handleOpenEnvironment(VoiceResult(
+            intent:          VoiceIntent.createEnvironment,
+            transcript:      result.transcript,
+            environmentName: envName,
+          ));
+          return;
+        }
+        // Nome ainda vazio após segunda gravação → fallback normal
+      }
 
       await _executeResult(result);
     } catch (e) {
@@ -640,12 +664,27 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   // "salva esse lugar como X" → cria ambiente diretamente via GPS.
   // Abre AddEnvironmentScreen como fallback se o GPS falhar.
+  // FIX 4: se o nome estiver vazio, pede por TTS e reinicia gravação para capturá-lo.
   Future<void> _handleOpenEnvironment(VoiceResult result) async {
     if (!mounted) return;
-    setState(() => _fabState = _FabState.processing);
 
     final name   = result.environmentName ?? '';
     final radius = result.environmentRadius ?? 100;
+
+    // FIX 4: nome ausente → TTS + nova gravação automática para capturar o nome
+    if (name.trim().isEmpty) {
+      setState(() => _fabState = _FabState.idle);
+      await _speak('Qual o nome do ambiente?');
+      if (!mounted) return;
+      _pendingEnvCreate = true;
+      // Aguarda 500 ms para o TTS iniciar antes de abrir o microfone
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted && _fabState == _FabState.idle) _onPressStart();
+      return;
+    }
+
+    setState(() => _fabState = _FabState.processing);
+
     final env    = await _createEnvironmentFromGps(name, radiusMeters: radius);
     if (!mounted) return;
 

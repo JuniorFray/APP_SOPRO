@@ -17,6 +17,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -75,12 +76,17 @@ class FloatingVoiceService : Service() {
     private var btnView:       ImageView?     = null
     private var layoutParams:  WindowManager.LayoutParams? = null
 
-    // ── Estado de arraste ─────────────────────────────────────────────────────
+    // ── Estado de arraste / toque ─────────────────────────────────────────────
     private var dragStartX  = 0f
     private var dragStartY  = 0f
     private var initParamX  = 0
     private var initParamY  = 0
     private var isDragging  = false
+
+    // Instante em que o dedo toca a tela — para distinguir toque curto de hold
+    private var pressStartTime: Long = 0L
+    // Runnable que inicia a gravação após 300 ms de hold (cancelado se arrastar)
+    private var recordingStartRunnable: Runnable? = null
 
     // ── Gravação ──────────────────────────────────────────────────────────────
     private var mediaRecorder: MediaRecorder? = null
@@ -222,10 +228,12 @@ class FloatingVoiceService : Service() {
             gravity = Gravity.CENTER
         })
 
-        // Restaura posição salva ou usa margem padrão
+        // Restaura posição salva ou calcula posição padrão (canto inferior direito)
+        // Com gravity TOP|START, x e y são offsets do canto superior esquerdo
+        val (defX, defY) = defaultButtonPosition(wavePx)
         val pos    = getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
-        val savedX = pos.getInt(KEY_BTN_X, dpToPx(24))
-        val savedY = pos.getInt(KEY_BTN_Y, dpToPx(96))
+        val savedX = pos.getInt(KEY_BTN_X, defX)
+        val savedY = pos.getInt(KEY_BTN_Y, defY)
 
         val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -238,7 +246,9 @@ class FloatingVoiceService : Service() {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.BOTTOM or Gravity.END
+            // TOP|START: x e y são offsets absolutos do canto superior esquerdo.
+            // Permite movimento livre horizontal E vertical sem inversão de eixo.
+            gravity = Gravity.TOP or Gravity.START
             x = savedX
             y = savedY
         }
@@ -268,31 +278,47 @@ class FloatingVoiceService : Service() {
     // Tratamento de toque — arraste vs. gravação
     // ─────────────────────────────────────────────────────────────────────────
 
+    // Toque: SEGURAR para gravar, SOLTAR para processar (estilo WhatsApp).
+    //
+    // Fluxo:
+    //   ACTION_DOWN → salva coordenadas + agenda startRecording() após 300 ms
+    //   ACTION_MOVE > 8dp → isDragging=true, cancela gravação agendada, reposiciona
+    //   ACTION_UP   → se !dragging e gravando → processa; se curto → Toast
+    //   ACTION_CANCEL → cancela tudo
     private fun handleTouch(event: MotionEvent) {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                dragStartX = event.rawX
-                dragStartY = event.rawY
-                initParamX = layoutParams?.x ?: 0
-                initParamY = layoutParams?.y ?: 0
-                isDragging = false
+                // Salva posição inicial do dedo e do botão
+                dragStartX  = event.rawX
+                dragStartY  = event.rawY
+                initParamX  = layoutParams?.x ?: 0
+                initParamY  = layoutParams?.y ?: 0
+                isDragging  = false
+                pressStartTime = System.currentTimeMillis()
+
+                // Agenda início de gravação após 300 ms; cancela se arrastar antes
+                recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
+                val run = Runnable { if (!isDragging) startRecording() }
+                recordingStartRunnable = run
+                mainHandler.postDelayed(run, 300L)
             }
 
             MotionEvent.ACTION_MOVE -> {
+                // FIX 1: com gravity TOP|START, dy positivo = move para baixo
                 val dx = (event.rawX - dragStartX).toInt()
-                // Para gravidade BOTTOM, aumentar Y move o botão para cima
-                val dy = (dragStartY - event.rawY).toInt()
+                val dy = (event.rawY - dragStartY).toInt()
 
                 if (!isDragging && (Math.abs(dx) > dpToPx(8) || Math.abs(dy) > dpToPx(8))) {
                     isDragging = true
-                    // Se estava gravando e arrastou → cancela a gravação
-                    if (isRecording) {
-                        stopRecordingIfActive()
-                        onRecordingCancelled()
-                    }
+                    // Cancela gravação agendada (usuário está arrastando, não gravando)
+                    recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
+                    recordingStartRunnable = null
+                    // Se gravação já começou (raro): cancela
+                    if (isRecording) { stopRecordingIfActive(); onRecordingCancelled() }
                 }
 
                 if (isDragging) {
+                    // FIX 1: atualiza AMBOS os eixos com offset absoluto
                     layoutParams?.let { p ->
                         p.x = initParamX + dx
                         p.y = initParamY + dy
@@ -303,20 +329,33 @@ class FloatingVoiceService : Service() {
             }
 
             MotionEvent.ACTION_UP -> {
+                // Cancela Runnable pendente (pode ainda não ter disparado)
+                recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
+                recordingStartRunnable = null
+
                 if (isDragging) {
-                    // Salva a nova posição
+                    // Salva nova posição persistida
                     layoutParams?.let { p ->
                         getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
                             .edit().putInt(KEY_BTN_X, p.x).putInt(KEY_BTN_Y, p.y).apply()
                     }
                     isDragging = false
                 } else {
-                    // Toque simples: alterna gravação
-                    if (isRecording) stopAndProcess() else startRecording()
+                    val duration = System.currentTimeMillis() - pressStartTime
+                    if (isRecording) {
+                        // Estava gravando → processa o áudio capturado
+                        stopAndProcess()
+                    } else if (duration < 300L) {
+                        // Toque curto (< 300 ms): gravação não chegou a iniciar
+                        showToast("Segure para gravar")
+                    }
+                    // duration >= 300ms e !isRecording = race condition extremamente rara; ignora
                 }
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
+                recordingStartRunnable = null
                 if (isRecording) { stopRecordingIfActive(); onRecordingCancelled() }
                 isDragging = false
             }
@@ -330,7 +369,16 @@ class FloatingVoiceService : Service() {
     private fun startRecording() {
         if (isRecording) return
 
-        audioFile = File(cacheDir, "sopro_float_voice.m4a").also {
+        // FIX 2: verifica permissão de microfone antes de qualquer operação
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            showToast("Permissão de microfone necessária")
+            Log.w(TAG, "RECORD_AUDIO não concedido — gravação cancelada")
+            return
+        }
+
+        // FIX 2: filename com timestamp evita corrupção se múltiplas gravações ocorrerem
+        audioFile = File(cacheDir, "floating_voice_${System.currentTimeMillis()}.m4a").also {
             if (it.exists()) it.delete()
         }
 
@@ -607,6 +655,15 @@ Exemplo: "lembra de comprar leite quando eu chegar em casa" → title="comprar l
 
     private fun showToast(msg: String) {
         mainHandler.post { Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show() }
+    }
+
+    // Calcula posição padrão no canto inferior direito com gravity TOP|START.
+    // wavePx = tamanho do container, margens de 24dp (direita) e 96dp (baixo).
+    private fun defaultButtonPosition(wavePx: Int): Pair<Int, Int> {
+        val dm = resources.displayMetrics
+        val x  = (dm.widthPixels  - wavePx - dpToPx(24)).coerceAtLeast(0)
+        val y  = (dm.heightPixels - wavePx - dpToPx(96)).coerceAtLeast(0)
+        return Pair(x, y)
     }
 
     private fun dpToPx(dp: Int): Int =
