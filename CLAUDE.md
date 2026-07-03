@@ -1218,5 +1218,35 @@ c. COR durante gravacao: #FF2244 (mais vivo que o anterior #E53935).
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Anterior
+Sprint: V2-VoicePro-Etapa9 - Modelo Gemini Correto, Drag Independente e Delay TTS - CONCLUIDO (2026-07-03)
+Entregue:
+
+FIX 1 — MODELO GEMINI CORRETO (FloatingVoiceService.kt):
+- GEMINI_ENDPOINT mudou de "gemini-2.5-flash-preview-05-20:generateContent"
+  para "gemini-2.5-flash:generateContent" (mesmo modelo de AppConstants.geminiModel).
+- Causa: modelo preview retornava HTTP 404 — Supabase logava after_gemini com error=http_404.
+- Resultado: step=after_gemini agora tem intent valido (create_trigger/create_environment/unknown).
+
+FIX 2 — GRAVACAO E ARRASTO COMPLETAMENTE INDEPENDENTES (FloatingVoiceService.kt):
+- isDragging removido (campo e toda logica associada).
+- handleTouch() refatorado com dois estados independentes:
+  POSICAO: ACTION_MOVE SEMPRE atualiza params.x/y e chama updateViewLayout() —
+    sem threshold, sem verificacao de estado de gravacao.
+  GRAVACAO: ACTION_DOWN agenda recordingStartRunnable apos 300ms (sem condicao isDragging).
+    ACTION_UP: cancela runnable se soltar antes dos 300ms; se isRecording → stopAndProcess()
+    SEMPRE (mesmo que tenha arrastado); salva posicao em SharedPreferences SEMPRE.
+  ACTION_CANCEL (evento de sistema): unico caso que descarta gravacao em andamento.
+- Resultado: arrastar o botao durante gravacao nao cancela mais o audio. Soltar
+  processa o audio independente de quanto o usuario arrastou.
+
+FIX 3 — DELAY DE 2000MS APOS PERGUNTAR NOME DO AMBIENTE (FloatingVoiceService.kt):
+- executeVoiceResult() caso create_environment sem nome:
+  Toast imediato: "Qual e o nome do ambiente?"
+  Handler.postDelayed(2000ms): "Segure o botao para gravar o nome."
+  Garante que o mic nao captura o audio do Toast/TTS como entrada da proxima gravacao.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

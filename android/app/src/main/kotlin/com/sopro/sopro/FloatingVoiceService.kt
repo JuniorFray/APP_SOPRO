@@ -91,10 +91,10 @@ class FloatingVoiceService : Service() {
         private const val SUPABASE_KEY =
             "sb_publishable_cw4YwcWkSNhGc-zkTjO7xw_lPS5NE09"
 
-        // Endpoint Gemini — mesmo modelo usado pelo Dart
+        // Endpoint Gemini — mesmo modelo usado pelo Dart (AppConstants.geminiModel)
         private const val GEMINI_ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/models/" +
-            "gemini-2.5-flash-preview-05-20:generateContent"
+            "gemini-2.5-flash:generateContent"
     }
 
     // ── Views e WindowManager ─────────────────────────────────────────────────
@@ -107,11 +107,13 @@ class FloatingVoiceService : Service() {
     private val rippleAnimators  = mutableListOf<ValueAnimator>()
 
     // ── Estado de arraste / toque ─────────────────────────────────────────────
+    // Posição: dragStartX/Y e initParam rastreiam o delta de arrasto independente da gravação.
+    // Gravação: pressStartTime e recordingStartRunnable controlam o hold-to-record.
+    // isDragging foi removido — arrastar e gravar são estados completamente independentes.
     private var dragStartX = 0f
     private var dragStartY = 0f
     private var initParamX = 0
     private var initParamY = 0
-    private var isDragging = false
     private var pressStartTime: Long = 0L
     private var recordingStartRunnable: Runnable? = null
 
@@ -285,69 +287,68 @@ class FloatingVoiceService : Service() {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Tratamento de toque — SEGURAR para gravar, SOLTAR para processar
+    // Tratamento de toque — SEGURAR para gravar, SOLTAR para processar, ARRASTAR para mover
+    //
+    // Gravação e posição são estados INDEPENDENTES:
+    //   - ACTION_MOVE SEMPRE reposiciona o botão, NUNCA cancela gravação em andamento.
+    //   - ACTION_UP SEMPRE processa o áudio se estiver gravando, mesmo que tenha arrastado.
+    //   - Apenas ACTION_CANCEL descarta a gravação (evento de sistema, não gesto do usuário).
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun handleTouch(event: MotionEvent) {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                // Salva ponto inicial para calcular o delta de arrasto
                 dragStartX     = event.rawX
                 dragStartY     = event.rawY
                 initParamX     = layoutParams?.x ?: 0
                 initParamY     = layoutParams?.y ?: 0
-                isDragging     = false
                 pressStartTime = System.currentTimeMillis()
 
-                // Agenda início de gravação após 300 ms; cancelado se arrastar antes
+                // Agenda gravação após 300 ms de hold — cancelado em ACTION_UP se soltar antes
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
-                val run = Runnable { if (!isDragging) startRecording() }
+                val run = Runnable { startRecording() }
                 recordingStartRunnable = run
                 mainHandler.postDelayed(run, 300L)
             }
 
             MotionEvent.ACTION_MOVE -> {
+                // SEMPRE reposiciona o botão independente do estado de gravação.
+                // Arrastar NÃO cancela gravação em andamento — os dois estados são independentes.
                 val dx = (event.rawX - dragStartX).toInt()
                 val dy = (event.rawY - dragStartY).toInt() // TOP|START: positivo = para baixo
-
-                if (!isDragging && (Math.abs(dx) > dpToPx(8) || Math.abs(dy) > dpToPx(8))) {
-                    isDragging = true
-                    recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
-                    recordingStartRunnable = null
-                    if (isRecording) { stopRecordingIfActive(); revertButtonAppearance() }
-                }
-
-                if (isDragging) {
-                    layoutParams?.let { p ->
-                        p.x = initParamX + dx
-                        p.y = initParamY + dy
-                        try { windowManager?.updateViewLayout(containerView, p) }
-                        catch (_: Exception) {}
-                    }
+                layoutParams?.let { p ->
+                    p.x = initParamX + dx
+                    p.y = initParamY + dy
+                    try { windowManager?.updateViewLayout(containerView, p) }
+                    catch (_: Exception) {}
                 }
             }
 
             MotionEvent.ACTION_UP -> {
+                // Cancela runnable de start se o usuário soltou antes dos 300 ms
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
                 recordingStartRunnable = null
 
-                if (isDragging) {
-                    layoutParams?.let { p ->
-                        getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
-                            .edit().putInt(KEY_BTN_X, p.x).putInt(KEY_BTN_Y, p.y).apply()
-                    }
-                    isDragging = false
-                } else {
-                    val duration = System.currentTimeMillis() - pressStartTime
-                    if (isRecording) stopAndProcess()
-                    else if (duration < 300L) showToast("Segure para gravar")
+                // Salva posição final — sempre, independente de ter gravado ou não
+                layoutParams?.let { p ->
+                    getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+                        .edit().putInt(KEY_BTN_X, p.x).putInt(KEY_BTN_Y, p.y).apply()
+                }
+
+                // Processa áudio SEMPRE se estava gravando, mesmo que tenha arrastado
+                val duration = System.currentTimeMillis() - pressStartTime
+                when {
+                    isRecording          -> stopAndProcess()
+                    duration < 300L      -> showToast("Segure para gravar")
                 }
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                // Evento de sistema (scroll, multi-touch) — descarta gravação em andamento
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
                 recordingStartRunnable = null
                 if (isRecording) { stopRecordingIfActive(); revertButtonAppearance() }
-                isDragging = false
             }
         }
     }
@@ -615,9 +616,15 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
             "create_environment" -> {
                 val envName = result.environment ?: ""
                 if (envName.isEmpty()) {
-                    // FIX 2: pede o nome na próxima gravação
+                    // Salva estado: próxima gravação será o nome do ambiente
                     statePrefs.edit().putString(KEY_VOICE_STATE, VAL_AWAITING_NAME).apply()
-                    showToast("Qual é o nome? Segure para gravar o nome do ambiente.")
+                    // Toast imediato com a pergunta
+                    showToast("Qual é o nome do ambiente?")
+                    // Delay de 2000 ms antes de pedir a gravação — evita que o mic
+                    // capture o áudio do Toast/TTS como entrada da próxima gravação
+                    mainHandler.postDelayed({
+                        showToast("Segure o botão para gravar o nome.")
+                    }, 2000L)
                 } else {
                     // Precisa de GPS → delega ao app via IPC (MainActivity.onResume)
                     savePendingIntent(JSONObject().apply {
