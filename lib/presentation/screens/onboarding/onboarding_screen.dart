@@ -19,6 +19,7 @@
 //   do HomeScreen — não é obrigatório para acessar o app.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -26,6 +27,7 @@ import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/location_providers.dart';
+import '../../providers/settings_providers.dart';
 
 // Dados imutáveis de cada passo do onboarding
 class _Step {
@@ -84,7 +86,11 @@ class OnboardingScreen extends ConsumerStatefulWidget {
   ConsumerState<OnboardingScreen> createState() => _OnboardingScreenState();
 }
 
-class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
+// Canal nativo para verificar/ativar o botão flutuante no passo 4 do onboarding
+const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
+
+class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
+    with WidgetsBindingObserver {
   final _pageController = PageController();
   int _currentStep = 0;
   bool _actionInProgress = false; // true enquanto aguarda resposta do SO de permissão
@@ -94,10 +100,31 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   // null = nenhuma negação recente; limpa ao trocar de passo.
   String? _denialMessage;
 
+  // true quando o app foi para o background aguardando retorno da tela de
+  // configurações de permissão de overlay — detectado em didChangeAppLifecycleState
+  bool _waitingForOverlayPermission = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pageController.dispose();
     super.dispose();
+  }
+
+  // Detecta retorno do app após o usuário visitar as configurações de overlay.
+  // Se a permissão foi concedida → ativa o serviço automaticamente.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _waitingForOverlayPermission) {
+      _waitingForOverlayPermission = false;
+      _checkAndActivateOverlay();
+    }
   }
 
   // Avança para o próximo passo (ou conclui o onboarding no último)
@@ -129,6 +156,59 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         Navigator.pushReplacementNamed(context, '/home');
       }
     }
+  }
+
+  // ── Permissão de overlay (passo 4) ──────────────────────────────────────
+  //
+  // Não bloqueamos o avanço — o usuário pode pular e ativar depois nas Config.
+  // Se já possui permissão → ativa imediatamente.
+  // Se não possui → abre a tela do sistema e aguarda retorno via LifecycleObserver.
+
+  Future<void> _requestOverlayPermission() async {
+    setState(() => _actionInProgress = true);
+    try {
+      final hasPerm =
+          await _overlayChannel.invokeMethod<bool>('hasOverlayPermission') ?? false;
+      if (hasPerm) {
+        // Permissão já concedida — ativa o serviço agora mesmo
+        await _checkAndActivateOverlay();
+      } else {
+        // Abre a tela de configurações do sistema e aguarda retorno do app
+        _waitingForOverlayPermission = true;
+        await _overlayChannel.invokeMethod<void>('openOverlayPermissionSettings');
+      }
+    } catch (_) {
+      // Falha no MethodChannel (ex: emulador sem suporte) — apenas avança
+      _goHome();
+    } finally {
+      if (mounted) setState(() => _actionInProgress = false);
+    }
+  }
+
+  // Verifica se a permissão foi concedida, ativa o FloatingVoiceService e avança.
+  Future<void> _checkAndActivateOverlay() async {
+    try {
+      final hasPerm =
+          await _overlayChannel.invokeMethod<bool>('hasOverlayPermission') ?? false;
+      if (hasPerm) {
+        await _overlayChannel.invokeMethod<void>('startFloatingVoiceService');
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('floating_voice_enabled', true);
+        if (mounted) {
+          ref.read(floatingVoiceEnabledProvider.notifier).state = true;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content:  Text(AppStrings.obOverlayActivated),
+              duration: Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (_) {
+      // Silencioso — o usuário pode ativar depois nas Configurações
+    }
+    _goHome();
   }
 
   // Solicita permissão de localização → avança independentemente do resultado
@@ -196,7 +276,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       case 1:  return AppStrings.obLocationBtn;
       case 2:  return AppStrings.obNotifBtn;
       case 3:  return AppStrings.obBleBtn;
-      // Passo 4: overlay informativo (sem permissão obrigatória)
+      // Passo 4: solicita permissão de overlay para ativar o botão flutuante
       case 4:  return AppStrings.obOverlayBtn;
       default: return AppStrings.obNext;
     }
@@ -215,16 +295,16 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       case 1:  return _requestLocation;
       case 2:  return _requestNotifications;
       case 3:  return _requestBle;
-      // Passo 4: informativo — botão "Entendido" apenas conclui o onboarding
-      case 4:  return _goHome;
+      // Passo 4: solicita permissão SYSTEM_ALERT_WINDOW e ativa o botão flutuante
+      case 4:  return _requestOverlayPermission;
       default: return _nextPage;
     }
   }
 
-  // Botão secundário: "Pular" nos passos 1-2, "Ir para o app" no passo 3.
+  // Botão secundário: "Pular" nos passos 1-3; "Agora não" no passo 4 (overlay).
   // Oculto quando há mensagem de negação ativa (o primário já oferece avanço).
   String get _secondaryLabel =>
-      _currentStep == _steps.length - 1 ? AppStrings.obFinish : AppStrings.obSkip;
+      _currentStep == _steps.length - 1 ? AppStrings.obOverlaySkip : AppStrings.obSkip;
 
   @override
   Widget build(BuildContext context) {

@@ -1058,5 +1058,72 @@ ARQUITETURA (sem duplicacao de codigo):
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa6 - Audio Otimizado + Botao Flutuante Redesenhado + Onboarding - CONCLUIDO (2026-07-03)
+Entregue:
+
+FIX 1 — Performance de audio (audio_size_bytes 244 KB → ~12 KB):
+- voice_service.dart: bitRate 64000 → 12000 (12 kbps), sampleRate 16000 → 8000 (8 kHz).
+  Qualidade de voz suficiente para STT; tamanho-alvo ~1 KB/s (12-15 KB em 10 s).
+- Deteccao de silencio: onAmplitudeChanged(100ms) escuta amplitude durante gravacao.
+  Timer de 1500 ms de silencio consecutivo abaixo de -35 dBFS → auto-stop.
+- Duracao maxima: Timer interno de 10 s (era 30 s no FAB — agora o servico controla).
+- Novo campo _autoStopController (StreamController<void>.broadcast()).
+  Novo getter onAutoStop: Stream<void> notifica o FAB quando dispara silencio ou 10 s.
+- _cancelAutoStopTimers(): cancela maxDurationTimer + silenceTimer + amplitudeSub.
+  Chamado em stopRecording(), cancelRecording() e dispose() para evitar race condition.
+- home_screen.dart: _VoiceFabState subscreve ao onAutoStop em initState() via _autoStopSub.
+  Ao receber evento → chama _stopAndProcess() se estiver gravando.
+  _autoStopSub cancelado em dispose(). _maxSeconds = 30 mantido como safety net.
+
+FIX 2 — Botao flutuante redesenhado (FloatingVoiceService.kt reescrito):
+2a. Formato circular: GradientDrawable OVAL 56dp (era View quadrado 64dp).
+    Icone ic_launcher_foreground centralizado com padding 10dp (ScaleType CENTER_INSIDE).
+2b. Gravacao direta no servico (sem abrir o app):
+    MediaRecorder com MPEG_4/AAC, 8000 Hz, 12 kbps → arquivo minusculo.
+    Toque simples = alterna on/off gravacao.
+    Auto-stop em 10 s (mainHandler.postDelayed).
+    Gemini Audio API via HttpURLConnection (background Thread):
+      Lê API key de FlutterSharedPreferences 'gemini_api_key' (salva pelo AppInitializer).
+      Prompt simplificado → apenas create_trigger e unknown.
+      Cria trigger diretamente no sopro.db via SQLiteDatabase.openDatabase() (READWRITE).
+      Reutiliza pattern de caminhos do BootReceiver.kt para localizar o banco.
+    Toast de confirmação: "Anotado! Vou te lembrar de X em Y ✓".
+    Nomes de ambientes lidos do SharedPreferences do GeofenceReceiver para o prompt.
+2c. Arrastavel: OnTouchListener com ACTION_MOVE.
+    Movimentos > 8dp detectados como drag → updateViewLayout() do WindowManager.
+    Ultima posicao salva em SharedPreferences 'sopro_float_pos' (restaurada no proximo start).
+    Se arrastou enquanto gravava → cancela a gravacao.
+2d. Animacao de onda: segundo View (GradientDrawable OVAL, accent 25% opacidade) atras do botao.
+    Animacao por Handler (30 fps): escala 1.0 → 1.4 → 1.0, alpha inversamente proporcional.
+    Anel visivel apenas durante gravacao; oculto no idle.
+2e. Oculto dentro do app: ActivityLifecycleCallbacks registrado via applicationContext.
+    onActivityStarted: incrementa contador + oculta containerView.
+    onActivityStopped: decrementa; se 0 → aguarda 200 ms + exibe (evita flicker).
+    Desregistrado em onDestroy(). Sem Application personalizada necessaria.
+- app_initializer.dart: salva geminiApiKey em SharedPreferences 'gemini_api_key'
+  apos carregar prefs (secao 6), para uso pelo FloatingVoiceService Kotlin.
+  Importado: app_constants.dart.
+
+FIX 3 — Onboarding "Acesso rapido" com permissao real:
+3a. Titulo: "Acesso rapido (em breve)" → "Acesso rapido" (feature disponivel agora).
+    Corpo atualizado: descreve o botao flutuante e o gesto de gravar.
+3b. Botoes do passo 4:
+    Primario "Ativar acesso rápido" → _requestOverlayPermission():
+      hasOverlayPermission() verdadeiro → _checkAndActivateOverlay() diretamente.
+      hasOverlayPermission() falso → openOverlayPermissionSettings() + seta flag.
+    Secundario "Agora não" → _nextPage() → _goHome() (mantem comportamento).
+    Botao secundario visivel no passo 4 (antes era condicional ao _denialMessage).
+3c. didChangeAppLifecycleState com WidgetsBindingObserver:
+    Quando app retorna (resumed) e _waitingForOverlayPermission=true:
+      _checkAndActivateOverlay(): verifica permissao → se concedida: inicia servico +
+      atualiza floatingVoiceEnabledProvider + persiste pref + SnackBar "Botao ativado!".
+    Importados: flutter/services.dart, settings_providers.dart.
+- strings.dart: obOverlayTitle sem "(em breve)", obOverlayBody atualizado,
+  obOverlayBtn = "Ativar acesso rápido", obOverlaySkip = "Agora não",
+  obOverlayActivated = "Botão flutuante ativado!".
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/services.dart';
 
+import '../../core/constants/app_constants.dart';
 import '../../core/navigation/app_router.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
@@ -108,6 +109,12 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
 
     // 6. Restaura as preferências salvas pelo usuário nas Configurações.
     //    Os defaults já estão nos providers; só atualiza quando diferem.
+
+    // Persiste a Gemini API key para o FloatingVoiceService (Kotlin sem Flutter Engine).
+    // A chave é uma publishable key — não é segredo de servidor.
+    final geminiKey = AppConstants.geminiApiKey;
+    if (geminiKey.isNotEmpty) await prefs.setString('gemini_api_key', geminiKey);
+
     final notifEnabled = prefs.getBool('notifications_enabled') ?? true;
     if (!notifEnabled) {
       ref.read(notificationsEnabledProvider.notifier).state = false;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -75,6 +76,21 @@ class VoiceService {
   // Flag para evitar múltiplas inicializações do TTS
   bool _ttsReady = false;
 
+  // ── Auto-stop (silêncio + duração máxima) ────────────────────────────────
+  // StreamController notifica o FAB quando o serviço encerra a gravação automaticamente.
+  final _autoStopController = StreamController<void>.broadcast();
+  // Timer de duração máxima (10 s)
+  Timer? _maxDurationTimer;
+  // Timer de silêncio — dispara após 1500 ms consecutivos abaixo do limiar
+  Timer? _silenceTimer;
+  // Subscription da stream de amplitude para detecção de silêncio
+  StreamSubscription<Amplitude>? _amplitudeSub;
+  // Evita disparar auto-stop múltiplas vezes se timers se sobrepuserem
+  bool _autoStopFired = false;
+
+  // O FAB escuta este stream e chama _stopAndProcess() ao receber o evento.
+  Stream<void> get onAutoStop => _autoStopController.stream;
+
   // ── Padrões regex para português brasileiro ────────────────────────────────
   // Usados como fallback quando Gemini não está disponível (sem chave/internet).
 
@@ -103,8 +119,10 @@ class VoiceService {
   // Verifica se a permissão de microfone foi concedida.
   Future<bool> hasPermission() async => _recorder.hasPermission();
 
-  // Inicia gravação em arquivo temporário (AAC/M4A, 16 kHz, 64 kbps).
-  // Configurações reduzidas para minimizar tamanho do payload enviado ao Gemini.
+  // Inicia gravação em arquivo temporário (AAC/M4A, 8 kHz, 12 kbps).
+  // Qualidade de voz é suficiente para STT; tamanho resultante ~1 KB/s
+  // (alvo: <15 KB para comando de 10 s, vs 244 KB anteriores a 64 kbps).
+  // Encerra automaticamente após 10 s (maxDuration) ou 1500 ms de silêncio.
   // Retorna true se a gravação iniciou com sucesso.
   Future<bool> startRecording() async {
     try {
@@ -120,14 +138,44 @@ class VoiceService {
       final prev = File(path);
       if (await prev.exists()) await prev.delete();
 
+      _autoStopFired = false;
+
       await _recorder.start(
         const RecordConfig(
           encoder:    AudioEncoder.aacLc, // M4A/AAC compatível com Gemini
-          bitRate:    64000,              // 64 kbps suficiente para voz
-          sampleRate: 16000,             // 16 kHz = padrão para STT
+          bitRate:    12000,              // 12 kbps — voz inteligível, arquivo minúsculo
+          sampleRate: 8000,              // 8 kHz = qualidade telefônica, ok para STT
         ),
         path: path,
       );
+
+      // Timer de duração máxima: 10 s
+      _maxDurationTimer?.cancel();
+      _maxDurationTimer = Timer(
+        const Duration(seconds: 10),
+        () => _fireAutoStop('max_duration'),
+      );
+
+      // Detecção de silêncio: amplitude abaixo de -35 dBFS por 1500 ms → auto-stop.
+      // Separa silêncio genuíno (fim da fala) de pausas curtas naturais.
+      _silenceTimer?.cancel();
+      _amplitudeSub?.cancel();
+      _amplitudeSub = _recorder
+          .onAmplitudeChanged(const Duration(milliseconds: 100))
+          .listen((amp) {
+        if (amp.current < -35.0) {
+          // Silêncio detectado — inicia (ou mantém) o timer de silêncio
+          _silenceTimer ??= Timer(
+            const Duration(milliseconds: 1500),
+            () => _fireAutoStop('silence'),
+          );
+        } else {
+          // Som detectado — cancela o timer de silêncio (não é fim de fala)
+          _silenceTimer?.cancel();
+          _silenceTimer = null;
+        }
+      });
+
       return true;
     } catch (e) {
       debugPrint('[VoiceService] Erro ao iniciar gravação: $e');
@@ -135,9 +183,28 @@ class VoiceService {
     }
   }
 
+  // Dispara o auto-stop exatamente uma vez, cancela todos os timers e notifica o FAB.
+  // [reason]: 'max_duration' ou 'silence' (para diagnóstico em log).
+  void _fireAutoStop(String reason) {
+    if (_autoStopFired) return;
+    _autoStopFired = true;
+    debugPrint('[VoiceService] Auto-stop disparado: $reason');
+    _cancelAutoStopTimers(); // cancela timers antes de emitir
+    _autoStopController.add(null); // sinaliza o FAB para parar e processar
+  }
+
+  // Cancela timers internos de auto-stop (sem parar o recorder — responsabilidade do FAB).
+  void _cancelAutoStopTimers() {
+    _maxDurationTimer?.cancel(); _maxDurationTimer = null;
+    _silenceTimer?.cancel();     _silenceTimer = null;
+    _amplitudeSub?.cancel();     _amplitudeSub = null;
+  }
+
   // Para a gravação e retorna o caminho do arquivo gerado.
+  // Cancela timers internos antes de parar para evitar auto-stop duplo.
   // Retorna null se a gravação não estava ativa ou ocorreu erro.
   Future<String?> stopRecording() async {
+    _cancelAutoStopTimers(); // cancela antes de parar (evita race condition)
     try {
       return await _recorder.stop();
     } catch (e) {
@@ -146,8 +213,9 @@ class VoiceService {
     }
   }
 
-  // Cancela a gravação sem processar (usuário descartou).
+  // Cancela a gravação sem processar (usuário descartou ou arrastou para cima).
   Future<void> cancelRecording() async {
+    _cancelAutoStopTimers();
     try {
       await _recorder.cancel();
     } catch (e) {
@@ -653,6 +721,8 @@ class VoiceService {
 
   // Libera recursos ao descartar o provider (chamado pelo onDispose do Riverpod)
   void dispose() {
+    _cancelAutoStopTimers();
+    _autoStopController.close();
     _recorder.dispose();
     _tts.stop();
   }

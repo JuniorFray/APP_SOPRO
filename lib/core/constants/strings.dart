@@ -280,14 +280,18 @@ class AppStrings {
   // Exibido quando o ambiente não tem gatilhos ativos
   static const voiceNoTriggersPending  = 'Nenhum gatilho ativo neste ambiente';
 
-  // ── Onboarding — passo 4: overlay (V3) ───────────────────────────────────
-  // Passo opcional que informa sobre o botão flutuante global previsto para V3
-  static const obOverlayTitle = 'Acesso rápido (em breve)';
+  // ── Onboarding — passo 4: overlay (disponível agora) ────────────────────
+  static const obOverlayTitle = 'Acesso rápido';
   static const obOverlayBody  =
-      'Na próxima versão, o Sopro terá um botão flutuante que aparece em '
-      'qualquer tela do celular — sem precisar abrir o app. '
-      'Você pode habilitar essa permissão agora ou depois nas Configurações.';
-  static const obOverlayBtn   = 'Entendido';
+      'Um botão flutuante que aparece em qualquer tela do celular. '
+      'Segure para gravar um lembrete de voz — sem abrir o app. '
+      'Requer a permissão "Exibir sobre outros apps".';
+  // Botão primário: ativa o botão flutuante
+  static const obOverlayBtn   = 'Ativar acesso rápido';
+  // Botão secundário: pula e vai direto ao app
+  static const obOverlaySkip  = 'Agora não';
+  // Snackbar mostrado quando a permissão é concedida
+  static const obOverlayActivated = 'Botão flutuante ativado!';
 
   // ── Voz — novos intents (Sprint V2-VoicePro Etapa 1) ─────────────────────
   // Tooltip exibido ao tocar rapidamente o botão (sem segurar)

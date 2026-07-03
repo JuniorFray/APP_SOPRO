@@ -195,7 +195,11 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Contador de segundos exibido durante gravação
   int    _recordingSeconds = 0;
   Timer? _recordingTimer;
-  static const _maxSeconds = 30; // auto-stop após 30 s
+  // Segurança: FAB encerra após 30 s caso o VoiceService (10 s) não dispare
+  static const _maxSeconds = 30;
+
+  // Subscription ao stream de auto-stop do VoiceService (silêncio / max duration)
+  StreamSubscription<void>? _autoStopSub;
 
   // Momento em que o dedo pressionou o botão — usado para verificar mínimo de 500 ms
   DateTime? _pressStartTime;
@@ -213,6 +217,14 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.12).animate(
       CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
+
+    // Escuta auto-stop do VoiceService (silêncio de 1500 ms ou 10 s max).
+    // O VoiceService cancela seus timers internos e sinaliza aqui — o FAB
+    // chama _stopAndProcess() para buscar o arquivo e enviar ao Gemini.
+    _autoStopSub = ref.read(voiceServiceProvider).onAutoStop.listen((_) {
+      if (mounted && _isRecording) _stopAndProcess();
+    });
+
     // Escuta o canal nativo: FloatingVoiceService envia este método quando o
     // usuário toca no botão flutuante — abre o app e inicia gravação imediatamente.
     _overlayChannel.setMethodCallHandler((call) async {
@@ -224,6 +236,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   @override
   void dispose() {
+    _autoStopSub?.cancel();
     _overlayChannel.setMethodCallHandler(null); // cancela o listener ao sair da tela
     _pulseCtrl.dispose();
     _recordingTimer?.cancel();
