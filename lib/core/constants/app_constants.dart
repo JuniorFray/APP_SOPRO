@@ -81,6 +81,10 @@ class AppConstants {
       '→ {"intent":"delete_trigger","transcricao":"remove o lembrete de tirar o lixo","environment":null,"trigger":{"title":"Tirar o lixo"}}\n'
       '- "apaga todos os gatilhos da casa" '
       '→ {"intent":"delete_all_triggers","transcricao":"apaga todos os gatilhos da casa","environment":"Casa"}\n'
+      '- "excluir gatilho de casa" '
+      '→ {"intent":"delete_trigger","transcricao":"excluir gatilho de casa","environment":"Casa","trigger":{"title":null}}\n'
+      '- "remove o lembrete da padaria" '
+      '→ {"intent":"delete_trigger","transcricao":"remove o lembrete da padaria","environment":"Padaria","trigger":{"title":null}}\n'
       'Retorne APENAS o JSON valido.';
 
   // System prompt para processamento de TEXTO (re-análise após edição manual).

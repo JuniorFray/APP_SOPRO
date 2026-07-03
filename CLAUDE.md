@@ -887,7 +887,7 @@ TAREFA 3 — Icones ilustrativos nos ambientes:
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-VoicePro-Etapa3 - Extracao de Titulo + Notificacao Contextual + Exclusao por Voz - CONCLUIDO (2026-07-03)
 Entregue:
 
@@ -932,6 +932,60 @@ MELHORIA 3 — Exclusao por voz:
 - strings.dart: voiceDeleteEnvTitle, voiceDeleteAllTitle, voiceDeletePickerTitle,
   voiceEnvDeleted, voiceTriggerDeleted, voiceAllTriggersDeleted,
   voiceTriggerDeleteNotFound, voiceEnvNotFoundForDelete.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa4 - Delete sem confirmacao + Titulo correto + TTS conversacional - CONCLUIDO (2026-07-03)
+Entregue:
+
+FIX 1 — Delete de ambiente sem confirmacao (undo snackbar):
+- _handleDeleteEnvironment(): removida _DeleteEnvConfirmSheet.
+  Fluxo: salva todos os triggers do ambiente → deleta o ambiente (cascade) →
+  fala "Ambiente X removido" (TTS) → exibe SnackBar "Desfazer" (5 s).
+  Ao pressionar Desfazer: re-salva o ambiente, re-salva todos os triggers,
+  re-registra o geofence nativo via nativeGeofenceServiceProvider.addGeofence().
+  Loga 'voice_delete_undone' no Supabase apos restauracao bem-sucedida.
+- _DeleteEnvConfirmSheet removida do arquivo (sem uso).
+- strings.dart: AppStrings.undo = 'Desfazer' (ja existia, usado aqui).
+
+FIX 2 — Delete de trigger sem titulo (triggerAction == null):
+- _handleDeleteTrigger(): novo roteamento quando triggerAction e null:
+  - environmentName presente → busca triggers ativos daquele ambiente.
+    1 trigger → exclui via _deleteTriggerDirectly().
+    >1 triggers → abre _DeleteTriggerPickerSheet.
+    0 triggers → snackbar + TTS "Nenhum lembrete em X."
+  - environmentName tambem null → abre _EnvPickerSheet, ao selecionar
+    o ambiente repete a logica acima (1 / >1 / 0 triggers).
+  - app_constants.dart: 2 exemplos adicionados ao geminiSystemPrompt para
+    delete_trigger com title:null (Etapa3).
+
+FIX 3 — Titulo do trigger salvo corretamente:
+- _handleCreateTrigger(): content: result.triggerContent ?? '' (era result.transcript).
+- _saveAndConfirm(): idem.
+- _saveAndConfirmWithGps(): idem.
+- Causa: o transcript completo era salvo como conteudo do gatilho em vez do
+  campo 'content' extraido pelo Gemini.
+
+FIX 4 — TTS conversacional em todos os handlers de voz:
+- _speak(text): helper que le voiceAudioResponseProvider + voiceSpeechRateProvider
+  antes de chamar voiceServiceProvider.speak(). Silencioso se toggle desativado.
+- TTS adicionado em todos os handlers de _VoiceFabState:
+  createEnvironmentWithTrigger: "Pronto! Ambiente X criado com N lembrete(s)."
+  createTrigger (sucesso): "Anotado! Vou te lembrar de Y quando chegar em X."
+  createTrigger (nao encontrado): "Nao encontrei o ambiente X. Quer criar agora?"
+  resolveTrigger (sucesso): "Feito! Lembrete Y marcado como resolvido."
+  resolveTrigger (nao encontrado): "Nao encontrei esse lembrete."
+  listTriggers (encontrado): "Voce tem N lembrete(s) em X: titulo1, titulo2."
+  listTriggers (nao encontrado): "Pendencias de qual ambiente?"
+  listEnvironments: "Voce tem N local(is) cadastrado(s)."
+  updateEnvironment (sucesso): "Feito! Raio de X atualizado para Y metros."
+  fallback: "Nao entendi. Pode repetir ou digitar o que precisa?"
+  deleteEnvironment (sucesso): "Ambiente X removido."
+  deleteEnvironment (nao encontrado): "Nao encontrei o ambiente X."
+  deleteTrigger (vazio): "Nao encontrei esse lembrete."
+  deleteTrigger (multiplos): "Qual lembrete voce quer remover? Toque em um deles."
+  deleteAllTriggers (onConfirm): "Todos os lembretes de X removidos."
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 

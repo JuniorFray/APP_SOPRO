@@ -7,6 +7,7 @@ class AppStrings {
   static const appName = 'Sopro';
   static const tagline = '"O sussurro certo. No lugar certo."';
   static const cancel = 'Cancelar';
+  static const undo   = 'Desfazer';
   static const save = 'Salvar';
   static const delete = 'Excluir';
   static const confirm = 'Confirmar';

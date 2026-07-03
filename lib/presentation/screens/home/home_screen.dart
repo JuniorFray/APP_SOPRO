@@ -360,6 +360,36 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     if (mounted) setState(() => _fabState = _FabState.idle);
   }
 
+  // Fala [text] via TTS se o toggle "Responder com áudio" estiver ativo.
+  // Respeita a velocidade configurada pelo usuário. Falha silenciosa.
+  Future<void> _speak(String text) async {
+    if (!ref.read(voiceAudioResponseProvider)) return;
+    final rate = ref.read(voiceSpeechRateProvider);
+    try {
+      await ref.read(voiceServiceProvider).speak(text, rate: rate);
+    } catch (e) {
+      debugPrint('[_VoiceFab] TTS erro: $e');
+    }
+  }
+
+  // Exclui trigger, loga no Supabase, exibe snackbar e fala a confirmação.
+  // Usado por _handleDeleteTrigger em qualquer variante (1 resultado ou picker).
+  Future<void> _deleteTriggerDirectly(TriggerEntity t) async {
+    await ref.read(triggerRepositoryProvider).delete(t.id);
+    AppLogger.log('voice_delete', {
+      'intent':        'delete_trigger',
+      'trigger_title': t.title,
+      'environment':   null,
+      'sucesso':       true,
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content:  Text(AppStrings.voiceTriggerDeleted),
+      behavior: SnackBarBehavior.floating,
+    ));
+    await _speak('Lembrete removido.');
+  }
+
   // ── Auto-execução de intenções (zero confirmação) ─────────────────────────
 
   // Despacha o resultado do Gemini para o handler correto.
@@ -412,18 +442,22 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   String _capitalize(String s) =>
       s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
-  // "lembra de X quando chegar em Y" → salva TriggerEntity diretamente no banco
+  // "lembra de X quando chegar em Y" → salva TriggerEntity diretamente no banco.
+  // FIX 3: content = triggerContent extraído pelo Gemini (não o transcript completo).
   Future<void> _handleCreateTrigger(VoiceResult result) async {
     final envs = await ref.read(environmentRepositoryProvider).getAll();
     final env  = _matchEnv(envs, result.environmentName);
 
     if (env != null) {
       // Ambiente encontrado → cria trigger sem interação do usuário
+      final title = result.triggerAction ?? '';
       final trigger = TriggerEntity(
         id:            const Uuid().v4(),
         environmentId: env.id,
-        title:         result.triggerAction ?? '',
-        content:       result.transcript,
+        // FIX 3: title = campo extraído pelo Gemini (jamais o transcript completo)
+        title:         title,
+        // FIX 3: content = detalhe extraído pelo Gemini (vazio se não fornecido)
+        content:       result.triggerContent ?? '',
         isActive:      true,
         createdAt:     DateTime.now(),
       );
@@ -436,6 +470,10 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ));
+      // FIX 4: TTS confirma a ação ao usuário
+      await _speak(
+        'Anotado! Vou te lembrar de $title quando chegar em ${env.name}.',
+      );
       await _setSuccess();
     } else {
       // Ambiente não encontrado → oferece criar agora (GPS) ou escolher outro
@@ -446,6 +484,10 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       });
       if (!mounted) return;
       setState(() => _fabState = _FabState.idle);
+      // FIX 4: TTS informa que o ambiente não foi encontrado
+      await _speak(
+        'Não encontrei o ambiente ${result.environmentName ?? ''}. Quer criar agora?',
+      );
       _showSheet(_EnvNotFoundSheet(
         envName:      result.environmentName ?? '',
         triggerTitle: result.triggerAction ?? '',
@@ -465,13 +507,15 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     }
   }
 
-  // Salva o trigger no ambiente escolhido pelo seletor e exibe snackbar
+  // Salva o trigger no ambiente escolhido pelo seletor e exibe snackbar.
+  // FIX 3: content = triggerContent extraído pelo Gemini (não o transcript).
   Future<void> _saveAndConfirm(EnvironmentEntity env, VoiceResult result) async {
+    final title = result.triggerAction ?? '';
     final trigger = TriggerEntity(
       id:            const Uuid().v4(),
       environmentId: env.id,
-      title:         result.triggerAction ?? '',
-      content:       result.transcript,
+      title:         title,
+      content:       result.triggerContent ?? '', // FIX 3
       isActive:      true,
       createdAt:     DateTime.now(),
     );
@@ -484,6 +528,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     ));
+    await _speak('Anotado! Vou te lembrar de $title quando chegar em ${env.name}.'); // FIX 4
   }
 
   // ── Helpers de criação por GPS ─────────────────────────────────────────────
@@ -537,16 +582,17 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     if (!mounted) return;
     setState(() => _fabState = _FabState.processing);
 
-    final name = result.environmentName ?? '';
-    final env  = await _createEnvironmentFromGps(name);
+    final name  = result.environmentName ?? '';
+    final title = result.triggerAction ?? '';
+    final env   = await _createEnvironmentFromGps(name);
     if (!mounted) return;
 
     if (env != null) {
       await ref.read(triggerRepositoryProvider).save(TriggerEntity(
         id:            const Uuid().v4(),
         environmentId: env.id,
-        title:         result.triggerAction ?? '',
-        content:       result.transcript,
+        title:         title,
+        content:       result.triggerContent ?? '', // FIX 3
         isActive:      true,
         createdAt:     DateTime.now(),
       ));
@@ -560,6 +606,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ));
+      await _speak('Anotado! Ambiente ${env.name} criado com o lembrete $title.'); // FIX 4
       await _setSuccess();
     } else {
       // GPS falhou → cai no seletor de ambientes existentes como fallback
@@ -591,6 +638,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ));
+      await _speak('Pronto! Ambiente ${env.name} criado.'); // FIX 4
       await _setSuccess();
     } else {
       // GPS falhou → abre tela de adição com nome pré-preenchido
@@ -614,16 +662,17 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           .read(triggerRepositoryProvider)
           .setActive(first.id, active: false);
       if (!mounted) return;
+      final resolvedTitle = first.title.isNotEmpty ? first.title : first.content;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
-          '${AppStrings.voiceTriggerDeactivated}: '
-          '"${first.title.isNotEmpty ? first.title : first.content}"',
+          '${AppStrings.voiceTriggerDeactivated}: "$resolvedTitle"',
         ),
         // ignore: deprecated_member_use
         backgroundColor: Colors.green.shade700,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ));
+      await _speak('Feito! Lembrete $resolvedTitle marcado como resolvido.'); // FIX 4
       await _setSuccess();
     } else {
       // Trigger não encontrado — sem checkmark, apenas snackbar
@@ -635,10 +684,12 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ));
+      await _speak('Não encontrei esse lembrete.'); // FIX 4
     }
   }
 
-  // "o que tenho pendente em X?" → lista triggers ativos inline (sem navegar)
+  // "o que tenho pendente em X?" → lista triggers ativos inline (sem navegar).
+  // FIX 4: fala o resumo de quantos lembretes há antes de abrir o sheet.
   Future<void> _handleListTriggers(VoiceResult result) async {
     final envs = await ref.read(environmentRepositoryProvider).getAll();
     final env  = _matchEnv(envs, result.environmentName);
@@ -646,10 +697,23 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     setState(() => _fabState = _FabState.idle);
 
     if (env != null) {
-      // Exibe lista de triggers ativos do ambiente no sheet
+      // Busca antecipada para TTS — o sheet buscará novamente mas é leve
+      final triggers = await ref
+          .read(triggerRepositoryProvider)
+          .getActiveByEnvironment(env.id);
+      if (triggers.isEmpty) {
+        await _speak('Nenhum lembrete em ${env.name} ainda.');
+      } else {
+        final n      = triggers.length;
+        final titles = triggers.map((t) => t.title.isNotEmpty ? t.title : t.content).join(', ');
+        await _speak(
+          'Você tem $n lembrete${n == 1 ? '' : 's'} em ${env.name}: $titles.',
+        );
+      }
       _showSheet(_TriggerListSheet(environment: env));
     } else {
       // Ambiente não encontrado → seletor de ambiente; ao escolher → lista triggers
+      await _speak('Pendências de qual ambiente?'); // FIX 4
       _showSheet(_EnvPickerSheet(
         title:    AppStrings.voiceEnvPickerAction,
         subtitle: '',
@@ -695,6 +759,15 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ));
+      // FIX 4: TTS resume o que foi criado
+      if (result.triggerTitles.isNotEmpty) {
+        await _speak(
+          'Pronto! Ambiente ${env.name} criado com '
+          '${result.triggerTitles.length} lembrete${result.triggerTitles.length == 1 ? '' : 's'}.',
+        );
+      } else {
+        await _speak('Pronto! Ambiente ${env.name} criado.');
+      }
       await _setSuccess();
     } else {
       // GPS falhou → fallback para AddEnvironmentScreen + lembrete dos gatilhos
@@ -739,6 +812,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       ));
+      await _speak( // FIX 4
+        'Feito! Raio de ${env.name} atualizado para ${result.environmentRadius} metros.',
+      );
       await _setSuccess();
     } else if (env != null) {
       // Mudança não mapeada → abre tela de edição do ambiente
@@ -758,17 +834,27 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     }
   }
 
-  // "quais são meus locais" → lista todos os ambientes num sheet inline
+  // "quais são meus locais" → lista todos os ambientes num sheet inline.
+  // FIX 4: fala o número de ambientes antes de abrir o sheet.
   Future<void> _handleListEnvironments() async {
     if (!mounted) return;
     setState(() => _fabState = _FabState.idle);
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    if (envs.isEmpty) {
+      await _speak('Você ainda não tem nenhum local cadastrado.');
+    } else {
+      final n = envs.length;
+      await _speak('Você tem $n local${n == 1 ? '' : 'is'} cadastrado${n == 1 ? '' : 's'}.');
+    }
     _showSheet(const _EnvsListSheet());
   }
 
-  // Intenção não reconhecida → sheet com campo de texto editável
+  // Intenção não reconhecida → sheet com campo de texto editável.
+  // FIX 4: orienta o usuário por voz antes de abrir o sheet.
   Future<void> _handleFallback(VoiceResult result) async {
     if (!mounted) return;
     setState(() => _fabState = _FabState.idle);
+    await _speak('Não entendi. Pode repetir ou digitar o que precisa?'); // FIX 4
     _showSheet(_FallbackSheet(
       transcript: result.transcript,
       // Re-executa a ação com a intenção re-analisada pelo usuário + Gemini
@@ -778,8 +864,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   // ── Handlers de exclusão por voz ──────────────────────────────────────────
 
-  // "exclui o ambiente X" → exibe confirmação antes de excluir (irreversível).
-  // Unica ação de voz que exige confirmação manual por remover dados permanentemente.
+  // "exclui o ambiente X" → deleta imediatamente + SnackBar "Desfazer" (5s).
+  // FIX 1: sem confirmação — UX mais fluido, desfazer restaura tudo.
   Future<void> _handleDeleteEnvironment(VoiceResult result) async {
     final envs = await ref.read(environmentRepositoryProvider).getAll();
     final env  = _matchEnv(envs, result.environmentName);
@@ -797,40 +883,144 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         'trigger_title': null,
         'sucesso':       false,
       });
+      await _speak('Não encontrei o ambiente ${result.environmentName ?? ''}.');
       return;
     }
 
-    // Confirmação obrigatória — exclusão de ambiente é irreversível
-    _showSheet(_DeleteEnvConfirmSheet(
-      environment: env,
-      onConfirm: () async {
-        Navigator.pop(context);
-        await ref.read(environmentRepositoryProvider).delete(env.id);
-        AppLogger.log('voice_delete', {
-          'intent':        'delete_environment',
-          'environment':   env.name,
-          'trigger_title': null,
-          'sucesso':       true,
-        });
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${AppStrings.voiceEnvDeleted}: ${env.name}'),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ));
-      },
+    // Salva todos os triggers ANTES do delete (cascade apaga junto)
+    final savedTriggers = await ref
+        .read(triggerRepositoryProvider)
+        .getByEnvironment(env.id);
+
+    // Exclui o ambiente (e todos os seus gatilhos por cascade)
+    await ref.read(environmentRepositoryProvider).delete(env.id);
+    AppLogger.log('voice_delete', {
+      'intent':        'delete_environment',
+      'environment':   env.name,
+      'trigger_title': null,
+      'sucesso':       true,
+    });
+    if (!mounted) return;
+
+    // FIX 4: TTS imediato confirma a exclusão
+    await _speak('Ambiente ${env.name} removido.');
+
+    // SnackBar com "Desfazer" — 5 s para restaurar o ambiente e seus gatilhos
+    if (!mounted) return;
+    // ignore: use_build_context_synchronously
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('${AppStrings.voiceEnvDeleted}: ${env.name}'),
+      duration: const Duration(seconds: 5),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      action: SnackBarAction(
+        label: AppStrings.undo,
+        onPressed: () async {
+          // 1. Recria o ambiente com os mesmos dados
+          await ref.read(environmentRepositoryProvider).save(env);
+          // 2. Recria cada trigger salvo antes do delete
+          for (final t in savedTriggers) {
+            await ref.read(triggerRepositoryProvider).save(t);
+          }
+          // 3. Re-registra o geofence nativo para que o app morto volte a disparar
+          await ref.read(nativeGeofenceServiceProvider).addGeofence(
+            id:           env.id,
+            lat:          env.latitude,
+            lng:          env.longitude,
+            radiusMeters: env.radiusMeters,
+            name:         env.name,
+          );
+          AppLogger.log('voice_delete_undone', {'environment': env.name});
+        },
+      ),
     ));
   }
 
   // "remove o lembrete de Y" → busca trigger por título.
+  // FIX 2: título nulo → roteia por nome do ambiente (sem busca por texto vazio).
   // 1 resultado → exclui diretamente.
   // >1 resultado → sheet com lista para escolher.
   // 0 resultados → snackbar de não encontrado.
   Future<void> _handleDeleteTrigger(VoiceResult result) async {
-    final query    = result.triggerAction ?? '';
-    final triggers = await _searchAllTriggers(query);
     if (!mounted) return;
     setState(() => _fabState = _FabState.idle);
+
+    // FIX 2: título ausente → roteamento por ambiente, não busca textual
+    if (result.triggerAction == null) {
+      if (result.environmentName != null) {
+        // Gemini indicou um ambiente — busca triggers ativos desse ambiente
+        final envs = await ref.read(environmentRepositoryProvider).getAll();
+        final env  = _matchEnv(envs, result.environmentName);
+        if (!mounted) return;
+        if (env == null) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(AppStrings.voiceTriggerDeleteNotFound),
+            behavior: SnackBarBehavior.floating,
+          ));
+          await _speak('Não encontrei esse ambiente.'); // FIX 4
+          return;
+        }
+        final triggers = await ref
+            .read(triggerRepositoryProvider)
+            .getActiveByEnvironment(env.id);
+        if (!mounted) return;
+        if (triggers.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Nenhum lembrete em ${env.name}.'),
+            behavior: SnackBarBehavior.floating,
+          ));
+          await _speak('Nenhum lembrete em ${env.name}.'); // FIX 4
+        } else if (triggers.length == 1) {
+          await _deleteTriggerDirectly(triggers.first);
+        } else {
+          await _speak('Qual lembrete você quer remover? Toque em um deles.'); // FIX 4
+          _showSheet(_DeleteTriggerPickerSheet(
+            triggers: triggers,
+            onSelected: (t) async {
+              Navigator.pop(context);
+              await _deleteTriggerDirectly(t);
+            },
+          ));
+        }
+      } else {
+        // Nem título nem ambiente → pede ambiente primeiro, depois trigger
+        await _speak('De qual ambiente você quer remover um lembrete?'); // FIX 4
+        _showSheet(_EnvPickerSheet(
+          title:    AppStrings.voiceDeletePickerTitle,
+          subtitle: '',
+          onEnvSelected: (env) async {
+            final triggers = await ref
+                .read(triggerRepositoryProvider)
+                .getActiveByEnvironment(env.id);
+            if (!mounted) return;
+            if (triggers.isEmpty) {
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text('Nenhum lembrete em ${env.name}.'),
+                behavior: SnackBarBehavior.floating,
+              ));
+            } else if (triggers.length == 1) {
+              await _deleteTriggerDirectly(triggers.first);
+            } else {
+              if (mounted) {
+                _showSheet(_DeleteTriggerPickerSheet(
+                  triggers: triggers,
+                  onSelected: (t) async {
+                    Navigator.pop(context);
+                    await _deleteTriggerDirectly(t);
+                  },
+                ));
+              }
+            }
+          },
+        ));
+      }
+      return;
+    }
+
+    // Título fornecido → busca textual em todos os ambientes
+    final query    = result.triggerAction!;
+    final triggers = await _searchAllTriggers(query);
+    if (!mounted) return;
 
     if (triggers.isEmpty) {
       AppLogger.log('voice_delete', {
@@ -843,39 +1033,18 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         content: Text(AppStrings.voiceTriggerDeleteNotFound),
         behavior: SnackBarBehavior.floating,
       ));
+      await _speak('Não encontrei esse lembrete.'); // FIX 4
     } else if (triggers.length == 1) {
       // Único match → exclui sem pedir confirmação
-      final t = triggers.first;
-      await ref.read(triggerRepositoryProvider).delete(t.id);
-      AppLogger.log('voice_delete', {
-        'intent':        'delete_trigger',
-        'trigger_title': t.title,
-        'environment':   null,
-        'sucesso':       true,
-      });
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text(AppStrings.voiceTriggerDeleted),
-        behavior: SnackBarBehavior.floating,
-      ));
+      await _deleteTriggerDirectly(triggers.first);
     } else {
       // Múltiplos matches → lista para o usuário escolher qual remover
+      await _speak('Qual lembrete você quer remover? Toque em um deles.'); // FIX 4
       _showSheet(_DeleteTriggerPickerSheet(
         triggers: triggers,
         onSelected: (t) async {
           Navigator.pop(context);
-          await ref.read(triggerRepositoryProvider).delete(t.id);
-          AppLogger.log('voice_delete', {
-            'intent':        'delete_trigger',
-            'trigger_title': t.title,
-            'environment':   null,
-            'sucesso':       true,
-          });
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text(AppStrings.voiceTriggerDeleted),
-            behavior: SnackBarBehavior.floating,
-          ));
+          await _deleteTriggerDirectly(t);
         },
       ));
     }
@@ -926,6 +1095,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           behavior: SnackBarBehavior.floating,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ));
+        await _speak('Todos os lembretes de ${env.name} removidos.'); // FIX 4
       },
     ));
   }
@@ -1629,96 +1799,6 @@ class _EnvsListSheet extends ConsumerWidget {
 //
 // Unica ação de voz que exige confirmação — remoção de ambiente é irreversível
 // (exclui o ambiente e todos os seus gatilhos em cascade).
-class _DeleteEnvConfirmSheet extends StatelessWidget {
-  final EnvironmentEntity environment;
-  final VoidCallback onConfirm;
-
-  const _DeleteEnvConfirmSheet({
-    required this.environment,
-    required this.onConfirm,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // Alça do sheet
-            Container(
-              width: 36, height: 4,
-              margin: const EdgeInsets.only(bottom: 16),
-              decoration: BoxDecoration(
-                color: AppTheme.textDisabled,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-
-            // Ícone de aviso
-            const Icon(Icons.warning_amber_rounded,
-                color: AppTheme.accent, size: 44),
-            const SizedBox(height: 12),
-
-            // Título da confirmação
-            const Text(
-              AppStrings.voiceDeleteEnvTitle,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-
-            // Nome do ambiente + aviso de irreversibilidade
-            Text(
-              '"${environment.name}" e todos os seus gatilhos '
-              'serão excluídos. Esta ação não pode ser desfeita.',
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 13,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 24),
-
-            // Botão de confirmação (vermelho — ação destrutiva)
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: onConfirm,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.accent,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                child: const Text(
-                  AppStrings.delete,
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-
-            // Botão de cancelamento
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text(
-                AppStrings.cancel,
-                style: TextStyle(color: AppTheme.textSecondary),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ── Sheet: picker de trigger para exclusão ────────────────────────────────────
 //
 // Exibido quando a busca por título retorna múltiplos triggers.
