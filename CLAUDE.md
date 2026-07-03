@@ -1358,5 +1358,63 @@ FIX 5 — NOME GENERICO BLOQUEADO (FloatingVoiceService.kt):
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa12 - SpeechRecognizer + Gemini Texto + Confirmacao 5s - CONCLUIDO (2026-07-03)
+Entregue:
+
+REFATORACAO COMPLETA — FloatingVoiceService: MediaRecorder + Gemini Audio → SpeechRecognizer + Gemini Texto:
+
+REMOVIDOS:
+- import android.media.MediaRecorder (e toda logica de gravacao em arquivo).
+- import android.util.Base64 (sem mais codificacao de audio).
+- import java.io.ByteArrayOutputStream (sem mais leitura de stream de audio).
+- Campos: mediaRecorder, audioFile, isRecording.
+- Metodos: startRecording(), stopAndProcess(), releaseMediaRecorder(), callGeminiWithAudio().
+
+ADICIONADOS:
+- import android.speech.RecognitionListener, RecognizerIntent, SpeechRecognizer.
+- Campo speechRecognizer: SpeechRecognizer? — criado em onCreate() (main thread).
+- Campo isListening: Boolean — substitui isRecording para controle de estado.
+- Campos pendingEnvName: String? e pendingEnvTimer: Runnable? — confirmacao de 5 s.
+
+FLUXO NOVO:
+1. SEGURAR (> 300 ms) → startListeningForVoice() → SpeechRecognizer.startListening(pt-BR)
+   + beep ToneGenerator + escala botao + ripples.
+2. onReadyForSpeech → startRippleAnimations().
+3. onEndOfSpeech → showProcessingState() (cinza, para ripples, 1.0x).
+4. SOLTAR → stopListeningAndProcess() → speechRecognizer.stopListening().
+5. onResults(text) → check VAL_AWAITING_NAME (usa transcript direto sem Gemini) OU
+   serviceScope.launch { processTextWithGemini(text) }.
+6. onError(code) → revertButtonAppearance() + speak(msg_amigavel).
+
+processTextWithGemini(transcript: String) [suspend, Dispatchers.IO]:
+- Loga stt_result com transcript no Supabase.
+- Lê ambientes via readEnvironmentNamesFromDb() (mesmo helper existente).
+- Monta prompt com 3 schemas (create_trigger, create_environment, unknown) +
+  lista de ambientes exatos + transcript do usuario.
+- POST ao GEMINI_ENDPOINT com text parts apenas (sem inline_data de audio).
+- Lê resposta com inputStream.readBytes() (leitura completa, sem ByteArrayOutputStream).
+- Loga after_gemini com http, response_length e transcript no Supabase.
+- withContext(Main): revertButtonAppearance() + executeVoiceResult(result).
+
+CONFIRMACAO DE AMBIENTE COM 5 SEGUNDOS:
+- startPendingEnvironmentFlow(envName): speak "Criar X? Aguarde 5 s para confirmar
+  ou pressione para cancelar." + mainHandler.postDelayed(confirmPendingEnvironment, 5000).
+- cancelPendingEnvironment(): cancela timer, limpa campos, speak "Cancelado." —
+  chamado por tap curto (duration < 300 ms) durante countdown.
+- confirmPendingEnvironment(): savePendingIntent() para IPC com o app (GPS).
+  Speak "Pronto! Abra o Sopro para confirmar o local de X."
+- handleTouch ACTION_UP: `pendingEnvName != null && duration < 300L` → cancelar.
+
+CONTINUIDADE DE FIXES ANTERIORES:
+- FIX 3 (TTS sem repeticao): speak() salva KEY_FLOATING_SPOKE, mantido intacto.
+- FIX 4 (melhor voz pt-BR): onInit() com Voice.QUALITY_NORMAL, mantido intacto.
+- FIX 5 (nomes genericos): BLOCKED_ENV_NAMES verificado em ambos os caminhos, mantido.
+- Arrasto independente: ACTION_MOVE sempre reposiciona, ACTION_CANCEL cancela STT.
+- initSpeechRecognizer(): chamado em onCreate() — SpeechRecognizer.isRecognitionAvailable()
+  verificado antes de criar; destroy() em onDestroy() (main thread).
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

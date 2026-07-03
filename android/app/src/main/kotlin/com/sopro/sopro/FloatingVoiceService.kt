@@ -10,13 +10,14 @@ import android.database.sqlite.SQLiteDatabase
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
-import android.media.MediaRecorder
 import android.media.ToneGenerator
 import android.os.*
 import android.provider.Settings
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
-import android.util.Base64
 import android.util.Log
 import android.view.*
 import android.view.animation.OvershootInterpolator
@@ -28,7 +29,6 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -37,19 +37,18 @@ import java.util.UUID
 
 // FloatingVoiceService — botão circular flutuante de voz sobre todos os apps.
 //
-// Grava áudio diretamente, envia ao Gemini via coroutine (IO thread) e escreve
-// o trigger no banco SQLite — tudo sem abrir o app ou mudar o foco do usuário.
+// Fluxo: SEGURAR (> 300 ms) → SpeechRecognizer escuta → SOLTAR → Gemini texto
+// classifica → trigger criado no SQLite ou ambiente delegado via IPC.
 //
-// Fluxo de uso:
-//   1. SEGURAR (> 300 ms) → inicia gravação com beep de confirmação
-//   2. SOLTAR             → Gemini processa; trigger criado no DB; TTS confirma
-//   3. ARRASTAR           → reposiciona botão; posição persiste em SharedPreferences
+// Etapa12: substituiu MediaRecorder + Gemini Audio por SpeechRecognizer + Gemini Texto.
+//   - Sem arquivo de áudio, sem base64, sem chamada multipart.
+//   - Transcript do STT enviado diretamente ao Gemini como texto.
+//   - Confirmação de 5 s para criar_ambiente: aguardar = confirmar, pressionar = cancelar.
 //
-// FIX 1: MediaRecorder liberado em TODOS os caminhos (catch + startRecording cleanup).
-// FIX 2: errorStream lido com readBytes() — sem BufferedReader em nenhum caminho HTTP.
-// FIX 3: speak() salva timestamp → Flutter skip TTS se floating falou há < 10 s.
-// FIX 4: TTS seleciona melhor voz pt-BR offline; setSpeechRate(0.95) + setPitch(1.05).
-// FIX 5: nomes genéricos (ambiente, local, lugar…) rejeitados → pede nome real.
+// FIX (mantidos das etapas anteriores):
+//   FIX 3: speak() salva timestamp → Flutter skip TTS se floating falou há < 10 s.
+//   FIX 4: TTS seleciona melhor voz pt-BR offline; setSpeechRate(0.95) + setPitch(1.05).
+//   FIX 5: nomes genéricos (ambiente, local, lugar…) rejeitados → pede nome real.
 //
 // IPC com o app:
 //   FloatingVoiceService escreve em "sopro_float_state" → KEY_PENDING_INTENT.
@@ -75,11 +74,11 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
         // SharedPreferences do Flutter — onde lemos a Gemini API key, device ID
         // e onde gravamos o timestamp do último speak() (FIX 3)
-        private const val FLUTTER_PREFS       = "FlutterSharedPreferences"
-        private const val KEY_GEMINI_API      = "flutter.gemini_api_key"
-        private const val KEY_DEVICE_ID       = "flutter.logger_device_id"
+        private const val FLUTTER_PREFS      = "FlutterSharedPreferences"
+        private const val KEY_GEMINI_API     = "flutter.gemini_api_key"
+        private const val KEY_DEVICE_ID      = "flutter.logger_device_id"
         // Chave lida pelo Dart em VoiceService.speak() para evitar TTS duplicado
-        private const val KEY_FLOATING_SPOKE  = "flutter.floating_spoke_at"
+        private const val KEY_FLOATING_SPOKE = "flutter.floating_spoke_at"
 
         // Posição salva do botão
         private const val PREF_FILE = "sopro_float_pos"
@@ -114,16 +113,16 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     // ── Views e WindowManager ─────────────────────────────────────────────────
-    private var windowManager:   WindowManager?              = null
-    private var containerView:   FrameLayout?                = null
-    private var btnView:         ImageView?                  = null
-    private var layoutParams:    WindowManager.LayoutParams? = null
-    // 3 Views circulares para ondas ripple durante gravação
-    private val rippleViews      = mutableListOf<View>()
-    private val rippleAnimators  = mutableListOf<ValueAnimator>()
+    private var windowManager:  WindowManager?              = null
+    private var containerView:  FrameLayout?                = null
+    private var btnView:        ImageView?                  = null
+    private var layoutParams:   WindowManager.LayoutParams? = null
+    // 3 Views circulares para ondas ripple durante escuta
+    private val rippleViews     = mutableListOf<View>()
+    private val rippleAnimators = mutableListOf<ValueAnimator>()
 
     // ── Estado de arraste / toque ─────────────────────────────────────────────
-    // Posição e gravação são estados INDEPENDENTES — isDragging foi removido.
+    // Posição e escuta são estados INDEPENDENTES — arrastar nunca cancela escuta.
     private var dragStartX = 0f
     private var dragStartY = 0f
     private var initParamX = 0
@@ -131,19 +130,22 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     private var pressStartTime: Long = 0L
     private var recordingStartRunnable: Runnable? = null
 
-    // ── Gravação (MediaRecorder) ───────────────────────────────────────────────
-    // FIX 1: mediaRecorder DEVE ser liberado em TODOS os caminhos de saída.
-    // Usar releaseMediaRecorder() que garante stop → release → null.
-    private var mediaRecorder: MediaRecorder? = null
-    private var audioFile:     File?          = null
-    private var isRecording                   = false
+    // ── SpeechRecognizer — substitui MediaRecorder (Etapa12) ─────────────────
+    // Criado na main thread em onCreate(); destruído na main thread em onDestroy().
+    // isListening controla o estado de escuta (substitui isRecording).
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var isListening = false
+
+    // ── Confirmação de ambiente (5 segundos) ─────────────────────────────────
+    // Após Gemini retornar create_environment com nome válido, aguarda 5 s.
+    // Aguardar = confirmar (cria via IPC). Pressionar = cancelar.
+    private var pendingEnvName:  String?   = null
+    private var pendingEnvTimer: Runnable? = null
 
     // ── TTS nativo — fala resposta sem depender do app Flutter ────────────────
-    // Inicializado assincronamente via onInit(); nullable para evitar crash antes do init.
     private var tts: TextToSpeech? = null
 
-    // ── CoroutineScope para chamadas de rede em IO thread ─────────────────────
-    // SupervisorJob: falha de uma coroutine não cancela as outras.
+    // ── CoroutineScope para chamadas Gemini em IO thread ─────────────────────
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // ── Handler principal (UI) ────────────────────────────────────────────────
@@ -183,6 +185,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         }
         // TTS nativo — onInit() é chamado assincronamente após init
         tts = TextToSpeech(this, this)
+
+        // SpeechRecognizer deve ser criado na main thread — onCreate() já é main
+        initSpeechRecognizer()
+
         startForeground(NOTIF_ID, buildSilentNotification())
         createOverlayButton()
         (applicationContext as Application).registerActivityLifecycleCallbacks(lifecycleCallbacks)
@@ -222,14 +228,103 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         serviceScope.cancel()
         (applicationContext as Application).unregisterActivityLifecycleCallbacks(lifecycleCallbacks)
-        // FIX 1: garante liberação do MediaRecorder ao encerrar o serviço
-        releaseMediaRecorder()
+        // Cancela countdown de confirmação pendente
+        pendingEnvTimer?.let { mainHandler.removeCallbacks(it) }
+        pendingEnvTimer = null
+        pendingEnvName = null
+        // SpeechRecognizer.destroy() deve ser chamado na main thread
+        speechRecognizer?.destroy()
+        speechRecognizer = null
         rippleAnimators.forEach { it.cancel() }
         mainHandler.removeCallbacksAndMessages(null)
         tts?.stop(); tts?.shutdown(); tts = null
         removeOverlayButton()
         Log.d(TAG, "FloatingVoiceService encerrado")
         super.onDestroy()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SpeechRecognizer — criação e listener
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun initSpeechRecognizer() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            Log.w(TAG, "SpeechRecognizer não disponível neste dispositivo")
+            return
+        }
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+
+            // Reconhecedor pronto — inicia animação de escuta
+            override fun onReadyForSpeech(params: Bundle?) {
+                startRippleAnimations()
+            }
+
+            // Usuário começou a falar
+            override fun onBeginningOfSpeech() {}
+
+            // Usuário parou de falar — muda visual para "processando"
+            override fun onEndOfSpeech() {
+                showProcessingState()
+            }
+
+            // Resultado final — classifica via Gemini ou usa diretamente como nome
+            override fun onResults(results: Bundle?) {
+                isListening = false
+                val text = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                if (text.isNullOrBlank()) {
+                    revertButtonAppearance()
+                    speak("Não ouvi nada. Segure e tente novamente.")
+                    return
+                }
+
+                Log.d(TAG, "STT resultado: $text")
+
+                // Se estava aguardando nome de ambiente, usa transcript diretamente
+                // (sem Gemini) — evita chamada de rede desnecessária e latência
+                val statePrefs = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE)
+                if (statePrefs.getString(KEY_VOICE_STATE, null) == VAL_AWAITING_NAME) {
+                    val syntheticResult = FloatVoiceResult(
+                        intent         = "create_environment",
+                        environment    = null, // tratado via transcript em executeVoiceResult
+                        triggerTitle   = null,
+                        triggerContent = null,
+                        transcript     = text,
+                    )
+                    revertButtonAppearance()
+                    executeVoiceResult(syntheticResult)
+                    return
+                }
+
+                // Caso geral — envia ao Gemini para classificação em IO thread
+                serviceScope.launch { processTextWithGemini(text) }
+            }
+
+            // Erro de reconhecimento — exibe mensagem amigável
+            override fun onError(error: Int) {
+                isListening = false
+                val msg = when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH         -> "Não entendi. Tente novamente."
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT   -> "Nenhuma fala detectada."
+                    SpeechRecognizer.ERROR_NETWORK,
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT  -> "Sem conexão com a internet."
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Permissão de microfone negada."
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY  -> "Reconhecedor ocupado. Tente novamente."
+                    else                                    -> "Erro ao reconhecer voz (código $error)."
+                }
+                Log.w(TAG, "SpeechRecognizer error=$error: $msg")
+                revertButtonAppearance()
+                speak(msg)
+            }
+
+            // Callbacks de sinal — não utilizados
+            override fun onRmsChanged(rmsdB: Float)           {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onPartialResults(partial: Bundle?)   {}
+            override fun onEvent(type: Int, params: Bundle?)  {}
+        })
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -271,14 +366,14 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         val container = FrameLayout(this)
         containerView = container
 
-        // 3 Views de ripple atrás do botão, visíveis apenas durante gravação
+        // 3 Views de ripple atrás do botão, visíveis apenas durante escuta
         repeat(3) {
             val ripple = View(this).apply {
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(0xFFE8445A.toInt()) // accent — fica transparente via alpha
                 }
-                alpha = 0f // oculto até gravação iniciar
+                alpha = 0f // oculto até escuta iniciar
             }
             rippleViews.add(ripple)
             container.addView(ripple, FrameLayout.LayoutParams(ripplePx, ripplePx).apply {
@@ -340,12 +435,12 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Tratamento de toque — SEGURAR para gravar, SOLTAR para processar, ARRASTAR para mover
+    // Tratamento de toque — SEGURAR para escutar, SOLTAR para processar, ARRASTAR para mover
     //
-    // Gravação e posição são estados INDEPENDENTES:
-    //   - ACTION_MOVE SEMPRE reposiciona o botão, NUNCA cancela gravação em andamento.
-    //   - ACTION_UP SEMPRE processa o áudio se estiver gravando, mesmo que tenha arrastado.
-    //   - Apenas ACTION_CANCEL descarta a gravação (evento de sistema).
+    // Escuta e posição são estados INDEPENDENTES:
+    //   - ACTION_MOVE SEMPRE reposiciona o botão, NUNCA cancela escuta em andamento.
+    //   - ACTION_UP processa escuta se isListening, ou cancela env pendente se tap curto.
+    //   - Apenas ACTION_CANCEL (evento de sistema) descarta escuta sem processar.
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun handleTouch(event: MotionEvent) {
@@ -357,15 +452,15 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 initParamY     = layoutParams?.y ?: 0
                 pressStartTime = System.currentTimeMillis()
 
-                // Agenda gravação após 300 ms de hold — cancelado em ACTION_UP se soltar antes
+                // Agenda escuta após 300 ms de hold — cancelado em ACTION_UP se soltar antes
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
-                val run = Runnable { startRecording() }
+                val run = Runnable { startListeningForVoice() }
                 recordingStartRunnable = run
                 mainHandler.postDelayed(run, 300L)
             }
 
             MotionEvent.ACTION_MOVE -> {
-                // SEMPRE reposiciona o botão, NUNCA interfere com gravação em andamento
+                // SEMPRE reposiciona o botão, NUNCA interfere com escuta em andamento
                 val dx = (event.rawX - dragStartX).toInt()
                 val dy = (event.rawY - dragStartY).toInt()
                 layoutParams?.let { p ->
@@ -380,7 +475,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
                 recordingStartRunnable = null
 
-                // Salva posição final — sempre, independente de ter gravado
+                // Salva posição final — sempre, independente de ter escutado
                 layoutParams?.let { p ->
                     getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
                         .edit().putInt(KEY_BTN_X, p.x).putInt(KEY_BTN_Y, p.y).apply()
@@ -388,18 +483,22 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
                 val duration = System.currentTimeMillis() - pressStartTime
                 when {
-                    isRecording     -> stopAndProcess()
+                    // Tap curto com ambiente pendente → cancela confirmação
+                    pendingEnvName != null && duration < 300L -> cancelPendingEnvironment()
+                    // Estava escutando → encerra escuta e aguarda onResults
+                    isListening     -> stopListeningAndProcess()
+                    // Tap curto sem contexto → dica de uso
                     duration < 300L -> showToast("Segure para gravar")
                 }
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                // Evento de sistema — descarta gravação em andamento
+                // Evento de sistema — descarta escuta sem processar
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
                 recordingStartRunnable = null
-                if (isRecording) {
-                    isRecording = false
-                    releaseMediaRecorder()
+                if (isListening) {
+                    isListening = false
+                    speechRecognizer?.cancel()
                     revertButtonAppearance()
                 }
             }
@@ -407,43 +506,37 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Gravação de áudio (MediaRecorder)
+    // Escuta por voz (SpeechRecognizer)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun startRecording() {
-        if (isRecording) return
+    private fun startListeningForVoice() {
+        if (isListening) return
 
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             showToast("Permissão de microfone necessária")
-            Log.w(TAG, "RECORD_AUDIO não concedido — gravação cancelada")
+            Log.w(TAG, "RECORD_AUDIO não concedido — escuta cancelada")
             return
         }
 
-        // FIX 1: libera instância anterior antes de criar nova (evita resource leak)
-        releaseMediaRecorder()
+        if (speechRecognizer == null) {
+            showToast("Reconhecedor de voz não disponível")
+            return
+        }
 
-        // Filename com timestamp evita corrupção em gravações simultâneas
-        audioFile = File(cacheDir, "floating_voice_${System.currentTimeMillis()}.m4a").also {
-            if (it.exists()) it.delete()
+        // Nova escuta cancela qualquer confirmação pendente de ambiente
+        if (pendingEnvName != null) cancelPendingEnvironment()
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 500L)
         }
 
         try {
-            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                MediaRecorder(this) else @Suppress("DEPRECATION") MediaRecorder()
-            mediaRecorder = recorder
-
-            recorder.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(8000)     // 8 kHz — qualidade de voz
-                setAudioEncodingBitRate(12000) // 12 kbps — arquivo minúsculo (~1 KB/s)
-                setOutputFile(audioFile!!.absolutePath)
-                prepare()
-                start()
-            }
-            isRecording = true
+            speechRecognizer?.startListening(intent)
+            isListening = true
 
             // Beep curto (120 ms) confirma ativação do microfone ao usuário
             try {
@@ -456,63 +549,31 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
             animateButtonScale(from = 1.0f, to = 1.3f)
             btnView?.background = circleDrawable(0xFFFF2244.toInt())
-            startRippleAnimations()
-
-            mainHandler.postDelayed({ stopAndProcess() }, 10_000L)
-            Log.d(TAG, "Gravação iniciada: ${audioFile!!.absolutePath}")
+            Log.d(TAG, "SpeechRecognizer: escuta iniciada")
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao iniciar MediaRecorder: ${e.message}")
+            Log.e(TAG, "Erro ao iniciar SpeechRecognizer: ${e.message}")
             showToast("Erro ao acessar microfone")
-            isRecording = false
-            // FIX 1: libera mesmo em caso de falha no prepare()/start()
-            releaseMediaRecorder()
+            isListening = false
+            revertButtonAppearance()
         }
     }
 
-    private fun stopAndProcess() {
-        if (!isRecording) return
-        mainHandler.removeCallbacksAndMessages(null)
-
-        // FIX 1: usa releaseMediaRecorder() que garante stop → release → null
-        isRecording = false
-        releaseMediaRecorder()
-        revertButtonAppearance()
-
-        val file = audioFile
-        if (file == null || !file.exists() || file.length() == 0L) {
-            showToast("Áudio vazio — tente novamente"); return
-        }
-
-        Log.d(TAG, "Áudio: ${file.length()} bytes — enviando ao Gemini (IO thread)")
-
-        serviceScope.launch {
-            logToSupabase("floating_voice_debug", mapOf(
-                "step" to "before_gemini",
-                "audio_bytes" to file.length().toString(),
-            ))
-
-            val result = callGeminiWithAudio(file)
-
-            logToSupabase("floating_voice_debug", mapOf(
-                "step" to "after_gemini",
-                "intent" to (result.intent ?: "null"),
-                "error" to (result.error ?: "null"),
-            ))
-
-            withContext(Dispatchers.Main) { executeVoiceResult(result) }
-        }
+    // Encerra a captura — onEndOfSpeech → onResults ou onError disparam automaticamente
+    private fun stopListeningAndProcess() {
+        if (!isListening) return
+        speechRecognizer?.stopListening()
+        // isListening será false quando onResults ou onError disparar
+        Log.d(TAG, "SpeechRecognizer: stopListening chamado")
     }
 
-    // FIX 1: método centralizado de liberação — stop → release → null.
-    // Chamado de TODOS os caminhos: sucesso, erro, cancel e onDestroy.
-    // try/catch separados garantem que o release sempre acontece mesmo se stop falhar.
-    private fun releaseMediaRecorder() {
-        try { mediaRecorder?.stop() }  catch (_: Exception) {}
-        try { mediaRecorder?.release() } catch (_: Exception) {}
-        mediaRecorder = null
+    // Estado visual "processando" — acionado em onEndOfSpeech (entre escuta e resultado)
+    private fun showProcessingState() {
+        stopRippleAnimations()
+        animateButtonScale(from = btnView?.scaleX ?: 1.3f, to = 1.0f, durationMs = 150L)
+        btnView?.background = circleDrawable(0xFF888888.toInt()) // cinza = aguardando Gemini
     }
 
-    // Restaura aparência do botão ao estado idle (sem gravação)
+    // Restaura aparência do botão ao estado idle (sem escuta, sem processamento)
     private fun revertButtonAppearance() {
         stopRippleAnimations()
         animateButtonScale(from = btnView?.scaleX ?: 1.3f, to = 1.0f, durationMs = 150L)
@@ -520,33 +581,42 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Gemini Audio API — chamado exclusivamente de Dispatchers.IO
+    // Gemini Texto — chamado exclusivamente de Dispatchers.IO (serviceScope)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun callGeminiWithAudio(file: File): FloatVoiceResult {
+    private suspend fun processTextWithGemini(transcript: String) {
+        logToSupabase("floating_voice_debug", mapOf(
+            "step" to "stt_result", "transcript" to transcript
+        ))
+
         val apiKey = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
             .getString(KEY_GEMINI_API, "") ?: ""
 
         if (apiKey.isEmpty()) {
             Log.w(TAG, "Gemini API key ausente")
-            return FloatVoiceResult(null, null, null, null, null, error = "no_api_key")
+            withContext(Dispatchers.Main) {
+                revertButtonAppearance()
+                speak("Chave da API não configurada. Abra o Sopro uma vez.")
+            }
+            return
         }
 
-        val audioBase64 = Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
-
-        // Lê ambientes diretamente do SQLite — garante nomes exatos do banco no prompt
+        // Lê ambientes direto do SQLite — garante nomes exatos do banco no prompt
         val envNames = readEnvironmentNamesFromDb()
-        val envCtx = if (envNames.isNotEmpty())
+        val envCtx   = if (envNames.isNotEmpty())
             "\nAmbientes existentes: ${envNames.joinToString(", ")}." else ""
 
         val prompt = """
-Extraia a intenção do áudio em JSON. Responda APENAS com JSON, sem markdown.
+Classifique o texto do usuário em JSON. Responda APENAS com JSON, sem markdown.
 Schemas:
-  create_trigger:     {"intent":"create_trigger","transcricao":"","environment":"nome_exato","trigger":{"title":"acao_infinitivo","content":""}}
-  create_environment: {"intent":"create_environment","transcricao":"","environment":{"name":"nome_do_local"}}
-  unknown:            {"intent":"unknown","transcricao":"texto"}
+  create_trigger:     {"intent":"create_trigger","environment":"nome_exato","trigger":{"title":"acao_infinitivo","content":""}}
+  create_environment: {"intent":"create_environment","environment":{"name":"nome_do_local"}}
+  unknown:            {"intent":"unknown","transcricao":"texto_original"}
 
-REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$envCtx
+REGRA trigger.title: apenas a ação, infinitivo, máx 50 chars, sem pronomes.
+IMPORTANTE: use nomes de ambiente EXATAMENTE como estão na lista abaixo.$envCtx
+
+Texto: $transcript
 """.trimIndent()
 
         val body = JSONObject().apply {
@@ -554,12 +624,6 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                 put(JSONObject().apply {
                     put("parts", JSONArray().apply {
                         put(JSONObject().put("text", prompt))
-                        put(JSONObject().apply {
-                            put("inline_data", JSONObject().apply {
-                                put("mime_type", "audio/m4a")
-                                put("data", audioBase64)
-                            })
-                        })
                     })
                 })
             })
@@ -568,44 +632,49 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
             })
         }.toString()
 
-        return try {
+        val result = try {
             val url  = URL("$GEMINI_ENDPOINT?key=$apiKey")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = 30_000; readTimeout = 30_000; doOutput = true
+                connectTimeout = 15_000; readTimeout = 15_000; doOutput = true
                 setRequestProperty("Content-Type", "application/json")
             }
             conn.outputStream.use { it.write(body.toByteArray()) }
 
             val code = conn.responseCode
-            if (code != 200) {
-                // FIX 2: errorStream lido com readBytes() — sem BufferedReader em nenhum caminho
-                val errBody = conn.errorStream?.readBytes()?.toString(Charsets.UTF_8) ?: ""
-                Log.d(TAG, "Gemini HTTP $code: $errBody")
-                conn.disconnect()
-                return FloatVoiceResult(null, null, null, null, null, error = "http_$code")
+            // readBytes() garante leitura completa — sem truncamento em respostas grandes
+            val responseBody = if (code == 200) {
+                conn.inputStream.readBytes().toString(Charsets.UTF_8)
+            } else {
+                conn.errorStream?.readBytes()?.toString(Charsets.UTF_8) ?: ""
             }
-
-            // Lê TODOS os bytes via loop explícito — evita truncamento em payloads grandes
-            val responseStream = conn.inputStream
-            val responseBytes  = ByteArrayOutputStream()
-            val buffer         = ByteArray(4096)
-            var bytesRead: Int
-            while (responseStream.read(buffer).also { bytesRead = it } != -1) {
-                responseBytes.write(buffer, 0, bytesRead)
-            }
-            responseStream.close()
             conn.disconnect()
-            val raw = responseBytes.toString("UTF-8")
 
-            parseGeminiResponse(raw)
+            logToSupabase("floating_voice_debug", mapOf(
+                "step"            to "after_gemini",
+                "http"            to code.toString(),
+                "response_length" to responseBody.length.toString(),
+                "transcript"      to transcript,
+            ))
+
+            if (code != 200) {
+                Log.d(TAG, "Gemini HTTP $code: ${responseBody.take(200)}")
+                FloatVoiceResult(null, null, null, null, transcript, error = "http_$code")
+            } else {
+                parseGeminiResponse(responseBody, transcript)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Gemini request error: $e")
-            FloatVoiceResult(null, null, null, null, null, error = e.message)
+            FloatVoiceResult(null, null, null, null, transcript, error = e.message)
+        }
+
+        withContext(Dispatchers.Main) {
+            revertButtonAppearance()
+            executeVoiceResult(result)
         }
     }
 
-    private fun parseGeminiResponse(raw: String): FloatVoiceResult {
+    private fun parseGeminiResponse(raw: String, transcript: String): FloatVoiceResult {
         return try {
             val text = JSONObject(raw)
                 .getJSONArray("candidates").getJSONObject(0)
@@ -613,9 +682,8 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                 .getString("text")
                 .replace(Regex("```[a-zA-Z]*\\n?"), "").replace("```", "").trim()
 
-            val parsed     = JSONObject(text)
-            val intent     = parsed.optString("intent", "unknown")
-            val transcript = parsed.optString("transcricao", "")
+            val parsed = JSONObject(text)
+            val intent = parsed.optString("intent", "unknown")
 
             when (intent) {
                 "create_trigger" -> {
@@ -648,7 +716,7 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
             }
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao parsear Gemini: $e")
-            FloatVoiceResult(null, null, null, null, null, error = "parse_error: ${e.message}")
+            FloatVoiceResult(null, null, null, null, transcript, error = "parse_error: ${e.message}")
         }
     }
 
@@ -667,20 +735,18 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
         val voiceState = statePrefs.getString(KEY_VOICE_STATE, null)
 
         // Se estava aguardando nome de ambiente, usa transcript como nome.
-        // NÃO reenvia ao Gemini — usa diretamente o texto gravado.
+        // NÃO reenvia ao Gemini — transcript vem direto do SpeechRecognizer (onResults).
         if (voiceState == VAL_AWAITING_NAME) {
             statePrefs.edit().remove(KEY_VOICE_STATE).apply()
-            val rawName  = result.transcript?.trim() ?: ""
+            val rawName = result.transcript?.trim() ?: ""
             // FIX 5: rejeita nomes genéricos mesmo no fluxo de "aguardando nome"
-            val envName  = rawName.takeIf { it.isNotEmpty() && !BLOCKED_ENV_NAMES.contains(it.lowercase()) } ?: ""
+            val envName = rawName.takeIf {
+                it.isNotEmpty() && !BLOCKED_ENV_NAMES.contains(it.lowercase())
+            } ?: ""
             if (envName.isNotEmpty()) {
-                savePendingIntent(JSONObject().apply {
-                    put("intent", "create_environment"); put("name", envName)
-                }.toString())
-                showToast("'$envName' anotado! Abra o Sopro para confirmar o local.")
-                speak("Pronto! Abra o Sopro para confirmar o local de $envName.")
+                startPendingEnvironmentFlow(envName)
             } else {
-                // Nome ainda genérico ou vazio — pede novamente (loop de até 1 tentativa)
+                // Nome ainda genérico — pede novamente (loop de até 1 tentativa)
                 statePrefs.edit().putString(KEY_VOICE_STATE, VAL_AWAITING_NAME).apply()
                 showToast("Esse não parece um nome de lugar. Tente um nome mais específico.")
                 speak("Qual é o nome do lugar? Por exemplo: casa, trabalho ou academia.")
@@ -702,7 +768,7 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
             }
             "create_environment" -> {
                 val rawName = result.environment ?: ""
-                // FIX 5: rejeita nomes genéricos (ambiente, local, aqui…) tratando-os como null
+                // FIX 5: rejeita nomes genéricos (ambiente, local, aqui…) como null
                 val envName = rawName.takeIf {
                     it.isNotEmpty() && !BLOCKED_ENV_NAMES.contains(it.lowercase().trim())
                 } ?: ""
@@ -718,12 +784,8 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                         showToast("Segure o botão para gravar o nome.")
                     }, 2000L)
                 } else {
-                    // Precisa de GPS → delega ao app via IPC (MainActivity.onResume)
-                    savePendingIntent(JSONObject().apply {
-                        put("intent", "create_environment"); put("name", envName)
-                    }.toString())
-                    showToast("'$envName' anotado! Abra o Sopro para confirmar o local.")
-                    speak("Pronto! Ambiente $envName criado.")
+                    // Nome válido → inicia countdown de 5 s para confirmação
+                    startPendingEnvironmentFlow(envName)
                 }
             }
             else -> {
@@ -731,6 +793,54 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                 speak("Não entendi. Pressione novamente para tentar.")
             }
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Confirmação de ambiente com countdown de 5 segundos
+    //
+    // Aguardar = confirmar (cria via IPC com GPS no app).
+    // Pressionar botão durante countdown = cancelar.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun startPendingEnvironmentFlow(envName: String) {
+        // Cancela qualquer confirmação anterior antes de iniciar nova
+        cancelPendingEnvironment()
+        pendingEnvName = envName
+
+        showToast("Criar '$envName'? Aguarde 5 s para confirmar ou pressione para cancelar.")
+        speak("Criar ambiente $envName? Aguarde 5 segundos para confirmar ou pressione para cancelar.")
+
+        val timer = Runnable { confirmPendingEnvironment() }
+        pendingEnvTimer = timer
+        mainHandler.postDelayed(timer, 5000L)
+        Log.d(TAG, "Aguardando confirmação para ambiente '$envName' (5 s)")
+    }
+
+    // Cancela a confirmação pendente — chamado por tap curto durante countdown
+    private fun cancelPendingEnvironment() {
+        pendingEnvTimer?.let { mainHandler.removeCallbacks(it) }
+        pendingEnvTimer = null
+        if (pendingEnvName != null) {
+            Log.d(TAG, "Confirmação cancelada para '${pendingEnvName}'")
+            pendingEnvName = null
+            showToast("Criação cancelada.")
+            speak("Cancelado.")
+        }
+    }
+
+    // Confirma a criação — chamado automaticamente após 5 s sem interrupção
+    private fun confirmPendingEnvironment() {
+        val name = pendingEnvName ?: return
+        pendingEnvTimer = null
+        pendingEnvName  = null
+
+        // Precisa de GPS → delega ao app via IPC (MainActivity.onResume)
+        savePendingIntent(JSONObject().apply {
+            put("intent", "create_environment"); put("name", name)
+        }.toString())
+        showToast("'$name' confirmado! Abra o Sopro para confirmar o local.")
+        speak("Pronto! Abra o Sopro para confirmar o local de $name.")
+        Log.d(TAG, "Ambiente '$name' confirmado via countdown — pending intent salvo")
     }
 
     // ─────────────────────────────────────────────────────────────────────────
