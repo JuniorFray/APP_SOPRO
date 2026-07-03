@@ -9,9 +9,12 @@ import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioManager
 import android.media.MediaRecorder
+import android.media.ToneGenerator
 import android.os.*
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import android.util.Base64
 import android.util.Log
 import android.view.*
@@ -24,9 +27,11 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.UUID
 
 // FloatingVoiceService — botão circular flutuante de voz sobre todos os apps.
@@ -35,20 +40,20 @@ import java.util.UUID
 // o trigger no banco SQLite — tudo sem abrir o app ou mudar o foco do usuário.
 //
 // Fluxo de uso:
-//   1. SEGURAR (> 300 ms) → inicia gravação (estilo WhatsApp)
-//   2. SOLTAR             → Gemini processa; trigger criado diretamente no DB
+//   1. SEGURAR (> 300 ms) → inicia gravação com beep de confirmação (FIX 5)
+//   2. SOLTAR             → Gemini processa; trigger criado no DB; TTS confirma (FIX 4)
 //   3. ARRASTAR           → reposiciona botão; posição persiste em SharedPreferences
 //
-// FIX 1: chamadas de rede rodam em Dispatchers.IO via serviceScope (CoroutineScope).
-//         Logs floating_voice_debug enviados ao Supabase antes e depois do Gemini.
-// FIX 2: estado VAL_AWAITING_NAME — se Gemini retornar create_environment sem nome,
-//         pede o nome na próxima gravação e delega ao app via SharedPreferences IPC.
-// FIX 3: 3 ondas ripple (ValueAnimator), escala de botão (ObjectAnimator), #FF2244.
+// FIX 1: JSON completo — ByteArrayOutputStream lê todos os bytes da resposta Gemini.
+// FIX 2: ambientes lidos do SQLite diretamente, não de SharedPreferences.
+// FIX 3: create_environment sem nome → para gravação, pede nome via TTS, aguarda novo press.
+// FIX 4: TTS nativo (android.speech.tts) fala resposta após cada ação bem-sucedida.
+// FIX 5: ToneGenerator emite beep curto ao iniciar gravação (feedback auditivo imediato).
 //
 // IPC com o app:
 //   FloatingVoiceService escreve em "sopro_float_state" → KEY_PENDING_INTENT.
 //   MainActivity.onResume() lê e invoca "processPendingIntent" no Flutter.
-class FloatingVoiceService : Service() {
+class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
     // Resultado do processamento Gemini — error não nulo indica falha
     data class FloatVoiceResult(
@@ -102,14 +107,14 @@ class FloatingVoiceService : Service() {
     private var containerView:   FrameLayout?                = null
     private var btnView:         ImageView?                  = null
     private var layoutParams:    WindowManager.LayoutParams? = null
-    // FIX 3b: 3 Views circulares para ondas ripple durante gravação
+    // 3 Views circulares para ondas ripple durante gravação
     private val rippleViews      = mutableListOf<View>()
     private val rippleAnimators  = mutableListOf<ValueAnimator>()
 
     // ── Estado de arraste / toque ─────────────────────────────────────────────
     // Posição: dragStartX/Y e initParam rastreiam o delta de arrasto independente da gravação.
     // Gravação: pressStartTime e recordingStartRunnable controlam o hold-to-record.
-    // isDragging foi removido — arrastar e gravar são estados completamente independentes.
+    // isDragging removido — arrastar e gravar são estados completamente independentes.
     private var dragStartX = 0f
     private var dragStartY = 0f
     private var initParamX = 0
@@ -122,7 +127,11 @@ class FloatingVoiceService : Service() {
     private var audioFile:     File?          = null
     private var isRecording                   = false
 
-    // ── FIX 1: CoroutineScope para chamadas de rede em IO thread ─────────────
+    // ── FIX 4: TTS nativo — fala resposta sem depender do app Flutter ─────────
+    // Inicializado assincronamente via onInit(); nullable para evitar crash antes do init.
+    private var tts: TextToSpeech? = null
+
+    // ── CoroutineScope para chamadas de rede em IO thread ─────────────────────
     // SupervisorJob: falha de uma coroutine não cancela as outras.
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -161,19 +170,32 @@ class FloatingVoiceService : Service() {
             Log.w(TAG, "SYSTEM_ALERT_WINDOW não concedido — serviço encerrado")
             stopSelf(); return
         }
+        // FIX 4: inicia TTS nativo (callback onInit define o idioma pt-BR)
+        tts = TextToSpeech(this, this)
         startForeground(NOTIF_ID, buildSilentNotification())
         createOverlayButton()
         (applicationContext as Application).registerActivityLifecycleCallbacks(lifecycleCallbacks)
         Log.d(TAG, "FloatingVoiceService iniciado")
     }
 
+    // FIX 4: callback do TextToSpeech — define idioma após inicialização assíncrona
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+            tts?.language = Locale("pt", "BR")
+            Log.d(TAG, "TTS inicializado — pt-BR")
+        } else {
+            Log.w(TAG, "TTS falhou ao inicializar (status=$status)")
+        }
+    }
+
     override fun onDestroy() {
-        // FIX 1: cancela todas as coroutines de rede pendentes
         serviceScope.cancel()
         (applicationContext as Application).unregisterActivityLifecycleCallbacks(lifecycleCallbacks)
         stopRecordingIfActive()
         rippleAnimators.forEach { it.cancel() }
         mainHandler.removeCallbacksAndMessages(null)
+        // FIX 4: encerra TTS antes de destruir o serviço
+        tts?.stop(); tts?.shutdown(); tts = null
         removeOverlayButton()
         Log.d(TAG, "FloatingVoiceService encerrado")
         super.onDestroy()
@@ -218,7 +240,7 @@ class FloatingVoiceService : Service() {
         val container = FrameLayout(this)
         containerView = container
 
-        // FIX 3b: 3 Views de ripple atrás do botão, visíveis apenas durante gravação
+        // 3 Views de ripple atrás do botão, visíveis apenas durante gravação
         repeat(3) {
             val ripple = View(this).apply {
                 background = GradientDrawable().apply {
@@ -339,8 +361,8 @@ class FloatingVoiceService : Service() {
                 // Processa áudio SEMPRE se estava gravando, mesmo que tenha arrastado
                 val duration = System.currentTimeMillis() - pressStartTime
                 when {
-                    isRecording          -> stopAndProcess()
-                    duration < 300L      -> showToast("Segure para gravar")
+                    isRecording     -> stopAndProcess()
+                    duration < 300L -> showToast("Segure para gravar")
                 }
             }
 
@@ -387,11 +409,20 @@ class FloatingVoiceService : Service() {
             }
             isRecording = true
 
-            // FIX 3a: escala do botão com OvershootInterpolator (efeito elástico)
+            // FIX 5: beep curto (120 ms) confirma ativação do microfone ao usuário
+            try {
+                val toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
+                toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
+                mainHandler.postDelayed({ toneGen.release() }, 200L)
+            } catch (e: Exception) {
+                Log.w(TAG, "ToneGenerator indisponível: ${e.message}")
+            }
+
+            // Escala do botão com OvershootInterpolator (efeito elástico)
             animateButtonScale(from = 1.0f, to = 1.3f)
-            // FIX 3c: cor #FF2244 (mais vivo) durante gravação
+            // Cor #FF2244 (mais vivo) durante gravação
             btnView?.background = circleDrawable(0xFFFF2244.toInt())
-            // FIX 3b: 3 ondas ripple com delays de 0/300/600 ms
+            // 3 ondas ripple com delays de 0/300/600 ms
             startRippleAnimations()
 
             mainHandler.postDelayed({ stopAndProcess() }, 10_000L)
@@ -416,7 +447,6 @@ class FloatingVoiceService : Service() {
 
         Log.d(TAG, "Áudio: ${file.length()} bytes — enviando ao Gemini (IO thread)")
 
-        // FIX 1: TODA a chamada de rede roda fora da main thread via serviceScope
         serviceScope.launch {
             // Log ANTES do Gemini — confirma que o serviço chegou até aqui
             logToSupabase("floating_voice_debug", mapOf(
@@ -468,10 +498,11 @@ class FloatingVoiceService : Service() {
 
         val audioBase64 = Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
 
-        // Injeta nomes de ambientes no prompt para o Gemini retornar nome exato do banco
-        val envNames = getSharedPreferences(GeofenceReceiver.PREFS_NAME, Context.MODE_PRIVATE)
-            .all.values.filterIsInstance<String>()
-        val envCtx = if (envNames.isNotEmpty()) "\nAmbientes: ${envNames.joinToString(", ")}." else ""
+        // FIX 2: lê ambientes diretamente do SQLite — retorna nomes exatos do banco,
+        // igual ao contexto que VoiceService.dart envia ao Gemini.
+        val envNames = readEnvironmentNamesFromDb()
+        val envCtx = if (envNames.isNotEmpty())
+            "\nAmbientes existentes: ${envNames.joinToString(", ")}." else ""
 
         val prompt = """
 Extraia a intenção do áudio em JSON. Responda APENAS com JSON, sem markdown.
@@ -513,13 +544,24 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
 
             val code = conn.responseCode
             if (code != 200) {
-                val err = conn.errorStream?.bufferedReader()?.readText() ?: ""
+                conn.errorStream?.bufferedReader()?.readText()
                 conn.disconnect()
                 return FloatVoiceResult(null, null, null, null, null, error = "http_$code")
             }
-            // Lê todos os bytes antes de decodificar — evita truncamento em payloads grandes
-            val raw = conn.inputStream.readBytes().toString(Charsets.UTF_8)
+
+            // FIX 1: lê TODOS os bytes via loop explícito — evita truncamento em
+            // respostas Gemini grandes onde inputStream.read() pode retornar parcialmente.
+            val responseStream = conn.inputStream
+            val responseBytes  = ByteArrayOutputStream()
+            val buffer         = ByteArray(4096)
+            var bytesRead: Int
+            while (responseStream.read(buffer).also { bytesRead = it } != -1) {
+                responseBytes.write(buffer, 0, bytesRead)
+            }
+            responseStream.close()
             conn.disconnect()
+            val raw = responseBytes.toString("UTF-8")
+
             parseGeminiResponse(raw)
         } catch (e: Exception) {
             Log.e(TAG, "Gemini request error: $e")
@@ -552,7 +594,7 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                 }
                 "create_environment" -> {
                     // environment pode ser objeto {"name":""} ou string direta
-                    val env = parsed.optJSONObject("environment")
+                    val env  = parsed.optJSONObject("environment")
                     val name = env?.optString("name")?.takeIf { it.isNotEmpty() }
                         ?: parsed.optString("environment").takeIf { it.isNotEmpty() }
                     FloatVoiceResult(
@@ -582,13 +624,15 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
     private fun executeVoiceResult(result: FloatVoiceResult) {
         if (result.error != null) {
             showToast("Erro: ${result.error.take(60)}")
+            speak("Não entendi. Pressione novamente para tentar.")
             return
         }
 
         val statePrefs = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE)
         val voiceState = statePrefs.getString(KEY_VOICE_STATE, null)
 
-        // FIX 2: se estava aguardando nome de ambiente, usa transcript como nome
+        // FIX 3: se estava aguardando nome de ambiente, usa o transcript como nome.
+        // Neste caso NÃO enviamos ao Gemini novamente — usamos diretamente o texto gravado.
         if (voiceState == VAL_AWAITING_NAME) {
             statePrefs.edit().remove(KEY_VOICE_STATE).apply()
             val envName = result.transcript?.trim() ?: ""
@@ -596,9 +640,11 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                 savePendingIntent(JSONObject().apply {
                     put("intent", "create_environment"); put("name", envName)
                 }.toString())
-                showToast("Ambiente '$envName' anotado! Abra o Sopro para confirmar o local.")
+                showToast("'$envName' anotado! Abra o Sopro para confirmar o local.")
+                speak("Pronto! Abra o Sopro para confirmar o local de $envName.")
             } else {
                 showToast("Nome não captado. Tente novamente.")
+                speak("Não ouvi o nome. Pressione novamente.")
             }
             return
         }
@@ -611,17 +657,19 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                     createTriggerInDb(envName, title, result.triggerContent ?: "")
                 } else {
                     showToast("Diga: 'lembra de X quando chegar em Y'")
+                    speak("Não entendi. Diga: lembra de X quando chegar em Y.")
                 }
             }
             "create_environment" -> {
                 val envName = result.environment ?: ""
                 if (envName.isEmpty()) {
-                    // Salva estado: próxima gravação será o nome do ambiente
+                    // FIX 3: para gravação (já parou), salva estado e pede nome via TTS.
+                    // Botão já retornou ao idle em stopAndProcess(); usuário precisa segurar novamente.
                     statePrefs.edit().putString(KEY_VOICE_STATE, VAL_AWAITING_NAME).apply()
-                    // Toast imediato com a pergunta
                     showToast("Qual é o nome do ambiente?")
-                    // Delay de 2000 ms antes de pedir a gravação — evita que o mic
-                    // capture o áudio do Toast/TTS como entrada da próxima gravação
+                    // FIX 4: TTS pergunta o nome; delay de 2000 ms evita que o mic
+                    // capture este áudio como entrada da próxima gravação.
+                    speak("Qual é o nome do ambiente?")
                     mainHandler.postDelayed({
                         showToast("Segure o botão para gravar o nome.")
                     }, 2000L)
@@ -631,9 +679,13 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                         put("intent", "create_environment"); put("name", envName)
                     }.toString())
                     showToast("'$envName' anotado! Abra o Sopro para confirmar o local.")
+                    speak("Pronto! Ambiente $envName criado.")
                 }
             }
-            else -> showToast("Não entendi. Abra o Sopro para comandos avançados.")
+            else -> {
+                showToast("Não entendi. Abra o Sopro para comandos avançados.")
+                speak("Não entendi. Pressione novamente para tentar.")
+            }
         }
     }
 
@@ -643,12 +695,7 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
 
     // Mesmo padrão de caminhos do BootReceiver — Drift em app_flutter/sopro.db
     private fun createTriggerInDb(envName: String, title: String, content: String) {
-        val candidates = listOf(
-            File(filesDir.parentFile, "app_flutter/sopro.db"),
-            File(filesDir, "sopro.db"),
-            getDatabasePath("sopro.db"),
-        )
-        val dbFile = candidates.firstOrNull { it.exists() } ?: run {
+        val dbFile = findDbFile() ?: run {
             showToast("Abra o Sopro pelo menos uma vez"); return
         }
 
@@ -661,7 +708,9 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                     ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
 
                     if (envId == null) {
-                        showToast("Local '$envName' não encontrado no Sopro"); return
+                        showToast("Local '$envName' não encontrado no Sopro")
+                        speak("Não encontrei o local $envName.")
+                        return
                     }
 
                     db.execSQL(
@@ -671,6 +720,8 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
                                 System.currentTimeMillis())
                     )
                     showToast("Anotado! Vou te lembrar de $title em $envName ✓")
+                    // FIX 4: TTS confirma criação do trigger
+                    speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
                 }
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao criar trigger: $e")
@@ -678,11 +729,55 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
         }
     }
 
+    // FIX 2: lê nomes de ambientes diretamente do SQLite — garante que o Gemini
+    // recebe os nomes exatos do banco (case/acentos corretos) no contexto do prompt.
+    // Chamado de Dispatchers.IO, portanto o acesso ao DB é seguro.
+    private fun readEnvironmentNamesFromDb(): List<String> {
+        val dbFile = findDbFile() ?: return emptyList()
+        return try {
+            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                .use { db ->
+                    db.rawQuery(
+                        "SELECT name FROM environments WHERE deleted_at IS NULL", null
+                    ).use { cursor ->
+                        val names = mutableListOf<String>()
+                        while (cursor.moveToNext()) names.add(cursor.getString(0))
+                        names
+                    }
+                }
+        } catch (e: Exception) {
+            // Tabela pode não ter deleted_at — tenta sem WHERE
+            try {
+                SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                    .use { db ->
+                        db.rawQuery("SELECT name FROM environments", null).use { cursor ->
+                            val names = mutableListOf<String>()
+                            while (cursor.moveToNext()) names.add(cursor.getString(0))
+                            names
+                        }
+                    }
+            } catch (e2: Exception) {
+                Log.w(TAG, "readEnvironmentNamesFromDb falhou: ${e2.message}")
+                emptyList()
+            }
+        }
+    }
+
+    // Localiza o arquivo sopro.db entre os caminhos possíveis (mesmo padrão do BootReceiver)
+    private fun findDbFile(): File? {
+        val candidates = listOf(
+            File(filesDir.parentFile, "app_flutter/sopro.db"),
+            File(filesDir, "sopro.db"),
+            getDatabasePath("sopro.db"),
+        )
+        return candidates.firstOrNull { it.exists() }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
-    // FIX 3: Efeito visual ao pressionar
+    // Efeito visual ao pressionar
     // ─────────────────────────────────────────────────────────────────────────
 
-    // FIX 3a: ObjectAnimator para escala do botão com interpolação elástica
+    // ObjectAnimator para escala do botão com interpolação elástica
     private fun animateButtonScale(from: Float, to: Float, durationMs: Long = 200L) {
         val btn = btnView ?: return
         ObjectAnimator.ofFloat(btn, "scaleX", from, to).apply {
@@ -697,7 +792,7 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
         }
     }
 
-    // FIX 3b: 3 ondas ripple com delay de 300 ms entre si.
+    // 3 ondas ripple com delay de 300 ms entre si.
     // Cada onda: scale 1.0→2.5, alpha 0.6→0.0 em 900 ms, em loop infinito.
     private fun startRippleAnimations() {
         rippleAnimators.forEach { it.cancel() }
@@ -776,6 +871,12 @@ REGRA trigger.title: apenas a ação, infinitivo, max 50 chars, sem pronomes.$en
 
     private fun showToast(msg: String) =
         mainHandler.post { Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show() }
+
+    // FIX 4: fala texto via TTS nativo. QUEUE_FLUSH interrompe fala anterior.
+    // Silencioso se TTS ainda não inicializou (onInit ainda não foi chamado).
+    private fun speak(text: String) {
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "sopro_utt")
+    }
 
     // Posição padrão no canto inferior direito com gravity TOP|START
     private fun defaultButtonPosition(containerPx: Int): Pair<Int, Int> {

@@ -1248,5 +1248,62 @@ FIX 3 — DELAY DE 2000MS APOS PERGUNTAR NOME DO AMBIENTE (FloatingVoiceService.
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Anterior
+Sprint: V2-VoicePro-Etapa10 - JSON Completo, Ambientes SQLite, TTS Nativo e Som de Ativacao - CONCLUIDO (2026-07-03)
+Entregue:
+
+FIX 1 — JSON COMPLETO NO KOTLIN (FloatingVoiceService.kt):
+- callGeminiWithAudio(): substituiu conn.inputStream.readBytes() por loop explícito
+  com ByteArrayOutputStream + buffer de 4096 bytes. Lê TODOS os bytes antes de
+  decodificar — elimina truncamento em respostas Gemini grandes onde read() pode
+  retornar parcialmente.
+- Import java.io.ByteArrayOutputStream adicionado.
+
+FIX 2 — CONTEXTO DE AMBIENTES VIA SQLite (FloatingVoiceService.kt):
+- readEnvironmentNamesFromDb(): novo helper que abre sopro.db via SQLiteDatabase
+  (mesmo padrão de caminhos do BootReceiver) e lê SELECT name FROM environments.
+  Fallback: tenta sem WHERE se deleted_at não existir; retorna emptyList() em erro.
+- findDbFile(): helper compartilhado para localizar sopro.db (evita duplicação).
+  Usado por readEnvironmentNamesFromDb() e createTriggerInDb().
+- callGeminiWithAudio(): usa readEnvironmentNamesFromDb() em vez de SharedPreferences
+  do GeofenceReceiver. Inicia com "Ambientes existentes: X, Y" (nomes exatos do banco).
+  Resultado: Gemini retorna nome exato do banco, eliminando falhas de matching.
+
+FIX 3 — PARAR GRAVACAO QUANDO name=null (FloatingVoiceService.kt):
+- executeVoiceResult() caso create_environment sem nome:
+  Gravação já para em stopAndProcess() antes de chegar aqui.
+  Salva voice_state=awaiting_env_name, mostra Toast, chama speak() imediatamente.
+  mainHandler.postDelayed(2000ms): segundo Toast "Segure o botão para gravar o nome."
+  Botão já reverteu ao idle — usuário precisa segurar novamente para a próxima gravação.
+  Na próxima gravação: transcript usado direto como nome (sem enviar ao Gemini novamente).
+
+FIX 4 — TTS NATIVO NO SERVICE (FloatingVoiceService.kt):
+- FloatingVoiceService implementa TextToSpeech.OnInitListener.
+- private var tts: TextToSpeech? = null — nullable, evita crash antes do onInit.
+- onCreate(): tts = TextToSpeech(this, this).
+- onInit(): tts.language = Locale("pt", "BR").
+- onDestroy(): tts?.stop(); tts?.shutdown(); tts = null.
+- speak(text): tts?.speak(text, QUEUE_FLUSH, null, "sopro_utt") — silencioso se null.
+- Respostas por acao:
+  create_trigger sucesso: "Anotado! Vou te lembrar de [titulo] quando chegar em [ambiente]."
+  create_trigger env nao encontrado: "Não encontrei o local [nome]."
+  create_trigger sem dados: "Não entendi. Diga: lembra de X quando chegar em Y."
+  create_environment sucesso: "Pronto! Ambiente [nome] criado."
+  create_environment sem nome: "Qual é o nome do ambiente?"
+  awaiting_env_name sucesso: "Pronto! Abra o Sopro para confirmar o local de [nome]."
+  awaiting_env_name sem audio: "Não ouvi o nome. Pressione novamente."
+  unknown: "Não entendi. Pressione novamente para tentar."
+  error: "Não entendi. Pressione novamente para tentar."
+- Imports adicionados: android.speech.tts.TextToSpeech, java.util.Locale.
+
+FIX 5 — SOM DE ATIVACAO DO MICROFONE (FloatingVoiceService.kt):
+- startRecording(): após isRecording = true, cria ToneGenerator(STREAM_MUSIC, 80).
+  startTone(TONE_PROP_BEEP, 120ms) — som curto de confirmação, volume 80%.
+  mainHandler.postDelayed(200ms): toneGen.release() após o tom terminar.
+  try/catch silencioso: ToneGenerator pode falhar em alguns dispositivos/modos de áudio.
+- Import android.media.AudioManager e android.media.ToneGenerator adicionados.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
