@@ -11,6 +11,7 @@
 //   5. AppBar: BLE Social, Perfil, Configurações
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -229,11 +230,17 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       if (mounted && _isRecording) _stopAndProcess();
     });
 
-    // Escuta o canal nativo: FloatingVoiceService envia este método quando o
-    // usuário toca no botão flutuante — abre o app e inicia gravação imediatamente.
+    // Escuta o canal nativo: dois métodos possíveis.
     _overlayChannel.setMethodCallHandler((call) async {
-      if (call.method == 'openVoiceFromOverlay' && mounted && _fabState == _FabState.idle) {
+      if (call.method == 'openVoiceFromOverlay' &&
+          mounted && _fabState == _FabState.idle) {
+        // FloatingVoiceService quer abrir o app e iniciar gravação
         _onPressStart();
+      } else if (call.method == 'processPendingIntent') {
+        // FloatingVoiceService deixou um pedido pendente (ex: create_environment)
+        // que exige GPS — processado agora que o app está em foreground
+        final json = call.arguments as String?;
+        if (json != null && mounted) _handleServicePendingIntent(json);
       }
     });
   }
@@ -578,6 +585,28 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
     ));
     await _speak('Anotado! Vou te lembrar de $title quando chegar em ${env.name}.'); // FIX 4
+  }
+
+  // Processa pedido pendente deixado pelo FloatingVoiceService nas SharedPreferences.
+  // Chamado por MainActivity.onResume() via overlayChannel.
+  // Suporta: create_environment (precisa de GPS — feito aqui com app em foreground).
+  Future<void> _handleServicePendingIntent(String json) async {
+    try {
+      final map = jsonDecode(json) as Map<String, dynamic>;
+      final intent = map['intent'] as String?;
+      if (intent == 'create_environment') {
+        final name = map['name'] as String? ?? '';
+        if (name.isNotEmpty) {
+          await _handleOpenEnvironment(VoiceResult(
+            intent:          VoiceIntent.createEnvironment,
+            transcript:      name,
+            environmentName: name,
+          ));
+        }
+      }
+    } catch (e) {
+      debugPrint('[_VoiceFab] Erro ao processar pending intent: $e');
+    }
   }
 
   // ── Helpers de criação por GPS ─────────────────────────────────────────────

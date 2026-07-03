@@ -819,9 +819,26 @@ class MainActivity : FlutterActivity() {
         super.onNewIntent(intent)
         if (intent.getBooleanExtra(FloatingVoiceService.EXTRA_OPEN_VOICE, false)) {
             Log.d(TAG, "App aberto pelo botão flutuante — notificando Flutter para iniciar gravação")
-            // Invoca o método Dart registrado em _VoiceFabState.initState()
-            // que chama _onPressStart() e inicia a gravação automaticamente.
             overlayChannel?.invokeMethod("openVoiceFromOverlay", null)
+        }
+    }
+
+    // Verifica se o FloatingVoiceService deixou um pedido pendente em SharedPreferences.
+    // Chamado toda vez que o app volta ao foreground (onResume).
+    // Pedidos com timestamp < 30 s são repassados ao Flutter via overlayChannel.
+    override fun onResume() {
+        super.onResume()
+        val prefs = getSharedPreferences(FloatingVoiceService.FLOAT_STATE_PREFS, MODE_PRIVATE)
+        val pendingJson = prefs.getString(FloatingVoiceService.KEY_PENDING_INTENT, null)
+        val pendingTs   = prefs.getLong(FloatingVoiceService.KEY_PENDING_TS, 0L)
+        if (pendingJson != null && System.currentTimeMillis() - pendingTs < 30_000L) {
+            prefs.edit()
+                .remove(FloatingVoiceService.KEY_PENDING_INTENT)
+                .remove(FloatingVoiceService.KEY_PENDING_TS)
+                .apply()
+            Log.d(TAG, "Pending intent do FloatingVoiceService: $pendingJson")
+            // Invoca Dart para processar (ex: create_environment com GPS atual)
+            overlayChannel?.invokeMethod("processPendingIntent", pendingJson)
         }
     }
 

@@ -1125,7 +1125,7 @@ FIX 3 — Onboarding "Acesso rapido" com permissao real:
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-VoicePro-Etapa7 - Botao Flutuante: Movimento Livre, Hold-to-Record, Voz sem Nome - CONCLUIDO (2026-07-03)
 Entregue:
 
@@ -1165,6 +1165,56 @@ FIX 4 - VOZ SEM NOME DE AMBIENTE (home_screen.dart):
   gravacao como nome do ambiente: prefere environmentName (se Gemini entendeu
   create_environment) ou transcript (fallback). Depois chama _handleOpenEnvironment
   com o nome preenchido para criar o ambiente via GPS.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa8 - Gemini Coroutine, Estado Aguardando Nome e Efeito Visual - CONCLUIDO (2026-07-03)
+Entregue:
+
+FIX 1 - GEMINI NO SERVICE (causa raiz do erro — chamada de rede na main thread):
+- FloatingVoiceService.kt: adicionado CoroutineScope(Dispatchers.IO + SupervisorJob()).
+  serviceScope.cancel() em onDestroy() cancela coroutines pendentes.
+- stopAndProcess(): serviceScope.launch { callGeminiWithAudio() } — toda a chamada
+  de rede roda em IO thread. withContext(Dispatchers.Main) executa o resultado na UI.
+- logToSupabase("floating_voice_debug"): log ANTES (step=before_gemini, audio_bytes)
+  e DEPOIS (step=after_gemini, intent, error) de cada chamada Gemini.
+  Usa mesma URL/chave do AppLogger.dart (publishable key, INSERT-only RLS).
+- data class FloatVoiceResult(intent, environment, triggerTitle, triggerContent,
+  transcript, error) substitui retorno implícito via parseAndExecute().
+- Supabase key/URL copiados do AppLogger.dart como constantes no companion object.
+- build.gradle: kotlinx-coroutines-android:1.7.3 adicionado.
+
+IPC via SharedPreferences:
+- Resultados que precisam de GPS (create_environment) salvos em
+  "sopro_float_state" → KEY_PENDING_INTENT + KEY_PENDING_TS.
+- MainActivity.onResume(): le pending intent com timestamp < 30s,
+  limpa as chaves e invoca overlayChannel.invokeMethod("processPendingIntent", json).
+- home_screen.dart: handler "processPendingIntent" adicionado ao setMethodCallHandler.
+  _handleServicePendingIntent(): deserializa JSON, chama _handleOpenEnvironment()
+  para criar ambiente com GPS atual. Import dart:convert adicionado.
+
+FIX 2 - ESTADO AGUARDANDO NOME (FloatingVoiceService.kt):
+- executeVoiceResult(): verifica "sopro_float_state" -> voice_state.
+  Se VAL_AWAITING_NAME: limpa estado, usa transcript como nome do ambiente,
+  salva como pending intent para o app confirmar o local via GPS.
+- Caso create_environment sem nome: seta voice_state=awaiting_env_name,
+  Toast "Qual e o nome? Segure para gravar o nome do ambiente."
+- Na proxima gravacao: transcript usado diretamente como nome.
+
+FIX 3 - EFEITO VISUAL AO PRESSIONAR (FloatingVoiceService.kt):
+a. ESCALA DO BOTAO: ObjectAnimator.ofFloat(btn, "scaleX"/"scaleY", 1.0f, 1.3f)
+   com duration=200ms e OvershootInterpolator (efeito elastico).
+   Revertido em revertButtonAppearance(): escala volta a 1.0f em 150ms.
+b. TRES ONDAS RIPPLE (ValueAnimator, substitui waveView e waveHandler):
+   rippleViews: List<View> com 3 Views circulares (60dp cada, accent color).
+   Cada onda: ValueAnimator.ofFloat(0f, 1f), duration=900ms, delay 0/300/600ms,
+   INFINITE loop. scaleX/Y: 1.0 → 2.5; alpha: 0.6 → 0.0.
+   Container aumentado para 160dp para acomodar ripples expandidos.
+   startRippleAnimations() / stopRippleAnimations() gerenciam lista rippleAnimators.
+c. COR durante gravacao: #FF2244 (mais vivo que o anterior #E53935).
+   Restaura #E8445A (accent) ao parar.
+- waveView, waveHandler, waveScale, waveGrowing e animateWave() REMOVIDOS.
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
