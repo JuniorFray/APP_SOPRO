@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
@@ -746,8 +747,14 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
 
     setState(() => _isSaving = true);
 
+    // Gera o UUID aqui para que seja conhecido antes e depois do save(),
+    // permitindo registrar o geofence nativo com o ID correto.
+    final id = widget.environment?.id.isNotEmpty == true
+        ? widget.environment!.id
+        : const Uuid().v4();
+
     final entity = EnvironmentEntity(
-      id: widget.environment?.id ?? '',
+      id: id,
       name: _nameController.text.trim(),
       latitude: _selectedPoint!.latitude,
       longitude: _selectedPoint!.longitude,
@@ -756,6 +763,15 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     );
 
     await ref.read(environmentRepositoryProvider).save(entity);
+
+    // Registra/atualiza o geofence nativo imediatamente após salvar.
+    // Sem isso, o ambiente só seria monitorado após o próximo startup do app.
+    try {
+      await ref.read(nativeGeofenceServiceProvider).addSingleGeofence(entity);
+    } catch (e) {
+      // Falha silenciosa: o GPS stream do GeofenceManager ainda monitora em foreground
+      debugPrint('[AddEnvironmentScreen] Falha ao registrar geofence nativo: $e');
+    }
 
     if (mounted) Navigator.pop(context);
   }

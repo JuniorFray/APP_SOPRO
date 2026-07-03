@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,6 +10,9 @@ import '../../providers/ble_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../encounters/encounters_screen.dart';
+
+// Canal nativo para o FloatingVoiceService (botão flutuante de voz)
+const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
 
 // Tela de Configurações do Sopro.
 // Agrupa preferências de privacidade, notificações e dados.
@@ -24,9 +28,10 @@ class SettingsScreen extends ConsumerWidget {
     final notifEnabled  = ref.watch(notificationsEnabledProvider);
     final notifSound    = ref.watch(notificationSoundProvider);
     final notifCooldown = ref.watch(notificationCooldownMinutesProvider);
-    final voiceAudio    = ref.watch(voiceAudioResponseProvider);
-    final voiceText     = ref.watch(voiceTextResponseProvider);
-    final voiceRate     = ref.watch(voiceSpeechRateProvider);
+    final voiceAudio        = ref.watch(voiceAudioResponseProvider);
+    final voiceText         = ref.watch(voiceTextResponseProvider);
+    final voiceRate         = ref.watch(voiceSpeechRateProvider);
+    final floatingVoice     = ref.watch(floatingVoiceEnabledProvider);
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
@@ -142,6 +147,38 @@ class SettingsScreen extends ConsumerWidget {
               ref.read(voiceSpeechRateProvider.notifier).state = v;
               final prefs = await SharedPreferences.getInstance();
               await prefs.setDouble('voice_speech_rate', v);
+            },
+          ),
+
+          const _Divider(),
+
+          // ─── Seção: Acesso rápido (botão flutuante de voz) ────────────────
+          const _SectionHeader(label: AppStrings.settingsOverlaySection),
+
+          _OverlayToggleTile(
+            value: floatingVoice,
+            onChanged: (v) async {
+              if (v) {
+                // Verifica permissão SYSTEM_ALERT_WINDOW antes de ativar
+                final bool hasPerm = await _overlayChannel.invokeMethod<bool>(
+                      'hasOverlayPermission') ??
+                    false;
+                if (!hasPerm) {
+                  // Redireciona o usuário para conceder a permissão
+                  await _overlayChannel.invokeMethod<void>(
+                      'openOverlayPermissionSettings');
+                  // Não ativa o toggle ainda — AppInitializer re-verificará no próximo start
+                  return;
+                }
+                await _overlayChannel.invokeMethod<void>(
+                    'startFloatingVoiceService');
+              } else {
+                await _overlayChannel.invokeMethod<void>(
+                    'stopFloatingVoiceService');
+              }
+              ref.read(floatingVoiceEnabledProvider.notifier).state = v;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool('floating_voice_enabled', v);
             },
           ),
 
@@ -495,6 +532,53 @@ class _InfoTile extends StatelessWidget {
           color: AppTheme.textSecondary,
           fontSize: 13,
         ),
+      ),
+    );
+  }
+}
+
+// Toggle do botão flutuante de voz.
+// Verifica permissão SYSTEM_ALERT_WINDOW antes de ativar o serviço overlay.
+// Se a permissão não foi concedida, abre as configurações do sistema para o usuário.
+class _OverlayToggleTile extends StatelessWidget {
+  final bool value;
+  final Future<void> Function(bool) onChanged;
+
+  const _OverlayToggleTile({
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: AppTheme.backgroundElevated,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Icon(Icons.mic_external_on_outlined,
+            color: AppTheme.accent, size: 20),
+      ),
+      title: const Text(
+        AppStrings.settingsOverlayEnabled,
+        style: TextStyle(
+          color: AppTheme.textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+      ),
+      subtitle: const Text(
+        AppStrings.settingsOverlayEnabledDesc,
+        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+      ),
+      trailing: Switch(
+        value: value,
+        onChanged: (v) => onChanged(v),
+        activeColor: AppTheme.accent,
       ),
     );
   }

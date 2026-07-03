@@ -935,7 +935,7 @@ MELHORIA 3 — Exclusao por voz:
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-VoicePro-Etapa4 - Delete sem confirmacao + Titulo correto + TTS conversacional - CONCLUIDO (2026-07-03)
 Entregue:
 
@@ -986,6 +986,75 @@ FIX 4 — TTS conversacional em todos os handlers de voz:
   deleteTrigger (vazio): "Nao encontrei esse lembrete."
   deleteTrigger (multiplos): "Qual lembrete voce quer remover? Toque em um deles."
   deleteAllTriggers (onConfirm): "Todos os lembretes de X removidos."
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa5 - Geofence pos-criacao e Botao Voz Flutuante - CONCLUIDO (2026-07-03)
+Entregue:
+
+FIX 1 — Geofence registrado apos criar/editar ambiente:
+- native_geofence_service.dart: addSingleGeofence(EnvironmentEntity env) — wrapper
+  de addGeofence() que loga 'native_geofence_added' {env_id, env_name} no Supabase.
+- add_environment_screen.dart: _submit() gera o UUID antes do save() (para ter o ID
+  correto disponivel). Apos save(), chama addSingleGeofence() com try/catch silencioso.
+  Importados: uuid ^4.x e nativeGeofenceServiceProvider.
+- home_screen.dart: _createEnvironmentFromGps() substitui a chamada direta a addGeofence()
+  por addSingleGeofence() (inclui o log de Supabase automaticamente).
+- MainActivity.kt: Log.d adicionado em addNativeGeofence():
+  entrada: "addGeofence[nome] lat= lng= radius= id="
+  sucesso: "addGeofence[nome] aceito pelo GeofencingClient ✓"
+  falha:   "addGeofence[nome] rejeitado pelo GeofencingClient: erro"
+- Resultado: qualquer ambiente criado ou editado — seja por voz ou manualmente —
+  agora registra o geofence nativo imediatamente, sem aguardar o proximo startup.
+  Log 'native_geofence_added' no Supabase confirma o registro em tempo real.
+
+FIX 2 — Botao de voz flutuante (overlay):
+ANDROID:
+- FloatingVoiceService.kt (novo): Service com TYPE_APPLICATION_OVERLAY.
+  Foreground service usando canal 'sopro_background' (IMPORTANCE_MIN, sem som).
+  Exibe botao circular 64dp accent (#E8445A) no canto inferior direito (24dp/96dp).
+  Verifica Settings.canDrawOverlays() em onCreate(); chama stopSelf() se negado.
+  onClickListener e onLongClickListener: ambos chamam openAppWithVoice().
+  openAppWithVoice(): startActivity com FLAG_ACTIVITY_SINGLE_TOP + OPEN_VOICE=true.
+- MainActivity.kt: campo overlayChannel: MethodChannel? armazenado para invocar Dart.
+  MethodChannel "com.sopro.sopro/overlay" com 4 metodos:
+    hasOverlayPermission() → Settings.canDrawOverlays(this)
+    startFloatingVoiceService() → startForegroundService/startService conforme SDK
+    stopFloatingVoiceService() → stopService
+    openOverlayPermissionSettings() → Settings.ACTION_MANAGE_OVERLAY_PERMISSION
+  onNewIntent(): detecta OPEN_VOICE=true no Intent, chama
+    overlayChannel?.invokeMethod("openVoiceFromOverlay", null).
+- AndroidManifest: <service android:name=".FloatingVoiceService" android:exported="false"/>
+  (SYSTEM_ALERT_WINDOW ja declarada desde Sprint V2-VoicePro).
+  Uri e Settings importados em MainActivity.kt.
+
+FLUTTER:
+- home_screen.dart (_VoiceFabState):
+  Campo _overlayChannel = MethodChannel('com.sopro.sopro/overlay').
+  initState(): setMethodCallHandler para 'openVoiceFromOverlay' → chama _onPressStart()
+    quando idle, iniciando gravacao automaticamente como se o usuario tivesse pressionado o FAB.
+  dispose(): cancela o listener (setMethodCallHandler(null)).
+  Importado: package:flutter/services.dart.
+- settings_providers.dart: floatingVoiceEnabledProvider (StateProvider<bool>, default=false).
+  Persistencia via SharedPreferences 'floating_voice_enabled'.
+- settings_screen.dart: importado flutter/services.dart + const _overlayChannel.
+  Secao "Acesso rapido" com _OverlayToggleTile:
+    ao ativar: verifica permissao → se negada: openOverlayPermissionSettings (nao ativa);
+    se concedida: startFloatingVoiceService + persiste prefs.
+    ao desativar: stopFloatingVoiceService + persiste prefs.
+  Widget _OverlayToggleTile adicionado ao fim do arquivo.
+- app_initializer.dart: restaura overlay no startup se floating_voice_enabled=true:
+  verifica permissao — se concedida: startFloatingVoiceService + atualiza provider;
+  se revogada: reseta 'floating_voice_enabled'=false nas prefs silenciosamente.
+  Importado: package:flutter/services.dart.
+- strings.dart: settingsOverlaySection, settingsOverlayEnabled, settingsOverlayEnabledDesc,
+  settingsOverlayPermNeeded adicionados.
+
+ARQUITETURA (sem duplicacao de codigo):
+  Overlay apenas abre o app (Intent) → MainActivity detecta OPEN_VOICE → notifica
+  Flutter via MethodChannel → _VoiceFabState._onPressStart() grava + processa via
+  VoiceService existente (AudioRecorder + Gemini). Zero logica duplicada em Kotlin.
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 

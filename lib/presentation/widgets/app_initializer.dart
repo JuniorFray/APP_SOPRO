@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:flutter/services.dart';
+
 import '../../core/navigation/app_router.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
@@ -152,6 +154,27 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
     if (prefs.getBool('onboarding_done') ?? false) {
       await BackgroundServiceManager.start();
+    }
+
+    // Restaura o botão flutuante de voz se estava ativo na sessão anterior.
+    // Verifica se a permissão SYSTEM_ALERT_WINDOW ainda é válida antes de iniciar.
+    const overlayChannel = MethodChannel('com.sopro.sopro/overlay');
+    final floatingEnabled = prefs.getBool('floating_voice_enabled') ?? false;
+    if (floatingEnabled) {
+      try {
+        final hasPerm = await overlayChannel.invokeMethod<bool>(
+              'hasOverlayPermission') ??
+            false;
+        if (hasPerm) {
+          ref.read(floatingVoiceEnabledProvider.notifier).state = true;
+          await overlayChannel.invokeMethod<void>('startFloatingVoiceService');
+        } else {
+          // Permissão foi revogada → desativa nas prefs sem atualizar o toggle
+          await prefs.setBool('floating_voice_enabled', false);
+        }
+      } catch (_) {
+        // Canal ainda não disponível no startup — ignorar
+      }
     }
 
     // 8. Loga a inicialização do app após tudo estar configurado

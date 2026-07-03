@@ -112,6 +112,13 @@
             </intent-filter>
         </receiver>
 
+        <!-- FloatingVoiceService — exibe botão flutuante de voz sobre outros apps.
+             Requer SYSTEM_ALERT_WINDOW concedido pelo usuário (verificado em runtime).
+             android:exported="false": só o próprio app pode iniciar este serviço. -->
+        <service
+            android:name=".FloatingVoiceService"
+            android:exported="false"/>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>

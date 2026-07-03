@@ -183,6 +183,14 @@ class AppStrings {
   static const settingsNotifEnabled     = 'Notificações de gatilhos';
   static const settingsNotifEnabledDesc =
       'Receber sussurros ao entrar nos seus ambientes';
+  // Botão flutuante de voz (overlay — V2)
+  static const settingsOverlaySection     = 'Acesso rápido';
+  static const settingsOverlayEnabled     = 'Botão de voz flutuante';
+  static const settingsOverlayEnabledDesc =
+      'Acesse o Sopro de qualquer tela do celular';
+  static const settingsOverlayPermNeeded  =
+      'Conceda a permissão "Exibir sobre outros apps" para ativar o botão flutuante';
+
   static const settingsDataSection    = 'Dados';
   static const settingsMyProfile      = 'Meu perfil';
   static const settingsMyEncounters   = 'Pessoas que encontrei';

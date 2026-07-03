@@ -1,5 +1,8 @@
 import 'package:flutter/services.dart';
 
+import '../../domain/entities/environment_entity.dart';
+import '../logging/app_logger.dart';
+
 // Wrapper Dart para o MethodChannel "com.sopro.sopro/native_geofence".
 // Delega o monitoramento de geofences ao GeofencingClient do Android —
 // o sistema gerencia as zonas mesmo com o app fechado ou morto.
@@ -8,6 +11,23 @@ import 'package:flutter/services.dart';
 // que envia a notificação via NotificationManager sem depender do app estar vivo.
 class NativeGeofenceService {
   static const _channel = MethodChannel('com.sopro.sopro/native_geofence');
+
+  // Registra um ambiente no GeofencingClient com log no Supabase.
+  // Convenience wrapper de [addGeofence] para uso após criar/editar um ambiente.
+  // Loga 'native_geofence_added' para confirmar que o geofence foi aceito.
+  Future<void> addSingleGeofence(EnvironmentEntity env) async {
+    await addGeofence(
+      id:           env.id,
+      lat:          env.latitude,
+      lng:          env.longitude,
+      radiusMeters: env.radiusMeters,
+      name:         env.name,
+    );
+    AppLogger.log('native_geofence_added', {
+      'env_id':   env.id,
+      'env_name': env.name,
+    });
+  }
 
   // Registra um geofence circular permanente no GeofencingClient.
   //

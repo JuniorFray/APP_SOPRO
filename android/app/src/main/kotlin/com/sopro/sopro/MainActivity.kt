@@ -7,10 +7,13 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.provider.Settings
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.*
@@ -73,6 +76,10 @@ class MainActivity : FlutterActivity() {
         // SharedPreferences compartilhadas com GeofenceReceiver: {envId → envName}
         private const val PREFS_GEOFENCE_NAMES  = GeofenceReceiver.PREFS_NAME
 
+        // ── Overlay (botão flutuante de voz) ──────────────────────────────────
+        private const val OVERLAY_CHANNEL       = "com.sopro.sopro/overlay"
+        private const val TAG                   = "MainActivity"
+
         // UUIDs Sopro — FIXOS (nunca alterar; identificam o app na rede BLE)
         private val SERVICE_UUID           = ParcelUuid.fromString("550e8400-e29b-41d4-a716-446655440000")
         private val CONTEXT_CARD_CHAR_UUID = UUID.fromString("550e8401-e29b-41d4-a716-446655440000")
@@ -107,6 +114,9 @@ class MainActivity : FlutterActivity() {
 
     // Handler da main thread usado em callbacks GATT (que chegam em threads de fundo)
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Canal de overlay — armazenado para invocar métodos Dart a partir do onNewIntent
+    private var overlayChannel: MethodChannel? = null
 
     // ═════════════════════════════════════════════════════════════════════════
     // Inicialização dos canais Flutter ↔ Native
@@ -176,6 +186,46 @@ class MainActivity : FlutterActivity() {
                     scanEventSink = null
                 }
             })
+
+        // ── Overlay (botão flutuante de voz): MethodChannel ──────────────────
+        overlayChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, OVERLAY_CHANNEL
+        ).also { ch ->
+            ch.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "hasOverlayPermission" ->
+                        result.success(Settings.canDrawOverlays(this))
+
+                    "startFloatingVoiceService" -> {
+                        val svcIntent = Intent(this, FloatingVoiceService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(svcIntent)
+                        } else {
+                            startService(svcIntent)
+                        }
+                        Log.d(TAG, "FloatingVoiceService iniciado via MethodChannel")
+                        result.success(null)
+                    }
+
+                    "stopFloatingVoiceService" -> {
+                        stopService(Intent(this, FloatingVoiceService::class.java))
+                        Log.d(TAG, "FloatingVoiceService parado via MethodChannel")
+                        result.success(null)
+                    }
+
+                    "openOverlayPermissionSettings" -> {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        startActivity(intent)
+                        result.success(null)
+                    }
+
+                    else -> result.notImplemented()
+                }
+            }
+        }
 
         // ── Geofencing nativo: MethodChannel ──────────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GEOFENCE_CHANNEL)
@@ -322,9 +372,12 @@ class MainActivity : FlutterActivity() {
         result: MethodChannel.Result
     ) {
         if (!hasLocationPermission()) {
+            Log.w(TAG, "addGeofence[$name] falhou: ACCESS_FINE_LOCATION não concedido")
             result.error("PERMISSION_DENIED", "ACCESS_FINE_LOCATION required", null)
             return
         }
+
+        Log.d(TAG, "addGeofence[$name] lat=$lat lng=$lng radius=${radius}m id=$id")
 
         val geofence = Geofence.Builder()
             .setRequestId(id)                       // ID único = ID do ambiente no banco
@@ -348,9 +401,11 @@ class MainActivity : FlutterActivity() {
                 // Persiste o nome do ambiente para uso offline pelo GeofenceReceiver
                 getSharedPreferences(PREFS_GEOFENCE_NAMES, MODE_PRIVATE)
                     .edit().putString(id, name).apply()
+                Log.d(TAG, "addGeofence[$name] aceito pelo GeofencingClient ✓")
                 result.success(null)
             }
             .addOnFailureListener { e ->
+                Log.e(TAG, "addGeofence[$name] rejeitado pelo GeofencingClient: ${e.message}")
                 result.error("ADD_FAILED", e.message ?: "Unknown error", null)
             }
     }
@@ -754,6 +809,19 @@ class MainActivity : FlutterActivity() {
                 pendingBgLocResult?.success(granted)
                 pendingBgLocResult = null
             }
+        }
+    }
+
+    // Detecta quando o app é aberto (ou trazido ao foreground) pelo botão flutuante.
+    // FLAG_ACTIVITY_SINGLE_TOP garante que esta Activity não seja recriada,
+    // mas onNewIntent() é chamado com o Intent atualizado.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(FloatingVoiceService.EXTRA_OPEN_VOICE, false)) {
+            Log.d(TAG, "App aberto pelo botão flutuante — notificando Flutter para iniciar gravação")
+            // Invoca o método Dart registrado em _VoiceFabState.initState()
+            // que chama _onPressStart() e inicia a gravação automaticamente.
+            overlayChannel?.invokeMethod("openVoiceFromOverlay", null)
         }
     }
 

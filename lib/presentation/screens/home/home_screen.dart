@@ -13,6 +13,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -199,6 +200,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Momento em que o dedo pressionou o botão — usado para verificar mínimo de 500 ms
   DateTime? _pressStartTime;
 
+  // Canal de comunicação com o FloatingVoiceService (overlay nativo)
+  static const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
+
   @override
   void initState() {
     super.initState();
@@ -209,10 +213,18 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.12).animate(
       CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut),
     );
+    // Escuta o canal nativo: FloatingVoiceService envia este método quando o
+    // usuário toca no botão flutuante — abre o app e inicia gravação imediatamente.
+    _overlayChannel.setMethodCallHandler((call) async {
+      if (call.method == 'openVoiceFromOverlay' && mounted && _fabState == _FabState.idle) {
+        _onPressStart();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _overlayChannel.setMethodCallHandler(null); // cancela o listener ao sair da tela
     _pulseCtrl.dispose();
     _recordingTimer?.cancel();
     // Garante que gravação seja cancelada se o widget for descartado durante uso
@@ -555,14 +567,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       );
       await ref.read(environmentRepositoryProvider).save(env);
 
-      // Registra no GeofencingClient para disparos com app morto
-      await ref.read(nativeGeofenceServiceProvider).addGeofence(
-        id:           env.id,
-        lat:          env.latitude,
-        lng:          env.longitude,
-        radiusMeters: env.radiusMeters,
-        name:         env.name,
-      );
+      // Registra no GeofencingClient imediatamente e loga native_geofence_added
+      await ref.read(nativeGeofenceServiceProvider).addSingleGeofence(env);
 
       AppLogger.log('env_created_by_voice', {
         'env_id':   env.id,

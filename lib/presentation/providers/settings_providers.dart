@@ -27,3 +27,8 @@ final bleTxPowerProvider = StateProvider<int>((ref) => 1);
 // preenchido no perfil — o usuário pode ter o número salvo sem compartilhá-lo.
 // Persistência via SharedPreferences ('share_whatsapp').
 final shareWhatsAppProvider = StateProvider<bool>((ref) => true);
+
+// Provider que controla se o botão flutuante de voz (overlay) está ativo.
+// Requer permissão SYSTEM_ALERT_WINDOW concedida pelo usuário.
+// Persistência via SharedPreferences ('floating_voice_enabled').
+final floatingVoiceEnabledProvider = StateProvider<bool>((ref) => false);
