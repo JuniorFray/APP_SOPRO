@@ -5,12 +5,14 @@ import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.database.sqlite.SQLiteDatabase
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingEvent
+import java.io.File
 
 // BroadcastReceiver ativado pelo sistema Android quando o dispositivo entra
 // num geofence registrado via GeofencingClient — funciona com o app fechado/morto.
@@ -97,12 +99,20 @@ class GeofenceReceiver : BroadcastReceiver() {
             // Nome salvo pelo MainActivity.addNativeGeofence() — fallback se ausente.
             val envName = prefs.getString(geofence.requestId, null) ?: "um local Sopro"
 
+            // Lê o primeiro gatilho ativo do ambiente diretamente do SQLite
+            // (sem Flutter Engine) para construir a mensagem contextual.
+            val triggerTitle = readFirstTriggerTitle(context, geofence.requestId)
+            val notifBody    = buildNotificationBody(triggerTitle, envName)
+
+            // Título: título do gatilho (se encontrado) ou "Sopro — envName"
+            val notifTitle = if (!triggerTitle.isNullOrEmpty()) triggerTitle
+                             else "Sopro — $envName"
+
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.notification_icon)
-                .setContentTitle("Sopro")
-                .setContentText("Você está em: $envName")
+                .setContentTitle(notifTitle)
+                .setContentText(notifBody)
                 // ticker força heads-up em OEMs restritivos (Motorola My UX, etc.)
-                // mesmo com app em background — mesma estratégia do FireTriggersUseCase
                 .setTicker("Sopro — $envName")
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -110,14 +120,65 @@ class GeofenceReceiver : BroadcastReceiver() {
                 .build()
 
             try {
-                // nmCompat.notify() lida com SecurityException internamente no Android 13+
-                // quando POST_NOTIFICATIONS não está concedida (embora já checamos acima).
                 nmCompat.notify(geofence.requestId.hashCode(), notification)
-                Log.d(TAG, "Notificação disparada: '$envName' (id=${geofence.requestId.hashCode()})")
+                Log.d(TAG, "Notificação disparada: '$envName' trigger='$triggerTitle' " +
+                      "(id=${geofence.requestId.hashCode()})")
             } catch (e: SecurityException) {
-                // Segurança extra: caso POST_NOTIFICATIONS seja revogada entre o check e o notify
                 Log.e(TAG, "SecurityException ao disparar notificação: ${e.message}")
             }
+        }
+    }
+
+    // ── Helpers privados ───────────────────────────────────────────────────────
+
+    // Lê o título do primeiro gatilho ativo do ambiente a partir do SQLite.
+    // Tenta os mesmos caminhos que o BootReceiver — sem Flutter Engine.
+    // Retorna null se o banco não for encontrado ou não houver gatilhos.
+    private fun readFirstTriggerTitle(context: Context, environmentId: String): String? {
+        val dbPaths = listOf(
+            File(context.filesDir.parentFile, "app_flutter/sopro.db"),
+            context.getDatabasePath("sopro.db"),
+        )
+        for (dbFile in dbPaths) {
+            if (!dbFile.exists()) continue
+            try {
+                val db = SQLiteDatabase.openDatabase(
+                    dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY
+                )
+                val cursor = db.rawQuery(
+                    "SELECT title FROM triggers WHERE environment_id = ? " +
+                    "AND is_active = 1 ORDER BY created_at ASC LIMIT 1",
+                    arrayOf(environmentId)
+                )
+                val title = if (cursor.moveToFirst()) cursor.getString(0) else null
+                cursor.close()
+                db.close()
+                return title?.takeIf { it.isNotEmpty() }
+            } catch (e: Exception) {
+                Log.w(TAG, "Erro ao ler trigger (path=${dbFile.name}): ${e.message}")
+            }
+        }
+        return null
+    }
+
+    // Constrói a mensagem do corpo da notificação com base nas palavras-chave
+    // do título do gatilho — mesma lógica do FireTriggersUseCase no Dart.
+    private fun buildNotificationBody(triggerTitle: String?, envName: String): String {
+        if (triggerTitle.isNullOrEmpty()) {
+            return "Você chegou em $envName. Hora dos seus lembretes!"
+        }
+        val lower = triggerTitle.lowercase()
+        return when {
+            listOf("comprar", "buscar", "pegar", "trazer").any { lower.contains(it) } ->
+                "Você está em $envName. Lembrou de $triggerTitle?"
+            listOf("falar", "ligar", "contatar", "avisar", "perguntar").any { lower.contains(it) } ->
+                "Você chegou em $envName. Não esqueça de $triggerTitle."
+            listOf("verificar", "checar", "conferir", "inspecionar").any { lower.contains(it) } ->
+                "Você está em $envName. $triggerTitle."
+            listOf("pagar", "renovar", "assinar", "entregar").any { lower.contains(it) } ->
+                "Você chegou em $envName. Atenção: $triggerTitle."
+            else ->
+                "Você chegou em $envName. Hora de ${triggerTitle.lowercase()}!"
         }
     }
 }

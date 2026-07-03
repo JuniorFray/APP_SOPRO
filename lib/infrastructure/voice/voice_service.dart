@@ -26,6 +26,12 @@ enum VoiceIntent {
   resolveTrigger,
   // "o que tenho pendente em X?"
   listTriggers,
+  // "exclui o ambiente X" — requer confirmação (ação irreversível)
+  deleteEnvironment,
+  // "remove o lembrete de Y" — exclui trigger por título
+  deleteTrigger,
+  // "apaga todos os gatilhos de X" — requer confirmação
+  deleteAllTriggers,
   // comando não classificado — fallback para texto livre
   fallback,
 }
@@ -532,6 +538,34 @@ class VoiceService {
           intent:          VoiceIntent.listTriggers,
           transcript:      transcricao,
           environmentName: json['ambiente'] as String?,
+        );
+
+      // ── Schemas de exclusão (V2-VoicePro-Etapa3) ─────────────────────────────
+
+      case 'delete_environment':
+        // {"intent":"delete_environment","environment":"nome_exato_do_banco"}
+        return VoiceResult(
+          intent:          VoiceIntent.deleteEnvironment,
+          transcript:      transcricao,
+          environmentName: json['environment'] as String?,
+        );
+
+      case 'delete_trigger':
+        // {"intent":"delete_trigger","environment":"nome_ou_null","trigger":{"title":"titulo"}}
+        final delTrigger = json['trigger'] as Map<String, dynamic>?;
+        return VoiceResult(
+          intent:          VoiceIntent.deleteTrigger,
+          transcript:      transcricao,
+          environmentName: json['environment'] as String?,
+          triggerAction:   delTrigger?['title'] as String?,
+        );
+
+      case 'delete_all_triggers':
+        // {"intent":"delete_all_triggers","environment":"nome_exato_do_banco"}
+        return VoiceResult(
+          intent:          VoiceIntent.deleteAllTriggers,
+          transcript:      transcricao,
+          environmentName: json['environment'] as String?,
         );
 
       default: // 'unknown', 'nao_entendido' e qualquer não reconhecido

@@ -86,9 +86,10 @@ class FireTriggersUseCase {
         await _notifications.showTrigger(
           // ID da notificação: hash positivo do UUID
           id: trigger.id.hashCode & 0x7FFFFFFF,
-          // Título mostra o ambiente para contextualizar o sussurro
-          title: '${trigger.title} • $environmentName',
-          body: trigger.content,
+          // Título = ação do gatilho (curto, extraído pelo Gemini)
+          title: trigger.title.isNotEmpty ? trigger.title : environmentName,
+          // Corpo contextual baseado nas palavras-chave do título do gatilho
+          body: _buildNotificationMessage(trigger.title, environmentName),
           // Payload = ID do ambiente para navegar diretamente ao tocar
           payload: environmentId,
           // Canal escolhido conforme preferência de som do usuário
@@ -112,5 +113,31 @@ class FireTriggersUseCase {
         });
       }
     }
+  }
+
+  // Constrói o corpo da notificação com mensagem contextual baseada nas
+  // palavras-chave do título do gatilho.
+  // Prioridade em ordem decrescente: comprar > falar > verificar > pagar > default.
+  String _buildNotificationMessage(String triggerTitle, String environmentName) {
+    final lower = triggerTitle.toLowerCase();
+
+    // Ação de aquisição: "Lembrou de comprar/buscar/pegar/trazer?"
+    if (['comprar', 'buscar', 'pegar', 'trazer'].any(lower.contains)) {
+      return 'Você está em $environmentName. Lembrou de $triggerTitle?';
+    }
+    // Ação de comunicação: "Não esqueça de falar/ligar/contatar/avisar/perguntar"
+    if (['falar', 'ligar', 'contatar', 'avisar', 'perguntar'].any(lower.contains)) {
+      return 'Você chegou em $environmentName. Não esqueça de $triggerTitle.';
+    }
+    // Ação de inspeção: "verificar/checar/conferir/inspecionar" — mensagem direta
+    if (['verificar', 'checar', 'conferir', 'inspecionar'].any(lower.contains)) {
+      return 'Você está em $environmentName. $triggerTitle.';
+    }
+    // Ação financeira/burocrática: "pagar/renovar/assinar/entregar" — com "Atenção"
+    if (['pagar', 'renovar', 'assinar', 'entregar'].any(lower.contains)) {
+      return 'Você chegou em $environmentName. Atenção: $triggerTitle.';
+    }
+    // Default: mensagem encorajadora
+    return 'Você chegou em $environmentName. Hora de ${triggerTitle.toLowerCase()}!';
   }
 }

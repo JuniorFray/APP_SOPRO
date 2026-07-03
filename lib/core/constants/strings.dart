@@ -303,4 +303,22 @@ class AppStrings {
   static const voiceEnvUpdated     = 'Ambiente atualizado';
   // Lembrete exibido após abrir AddEnvironmentScreen via create_environment_with_trigger
   static const voicePendingTriggers = 'Após salvar, adicione o gatilho:';
+
+  // ── Voz — exclusão por voz (Sprint V2-VoicePro-Etapa3) ───────────────────
+  // Título do sheet de confirmação para excluir ambiente
+  static const voiceDeleteEnvTitle   = 'Excluir ambiente?';
+  // Confirmação excluída de todos gatilhos do ambiente
+  static const voiceDeleteAllTitle   = 'Remover todos os gatilhos?';
+  // Título do picker quando múltiplos triggers correspondem à busca
+  static const voiceDeletePickerTitle = 'Qual desses você quer remover?';
+  // Snackbar após excluir ambiente com sucesso
+  static const voiceEnvDeleted       = 'Ambiente excluído';
+  // Snackbar após remover gatilho individual com sucesso
+  static const voiceTriggerDeleted   = 'Gatilho removido';
+  // Snackbar após remover todos os gatilhos de um ambiente
+  static const voiceAllTriggersDeleted = 'Gatilhos removidos';
+  // Snackbar quando o gatilho buscado não é encontrado
+  static const voiceTriggerDeleteNotFound = 'Gatilho não encontrado. Tente outro nome.';
+  // Snackbar quando o ambiente não é encontrado para exclusão
+  static const voiceEnvNotFoundForDelete  = 'Ambiente não encontrado';
 }

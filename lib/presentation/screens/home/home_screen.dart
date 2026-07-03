@@ -362,7 +362,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   // ── Auto-execução de intenções (zero confirmação) ─────────────────────────
 
-  // CORRECAO 4: Despacha o resultado do Gemini para o handler correto.
+  // Despacha o resultado do Gemini para o handler correto.
   // Cada handler executa a ação diretamente ou abre um sheet de continuação.
   Future<void> _executeResult(VoiceResult result) async {
     switch (result.intent) {
@@ -380,6 +380,13 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         await _handleResolveTrigger(result);
       case VoiceIntent.listTriggers:
         await _handleListTriggers(result);
+      // ── Exclusão por voz (V2-VoicePro-Etapa3) ─────────────────────────────
+      case VoiceIntent.deleteEnvironment:
+        await _handleDeleteEnvironment(result);
+      case VoiceIntent.deleteTrigger:
+        await _handleDeleteTrigger(result);
+      case VoiceIntent.deleteAllTriggers:
+        await _handleDeleteAllTriggers(result);
       case VoiceIntent.fallback:
         await _handleFallback(result);
     }
@@ -766,6 +773,160 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       transcript: result.transcript,
       // Re-executa a ação com a intenção re-analisada pelo usuário + Gemini
       onResult:   (newResult) => _executeResult(newResult),
+    ));
+  }
+
+  // ── Handlers de exclusão por voz ──────────────────────────────────────────
+
+  // "exclui o ambiente X" → exibe confirmação antes de excluir (irreversível).
+  // Unica ação de voz que exige confirmação manual por remover dados permanentemente.
+  Future<void> _handleDeleteEnvironment(VoiceResult result) async {
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    final env  = _matchEnv(envs, result.environmentName);
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+
+    if (env == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(AppStrings.voiceEnvNotFoundForDelete),
+        behavior: SnackBarBehavior.floating,
+      ));
+      AppLogger.log('voice_delete', {
+        'intent':        'delete_environment',
+        'environment':   result.environmentName,
+        'trigger_title': null,
+        'sucesso':       false,
+      });
+      return;
+    }
+
+    // Confirmação obrigatória — exclusão de ambiente é irreversível
+    _showSheet(_DeleteEnvConfirmSheet(
+      environment: env,
+      onConfirm: () async {
+        Navigator.pop(context);
+        await ref.read(environmentRepositoryProvider).delete(env.id);
+        AppLogger.log('voice_delete', {
+          'intent':        'delete_environment',
+          'environment':   env.name,
+          'trigger_title': null,
+          'sucesso':       true,
+        });
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${AppStrings.voiceEnvDeleted}: ${env.name}'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ));
+      },
+    ));
+  }
+
+  // "remove o lembrete de Y" → busca trigger por título.
+  // 1 resultado → exclui diretamente.
+  // >1 resultado → sheet com lista para escolher.
+  // 0 resultados → snackbar de não encontrado.
+  Future<void> _handleDeleteTrigger(VoiceResult result) async {
+    final query    = result.triggerAction ?? '';
+    final triggers = await _searchAllTriggers(query);
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+
+    if (triggers.isEmpty) {
+      AppLogger.log('voice_delete', {
+        'intent':        'delete_trigger',
+        'trigger_title': query,
+        'environment':   result.environmentName,
+        'sucesso':       false,
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(AppStrings.voiceTriggerDeleteNotFound),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } else if (triggers.length == 1) {
+      // Único match → exclui sem pedir confirmação
+      final t = triggers.first;
+      await ref.read(triggerRepositoryProvider).delete(t.id);
+      AppLogger.log('voice_delete', {
+        'intent':        'delete_trigger',
+        'trigger_title': t.title,
+        'environment':   null,
+        'sucesso':       true,
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(AppStrings.voiceTriggerDeleted),
+        behavior: SnackBarBehavior.floating,
+      ));
+    } else {
+      // Múltiplos matches → lista para o usuário escolher qual remover
+      _showSheet(_DeleteTriggerPickerSheet(
+        triggers: triggers,
+        onSelected: (t) async {
+          Navigator.pop(context);
+          await ref.read(triggerRepositoryProvider).delete(t.id);
+          AppLogger.log('voice_delete', {
+            'intent':        'delete_trigger',
+            'trigger_title': t.title,
+            'environment':   null,
+            'sucesso':       true,
+          });
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(AppStrings.voiceTriggerDeleted),
+            behavior: SnackBarBehavior.floating,
+          ));
+        },
+      ));
+    }
+  }
+
+  // "apaga todos os gatilhos de X" → exibe confirmação antes de excluir.
+  Future<void> _handleDeleteAllTriggers(VoiceResult result) async {
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    final env  = _matchEnv(envs, result.environmentName);
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+
+    if (env == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(AppStrings.voiceEnvNotFoundForDelete),
+        behavior: SnackBarBehavior.floating,
+      ));
+      AppLogger.log('voice_delete', {
+        'intent':        'delete_all_triggers',
+        'environment':   result.environmentName,
+        'trigger_title': null,
+        'sucesso':       false,
+      });
+      return;
+    }
+
+    // Confirmação antes de remover todos os gatilhos
+    _showSheet(_DeleteAllTriggersConfirmSheet(
+      environment: env,
+      onConfirm: () async {
+        Navigator.pop(context);
+        // Busca e remove todos os triggers (ativos e inativos) do ambiente
+        final all = await ref
+            .read(triggerRepositoryProvider)
+            .getByEnvironment(env.id);
+        for (final t in all) {
+          await ref.read(triggerRepositoryProvider).delete(t.id);
+        }
+        AppLogger.log('voice_delete', {
+          'intent':        'delete_all_triggers',
+          'environment':   env.name,
+          'trigger_title': null,
+          'sucesso':       true,
+        });
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${AppStrings.voiceAllTriggersDeleted}: ${env.name}'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ));
+      },
     ));
   }
 
@@ -1456,6 +1617,273 @@ class _EnvsListSheet extends ConsumerWidget {
                         ),
                       ),
                     ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Sheet: confirmação de exclusão de ambiente ────────────────────────────────
+//
+// Unica ação de voz que exige confirmação — remoção de ambiente é irreversível
+// (exclui o ambiente e todos os seus gatilhos em cascade).
+class _DeleteEnvConfirmSheet extends StatelessWidget {
+  final EnvironmentEntity environment;
+  final VoidCallback onConfirm;
+
+  const _DeleteEnvConfirmSheet({
+    required this.environment,
+    required this.onConfirm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Alça do sheet
+            Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: AppTheme.textDisabled,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+
+            // Ícone de aviso
+            const Icon(Icons.warning_amber_rounded,
+                color: AppTheme.accent, size: 44),
+            const SizedBox(height: 12),
+
+            // Título da confirmação
+            const Text(
+              AppStrings.voiceDeleteEnvTitle,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+
+            // Nome do ambiente + aviso de irreversibilidade
+            Text(
+              '"${environment.name}" e todos os seus gatilhos '
+              'serão excluídos. Esta ação não pode ser desfeita.',
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+
+            // Botão de confirmação (vermelho — ação destrutiva)
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: onConfirm,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.accent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: const Text(
+                  AppStrings.delete,
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+
+            // Botão de cancelamento
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text(
+                AppStrings.cancel,
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Sheet: picker de trigger para exclusão ────────────────────────────────────
+//
+// Exibido quando a busca por título retorna múltiplos triggers.
+// O usuário toca no trigger que deseja remover.
+class _DeleteTriggerPickerSheet extends StatelessWidget {
+  final List<TriggerEntity> triggers;
+  final void Function(TriggerEntity) onSelected;
+
+  const _DeleteTriggerPickerSheet({
+    required this.triggers,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Alça do sheet
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: AppTheme.textDisabled,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+
+            const Text(
+              AppStrings.voiceDeletePickerTitle,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Lista de triggers correspondentes à busca
+            ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: triggers.length,
+              separatorBuilder: (_, __) => const Divider(
+                height: 1, color: AppTheme.backgroundSurface,
+              ),
+              itemBuilder: (_, i) {
+                final t = triggers[i];
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  // Ícone de lixeira para reforçar a ação
+                  leading: const Icon(
+                    Icons.delete_outline,
+                    color: AppTheme.accent,
+                  ),
+                  title: Text(
+                    t.title.isNotEmpty ? t.title : t.content,
+                    style: const TextStyle(color: AppTheme.textPrimary),
+                  ),
+                  subtitle: t.title.isNotEmpty && t.content.isNotEmpty
+                      ? Text(
+                          t.content,
+                          style: const TextStyle(
+                            color: AppTheme.textSecondary, fontSize: 12,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      : null,
+                  onTap: () => onSelected(t),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Sheet: confirmação de exclusão de todos os gatilhos ───────────────────────
+
+class _DeleteAllTriggersConfirmSheet extends StatelessWidget {
+  final EnvironmentEntity environment;
+  final VoidCallback onConfirm;
+
+  const _DeleteAllTriggersConfirmSheet({
+    required this.environment,
+    required this.onConfirm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Alça do sheet
+            Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 16),
+              decoration: BoxDecoration(
+                color: AppTheme.textDisabled,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+
+            const Icon(Icons.warning_amber_rounded,
+                color: AppTheme.accent, size: 44),
+            const SizedBox(height: 12),
+
+            const Text(
+              AppStrings.voiceDeleteAllTitle,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+
+            Text(
+              'Todos os gatilhos de "${environment.name}" '
+              'serão removidos. Esta ação não pode ser desfeita.',
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: onConfirm,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.accent,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: const Text(
+                  AppStrings.confirm,
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text(
+                AppStrings.cancel,
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
             ),
           ],
         ),

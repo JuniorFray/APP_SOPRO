@@ -887,5 +887,53 @@ TAREFA 3 — Icones ilustrativos nos ambientes:
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: V2-VoicePro-Etapa3 - Extracao de Titulo + Notificacao Contextual + Exclusao por Voz - CONCLUIDO (2026-07-03)
+Entregue:
+
+MELHORIA 1 — Extracao inteligente do titulo do gatilho:
+- app_constants.dart: geminiSystemPrompt ampliado de 7 para 10 schemas.
+  Adicionada regra critica de extracao de titulo logo apos os schemas:
+  "Para o campo trigger.title, extraia SOMENTE a acao a ser realizada,
+  sem pronomes, sem 'quando chegar', sem nome do ambiente. Maximo 50 chars,
+  objetivo e no infinitivo."
+  4 exemplos concretos de titulo correto/incorreto para calibrar o modelo.
+- geminiTextPrompt: regra de titulo adicionada tambem na versao texto (re-analise).
+  3 novos schemas declarados: delete_environment, delete_trigger, delete_all_triggers.
+
+MELHORIA 2 — Notificacao contextual inteligente:
+- fire_triggers_use_case.dart: _buildNotificationMessage(triggerTitle, envName).
+  5 regras em ordem de prioridade por palavras-chave do titulo:
+  comprar/buscar/pegar/trazer → "Voce esta em X. Lembrou de Y?"
+  falar/ligar/contatar/avisar/perguntar → "Voce chegou em X. Nao esqueca de Y."
+  verificar/checar/conferir/inspecionar → "Voce esta em X. Y."
+  pagar/renovar/assinar/entregar → "Voce chegou em X. Atencao: Y."
+  default → "Voce chegou em X. Hora de y!"
+  showTrigger(): body substituido por _buildNotificationMessage(); title = trigger.title.
+- GeofenceReceiver.kt: readFirstTriggerTitle(context, envId) le primeiro trigger ativo
+  do banco SQLite diretamente (sem Flutter Engine), mesmos caminhos do BootReceiver.
+  buildNotificationBody(title?, envName): mesma logica de 5 prioridades do Dart.
+  Titulo da notificacao: triggerTitle se disponivel, "Sopro — envName" como fallback.
+  Importados: android.database.sqlite.SQLiteDatabase, java.io.File.
+
+MELHORIA 3 — Exclusao por voz:
+- voice_service.dart: VoiceIntent enum +3 valores: deleteEnvironment, deleteTrigger,
+  deleteAllTriggers. _mapGeminiResponse(): 3 novos cases mapeando os schemas JSON.
+- home_screen.dart: _executeResult() +3 cases. 3 novos handlers:
+  _handleDeleteEnvironment(): busca ambiente por nome, mostra _DeleteEnvConfirmSheet
+    (confirmacao obrigatoria — acao irreversivel). Loga 'voice_delete' no Supabase.
+  _handleDeleteTrigger(): busca triggers ativos por titulo. 1 match → exclui
+    diretamente. >1 match → _DeleteTriggerPickerSheet. 0 matches → snackbar.
+  _handleDeleteAllTriggers(): busca ambiente, mostra _DeleteAllTriggersConfirmSheet
+    (confirmacao), exclui todos os triggers do ambiente (ativos e inativos).
+  3 novos sheets: _DeleteEnvConfirmSheet, _DeleteTriggerPickerSheet,
+    _DeleteAllTriggersConfirmSheet.
+  Todos os fluxos logam 'voice_delete' {intent, environment, trigger_title, sucesso}.
+- strings.dart: voiceDeleteEnvTitle, voiceDeleteAllTitle, voiceDeletePickerTitle,
+  voiceEnvDeleted, voiceTriggerDeleted, voiceAllTriggersDeleted,
+  voiceTriggerDeleteNotFound, voiceEnvNotFoundForDelete.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
