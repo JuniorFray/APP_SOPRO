@@ -1305,5 +1305,58 @@ FIX 5 — SOM DE ATIVACAO DO MICROFONE (FloatingVoiceService.kt):
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Anterior
+Sprint: V2-VoicePro-Etapa11 - MediaRecorder Leak, JSON Completo, TTS Sem Repeticao e Nome Generico - CONCLUIDO (2026-07-03)
+Entregue:
+
+FIX 1 — MEDIARECORDER RESOURCE LEAK (CRITICO) (FloatingVoiceService.kt):
+- releaseMediaRecorder(): metodo centralizado com try/catch separados para stop() e
+  release(). Garante que release SEMPRE executa mesmo se stop lancar excecao.
+  Ao final seta mediaRecorder = null — obrigatorio para proxima chamada criar instancia nova.
+- startRecording(): chama releaseMediaRecorder() ANTES de criar nova instancia
+  (limpa qualquer instancia anterior). No catch de prepare()/start() chama
+  releaseMediaRecorder() novamente — fix do leak que existia no caminho de erro.
+- stopAndProcess(): substituiu stopRecordingIfActive() por isRecording=false +
+  releaseMediaRecorder() explicitamente, garantindo o padrao correto.
+- ACTION_CANCEL: substitui stopRecordingIfActive() por isRecording=false +
+  releaseMediaRecorder() — mesmo padrao.
+- onDestroy(): usa releaseMediaRecorder() em vez de stopRecordingIfActive().
+- stopRecordingIfActive() REMOVIDO — substituido pelo padrao centralizado.
+
+FIX 2 — JSON COMPLETO SEM BUFFEREDREADER (FloatingVoiceService.kt):
+- errorStream: substituiu `bufferedReader()?.readText()` por `readBytes()?.toString(Charsets.UTF_8)`.
+  Resultado logado com Log.d para diagnostico. Sem BufferedReader em nenhum caminho HTTP.
+- inputStream (sucesso): ja usava ByteArrayOutputStream loop desde Etapa10 (mantido).
+
+FIX 3 — TTS SEM REPETICAO AO ABRIR APP:
+- FloatingVoiceService.speak(): apos qualquer fala bem-sucedida, salva timestamp
+  em FlutterSharedPreferences com chave "flutter.floating_spoke_at" via putLong().
+  Constante KEY_FLOATING_SPOKE adicionada ao companion object.
+- VoiceService.dart speak(): le 'floating_spoke_at' via SharedPreferences antes de
+  falar. Se diff < 10000ms (10 s): retorna sem falar — evita TTS duplicado quando
+  o app abre logo apos um comando pelo botao flutuante.
+  Import 'package:shared_preferences/shared_preferences.dart' adicionado.
+
+FIX 4 — VOZ MELHOR NO TTS NATIVO (FloatingVoiceService.kt):
+- onInit(): apos definir Locale("pt", "BR"), filtra tts.voices por:
+  locale.language=="pt", locale.country=="BR", !isNetworkConnectionRequired,
+  quality >= Voice.QUALITY_NORMAL. Ordena por quality decrescente e aplica a melhor.
+  (Voice.QUALITY_NORMAL = 400 — valor correto para android.speech.tts.Voice)
+- setSpeechRate(0.95f): levemente mais lento que o padrao (1.0f).
+- setPitch(1.05f): tom ligeiramente mais alto = articulacao mais clara.
+- Log.d registra nome e quality da voz selecionada para diagnostico.
+- Import android.speech.tts.Voice adicionado.
+
+FIX 5 — NOME GENERICO BLOQUEADO (FloatingVoiceService.kt):
+- BLOCKED_ENV_NAMES: Set<String> no companion object com 11 nomes genericos:
+  "ambiente", "local", "lugar", "aqui", "este", "esse", "novo", "meu", "um", "o", "a".
+- create_environment: rawName.takeIf { !BLOCKED_ENV_NAMES.contains(it.lowercase()) }
+  trata nome generico como vazio → salva VAL_AWAITING_NAME, TTS pede nome real.
+- VAL_AWAITING_NAME branch: mesma validacao aplicada ao transcript da segunda gravacao.
+  Se ainda generico: re-seta awaiting_env_name + TTS "Qual e o nome do lugar? Por exemplo..."
+  (loop de ate 1 tentativa adicional antes de desistir).
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git

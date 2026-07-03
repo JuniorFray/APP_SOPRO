@@ -7,6 +7,8 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'package:sopro/core/constants/app_constants.dart';
 import 'package:sopro/infrastructure/logging/app_logger.dart';
 
@@ -656,7 +658,14 @@ class VoiceService {
   }
 
   // Sintetiza [text] em voz. [rate]: 0.1 (muito lenta) a 1.0 (muito rápida).
+  // FIX 3: skip se o botão flutuante falou há menos de 10 s — evita TTS duplicado
+  // quando o usuário abre o app logo após um comando pelo botão flutuante.
   Future<void> speak(String text, {double rate = 0.5}) async {
+    final prefs   = await SharedPreferences.getInstance();
+    final spokeAt = prefs.getInt('floating_spoke_at') ?? 0;
+    final diffMs  = DateTime.now().millisecondsSinceEpoch - spokeAt;
+    if (diffMs < 10000) return; // floating falou há menos de 10 s — não repetir
+
     await _initTts();
     await _tts.setSpeechRate(rate.clamp(0.1, 1.0));
     await _tts.speak(text);
