@@ -35,7 +35,10 @@ import java.util.UUID
 class TransparentVoiceActivity : Activity() {
 
     companion object {
-        private const val TAG = "TransparentVoice"
+        private const val TAG          = "TransparentVoice"
+        // Mesma chave do AppLogger.dart / FloatingVoiceService.kt — INSERT-only por RLS
+        private const val SUPABASE_URL = "https://zqgkfqenrljtncoecegv.supabase.co/rest/v1/app_logs"
+        private const val SUPABASE_KEY = "sb_publishable_cw4YwcWkSNhGc-zkTjO7xw_lPS5NE09"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -164,14 +167,25 @@ class TransparentVoiceActivity : Activity() {
         try {
             SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
                 .use { db ->
-                    db.execSQL(
-                        "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        arrayOf(id, name, lat, lon, radius.toDouble(), now)
-                    )
-                    Log.d(TAG, "Ambiente '$name' criado ($lat, $lon, raio=${radius}m) ✓")
+                    try {
+                        db.execSQL(
+                            "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                            arrayOf(id, name, lat, lon, radius.toDouble(), now)
+                        )
+                        Log.d(TAG, "Ambiente '$name' criado ($lat, $lon, raio=${radius}m) ✓")
+                        // Loga sucesso no Supabase — fire-and-forget em thread separada
+                        val body = """{"device_id":"floating","event_type":"floating_env_created","payload":{"name":"$name","lat":$lat,"lon":$lon}}"""
+                        logToSupabase(body)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Erro ao inserir ambiente no SQLite: ${e.message}")
+                        // Loga falha no Supabase para diagnóstico remoto
+                        val errMsg = e.message?.replace("\"", "'") ?: "unknown"
+                        val body = """{"device_id":"floating","event_type":"floating_env_error","payload":{"error":"$errMsg","name":"$name"}}"""
+                        logToSupabase(body)
+                    }
                 }
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao criar ambiente no SQLite: ${e.message}")
+            Log.e(TAG, "Erro ao abrir banco para ambiente: ${e.message}")
         }
     }
 
@@ -217,15 +231,28 @@ class TransparentVoiceActivity : Activity() {
             }
     }
 
-    // Localiza sopro.db — mesmo padrão de caminhos do BootReceiver.kt e FloatingVoiceService.kt
-    private fun findDbFile(): File? {
-        val candidates = listOf(
-            File(filesDir.parentFile, "app_flutter/sopro.db"),
-            File(filesDir, "sopro.db"),
-            getDatabasePath("sopro.db"),
-        )
-        return candidates.firstOrNull { it.exists() }
+    // Fire-and-forget: envia body JSON já montado para o Supabase em thread separada.
+    // Falhas de rede são silenciosas — logging nunca bloqueia o fluxo principal.
+    private fun logToSupabase(body: String) {
+        Thread {
+            try {
+                val conn = (java.net.URL(SUPABASE_URL).openConnection() as java.net.HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    connectTimeout = 5_000; readTimeout = 5_000; doOutput = true
+                    setRequestProperty("Content-Type",  "application/json")
+                    setRequestProperty("apikey",        SUPABASE_KEY)
+                    setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
+                    setRequestProperty("Prefer",        "return=minimal")
+                }
+                conn.outputStream.use { it.write(body.toByteArray()) }
+                conn.responseCode // consome a resposta
+                conn.disconnect()
+            } catch (_: Exception) {}
+        }.start()
     }
+
+    // Retorna o caminho canônico do banco: /data/data/com.sopro.sopro/databases/sopro.db
+    private fun findDbFile(): File? = getDatabasePath("sopro.db")
 
     // Sem animação de transição ao fechar — activity nunca deve ser visível ao usuário
     override fun finish() {
