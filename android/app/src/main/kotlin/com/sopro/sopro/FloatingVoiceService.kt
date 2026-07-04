@@ -860,10 +860,11 @@ Texto: $transcript
     // Chamado de Dispatchers.IO; registerGeofence() é postado na main thread.
     private fun writeEnvironmentToDb(name: String, lat: Double, lon: Double, radius: Int): Boolean {
         return try {
-            val dbFile = File(filesDir, "sopro.db")
-            if (!dbFile.exists()) {
-                logToSupabase("floating_env_error",
-                    mapOf("error" to "db_not_found", "path" to dbFile.absolutePath, "name" to name))
+            val dbFile = findDbFile() ?: run {
+                logToSupabase("floating_env_error", mapOf(
+                    "error" to "db_not_found",
+                    "candidates_tested" to "app_flutter/sopro.db, files/sopro.db, databases/sopro.db"
+                ))
                 return false
             }
             SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
@@ -894,10 +895,11 @@ Texto: $transcript
     // Retorna true se salvo, false se ambiente não encontrado ou erro.
     private fun writeTriggerToDb(title: String, content: String, envName: String): Boolean {
         return try {
-            val dbFile = File(filesDir, "sopro.db")
-            if (!dbFile.exists()) {
-                logToSupabase("floating_trigger_error",
-                    mapOf("error" to "db_not_found", "env_name" to envName))
+            val dbFile = findDbFile() ?: run {
+                logToSupabase("floating_trigger_error", mapOf(
+                    "error" to "db_not_found",
+                    "candidates_tested" to "app_flutter/sopro.db, files/sopro.db, databases/sopro.db"
+                ))
                 return false
             }
             var success = false
