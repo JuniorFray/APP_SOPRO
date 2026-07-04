@@ -19,7 +19,6 @@ import androidx.core.content.ContextCompat
 import com.google.android.gms.location.*
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.util.UUID
@@ -129,12 +128,6 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-
-        // Guarda o engine no cache para que TransparentVoiceActivity o reutilize.
-        // Com o engine cacheado, TransparentVoiceActivity não cria um segundo engine
-        // Dart — o handler do AppInitializer já está registrado e processa a ação
-        // em < 200 ms sem nenhuma inicialização adicional.
-        FlutterEngineCache.getInstance().put(TransparentVoiceActivity.CACHED_ENGINE_ID, flutterEngine)
 
         fusedClient       = LocationServices.getFusedLocationProviderClient(this)
         geofencingClient  = LocationServices.getGeofencingClient(this)

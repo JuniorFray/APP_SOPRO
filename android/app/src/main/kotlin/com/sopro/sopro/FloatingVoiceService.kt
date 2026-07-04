@@ -148,10 +148,14 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     private var soperoActivitiesVisible = 0
     private val lifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) {
+            // TransparentVoiceActivity é invisível — não deve afetar a visibilidade do botão
+            if (activity is TransparentVoiceActivity) return
             soperoActivitiesVisible++
             mainHandler.post { containerView?.visibility = View.GONE }
         }
         override fun onActivityStopped(activity: Activity) {
+            // TransparentVoiceActivity é invisível — não deve afetar a visibilidade do botão
+            if (activity is TransparentVoiceActivity) return
             soperoActivitiesVisible--
             if (soperoActivitiesVisible <= 0) {
                 mainHandler.postDelayed({ containerView?.visibility = View.VISIBLE }, 200)

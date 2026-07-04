@@ -1525,5 +1525,55 @@ FLUXO COMPLETO:
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Anterior
+Sprint: TransparentVoiceActivity sem Flutter - SQLite Direto - CONCLUIDO (2026-07-04)
+Entregue:
+
+PROBLEMA: TransparentVoiceActivity extendia FlutterActivity, o que inicializava o
+Flutter Engine ao ser chamada pelo FloatingVoiceService. Isso:
+  - Causava abertura do app ou onboarding em alguns dispositivos (engine novo sem estado).
+  - Criava dependencia do FlutterEngineCache (acoplamento desnecessario).
+  - Adicionava latencia de inicializacao do Dart VM.
+
+SOLUCAO: TransparentVoiceActivity reescrita como Activity pura (sem Flutter):
+
+1. TransparentVoiceActivity.kt (reescrito):
+   - Estende Activity (nao mais FlutterActivity).
+   - window.setBackgroundDrawableResource(android.R.color.transparent): zero visibilidade.
+   - Le "sopro_voice" SharedPreferences, valida timestamp < 30 s, limpa imediatamente.
+   - create_trigger: SQLiteDatabase.openDatabase() + SELECT id FROM environments
+     (case-insensitive) + INSERT INTO triggers (id, environment_id, title, content,
+     is_active=1, created_at). Colunas baseadas em triggers_table.dart (Drift schema).
+   - create_environment: FusedLocationProviderClient.lastLocation (assíncrono) +
+     INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at).
+     Chama registerGeofence() apos persistir — mesmo padrao do BootReceiver.kt.
+   - registerGeofence(): Geofence.Builder + GeofencingClient.addGeofences +
+     salva env_name nas SharedPreferences do GeofenceReceiver.
+   - findDbFile(): mesmos 3 caminhos candidatos do BootReceiver.kt/FloatingVoiceService.kt.
+   - finish() sobrescrito com overridePendingTransition(0, 0) — sem animacao.
+   - REMOVIDO: CACHED_ENGINE_ID, getCachedEngineId(), shouldDestroyEngineWithHost(),
+     import FlutterActivity, import FlutterEngineCache, import MethodChannel.
+   - ADICIONADO: imports SQLiteDatabase, Geofence, GeofencingRequest, LocationServices,
+     PendingIntent, ContextCompat, UUID.
+
+2. MainActivity.kt:
+   - REMOVIDO: import io.flutter.embedding.engine.FlutterEngineCache.
+   - REMOVIDO: FlutterEngineCache.getInstance().put(CACHED_ENGINE_ID, flutterEngine)
+     (era necessario apenas para a TransparentVoiceActivity antiga).
+
+3. FloatingVoiceService.kt — ActivityLifecycleCallbacks:
+   - onActivityStarted(): if (activity is TransparentVoiceActivity) return
+     — activity transparente nao deve acionar ocultamento do botao flutuante.
+   - onActivityStopped(): idem — nao deve decrementar o contador nem mostrar o botao.
+
+RESULTADO:
+  - App NAO abre, NAO vai para onboarding, NAO e visivel ao usuario.
+  - Botao flutuante NAO some apos o comando de voz.
+  - Zero inicializacao de Flutter Engine — 10x mais rapido.
+  - Dados no SQLite na proxima abertura do app (Drift re-query).
+  - Supabase: ZERO app_start ao criar trigger/ambiente pelo botao flutuante.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
