@@ -445,7 +445,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
                 val run = Runnable { startListeningForVoice() }
                 recordingStartRunnable = run
-                mainHandler.postDelayed(run, 300L)
+                mainHandler.postDelayed(run, 1000L)
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -524,7 +524,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
             // Beep curto (120 ms) confirma ativação do microfone ao usuário
             try {
-                val toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
+                val toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 30)
                 toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
                 mainHandler.postDelayed({ toneGen.release() }, 200L)
             } catch (e: Exception) {
