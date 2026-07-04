@@ -860,11 +860,16 @@ Texto: $transcript
     // Chamado de Dispatchers.IO; registerGeofence() é postado na main thread.
     private fun writeEnvironmentToDb(name: String, lat: Double, lon: Double, radius: Int): Boolean {
         return try {
-            val dbFile = findDbFile() ?: run {
-                logToSupabase("floating_env_error", mapOf(
-                    "error" to "db_not_found",
-                    "candidates_tested" to "app_flutter/sopro.db, files/sopro.db, databases/sopro.db"
-                ))
+            val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+                .getString("flutter.sopro_db_path", null) ?: run {
+                    logToSupabase("floating_env_error",
+                        mapOf("error" to "db_path_not_in_prefs_open_app_first"))
+                    return false
+                }
+            val dbFile = File(dbPath)
+            if (!dbFile.exists()) {
+                logToSupabase("floating_env_error",
+                    mapOf("error" to "db_file_not_found", "path" to dbPath))
                 return false
             }
             SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
@@ -895,11 +900,16 @@ Texto: $transcript
     // Retorna true se salvo, false se ambiente não encontrado ou erro.
     private fun writeTriggerToDb(title: String, content: String, envName: String): Boolean {
         return try {
-            val dbFile = findDbFile() ?: run {
-                logToSupabase("floating_trigger_error", mapOf(
-                    "error" to "db_not_found",
-                    "candidates_tested" to "app_flutter/sopro.db, files/sopro.db, databases/sopro.db"
-                ))
+            val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+                .getString("flutter.sopro_db_path", null) ?: run {
+                    logToSupabase("floating_trigger_error",
+                        mapOf("error" to "db_path_not_in_prefs_open_app_first"))
+                    return false
+                }
+            val dbFile = File(dbPath)
+            if (!dbFile.exists()) {
+                logToSupabase("floating_trigger_error",
+                    mapOf("error" to "db_file_not_found", "path" to dbPath))
                 return false
             }
             var success = false

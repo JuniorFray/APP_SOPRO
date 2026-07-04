@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/navigation/app_router.dart';
@@ -65,6 +66,13 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     }
 
     final prefs = await SharedPreferences.getInstance();
+
+    // Persiste o caminho real do banco para uso pelo FloatingVoiceService (Kotlin).
+    // drift_flutter usa getApplicationDocumentsDirectory() — sem esse valor o Kotlin
+    // teria que adivinhar o caminho entre múltiplos candidatos.
+    final dbFolder = await getApplicationDocumentsDirectory();
+    final dbPath = '${dbFolder.path}/sopro.db';
+    await prefs.setString('sopro_db_path', dbPath);
 
     // 5. Detecção de SharedPreferences obsoletas (OEM Auto Backup).
     //
