@@ -29,10 +29,16 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
+import com.google.android.gms.location.Geofence
+import com.google.android.gms.location.GeofencingRequest
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.tasks.Tasks
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 // FloatingVoiceService — botão circular flutuante de voz sobre todos os apps.
 //
@@ -84,13 +90,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         private const val KEY_BTN_X = "btn_x"
         private const val KEY_BTN_Y = "btn_y"
 
-        // IPC com o app: estado de voz e pedidos pendentes
-        // Lido por MainActivity.onResume() para delegar ao Flutter
-        internal const val FLOAT_STATE_PREFS  = "sopro_float_state"
-        internal const val KEY_VOICE_STATE    = "voice_state"
-        internal const val VAL_AWAITING_NAME  = "awaiting_env_name"
-        internal const val KEY_PENDING_INTENT = "floating_pending_intent"
-        internal const val KEY_PENDING_TS     = "floating_pending_timestamp"
+        // Estado de voz: aguardando nome de ambiente (VAL_AWAITING_NAME)
+        internal const val FLOAT_STATE_PREFS = "sopro_float_state"
+        internal const val KEY_VOICE_STATE   = "voice_state"
+        internal const val VAL_AWAITING_NAME = "awaiting_env_name"
 
         // Supabase — mesma URL/chave do AppLogger.dart (publishable key, INSERT-only RLS)
         private const val SUPABASE_URL =
@@ -148,14 +151,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     private var soperoActivitiesVisible = 0
     private val lifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
         override fun onActivityStarted(activity: Activity) {
-            // TransparentVoiceActivity é invisível — não deve afetar a visibilidade do botão
-            if (activity is TransparentVoiceActivity) return
             soperoActivitiesVisible++
             mainHandler.post { containerView?.visibility = View.GONE }
         }
         override fun onActivityStopped(activity: Activity) {
-            // TransparentVoiceActivity é invisível — não deve afetar a visibilidade do botão
-            if (activity is TransparentVoiceActivity) return
             soperoActivitiesVisible--
             if (soperoActivitiesVisible <= 0) {
                 mainHandler.postDelayed({ containerView?.visibility = View.VISIBLE }, 200)
@@ -732,7 +731,15 @@ Texto: $transcript
                 it.isNotEmpty() && !BLOCKED_ENV_NAMES.contains(it.lowercase())
             } ?: ""
             if (envName.isNotEmpty()) {
-                dispatchCreateEnvironment(envName)
+                showToast("Criando '$envName'...")
+                serviceScope.launch(Dispatchers.IO) {
+                    val loc = getLastLocationBlocking()
+                    val ok  = if (loc != null) writeEnvironmentToDb(envName, loc.latitude, loc.longitude, 100) else false
+                    withContext(Dispatchers.Main) {
+                        if (ok) speak("Pronto! Ambiente $envName criado.")
+                        else speak("Não consegui criar o ambiente.")
+                    }
+                }
             } else {
                 // Nome ainda genérico — pede novamente (loop de até 1 tentativa)
                 statePrefs.edit().putString(KEY_VOICE_STATE, VAL_AWAITING_NAME).apply()
@@ -748,17 +755,18 @@ Texto: $transcript
                 val envName = result.environment ?: ""
                 val title   = result.triggerTitle  ?: ""
                 if (envName.isNotEmpty() && title.isNotEmpty()) {
-                    // Delega ao Flutter/Drift via TransparentVoiceActivity — evita conflito de WAL
-                    // com o banco aberto pelo Drift (escrita direta causava invisibilidade do dado).
-                    val actionJson = JSONObject().apply {
-                        put("intent",      "create_trigger")
-                        put("environment", envName)
-                        put("title",       title)
-                        put("content",     result.triggerContent ?: "")
-                    }.toString()
-                    dispatchActionViaActivity(actionJson)
-                    showToast("Anotado! Vou te lembrar de $title em $envName ✓")
-                    speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
+                    serviceScope.launch(Dispatchers.IO) {
+                        val ok = writeTriggerToDb(title, result.triggerContent ?: "", envName)
+                        withContext(Dispatchers.Main) {
+                            if (ok) {
+                                showToast("Anotado! Vou te lembrar de $title em $envName ✓")
+                                speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
+                            } else {
+                                showToast("Não encontrei o ambiente '$envName'")
+                                speak("Não encontrei o local $envName.")
+                            }
+                        }
+                    }
                 } else {
                     showToast("Diga: 'lembra de X quando chegar em Y'")
                     speak("Não entendi. Diga: lembra de X quando chegar em Y.")
@@ -782,8 +790,16 @@ Texto: $transcript
                         showToast("Segure o botão para gravar o nome.")
                     }, 2000L)
                 } else {
-                    // Nome válido → cria ambiente via TransparentVoiceActivity (sem abrir o app)
-                    dispatchCreateEnvironment(envName)
+                    // Nome válido → cria ambiente diretamente no SQLite + registra geofence
+                    showToast("Criando '$envName'...")
+                    serviceScope.launch(Dispatchers.IO) {
+                        val loc = getLastLocationBlocking()
+                        val ok  = if (loc != null) writeEnvironmentToDb(envName, loc.latitude, loc.longitude, 100) else false
+                        withContext(Dispatchers.Main) {
+                            if (ok) speak("Pronto! Ambiente $envName criado.")
+                            else speak("Não consegui criar o ambiente. Tente novamente.")
+                        }
+                    }
                 }
             }
             else -> {
@@ -791,45 +807,6 @@ Texto: $transcript
                 speak("Não entendi. Pressione novamente para tentar.")
             }
         }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Dispatch via TransparentVoiceActivity — escrita no Drift sem abrir o app
-    //
-    // Fluxo:
-    //   FloatingVoiceService → SharedPreferences "sopro_voice" →
-    //   startActivity(TransparentVoiceActivity) → MethodChannel processAction →
-    //   AppInitializer.dart → Drift (cache invalidado, stream listeners atualizados).
-    //
-    // TransparentVoiceActivity tem theme=Translucent + noHistory + excludeFromRecents;
-    // o usuário nunca vê o app. O engine cacheado pela MainActivity processa em < 200 ms.
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private fun dispatchActionViaActivity(actionJson: String) {
-        // Salva a ação em SharedPreferences — TransparentVoiceActivity lê e limpa
-        getSharedPreferences(VoiceActionReceiver.PREFS_NAME, Context.MODE_PRIVATE).edit()
-            .putString(VoiceActionReceiver.KEY_PENDING, actionJson)
-            .putLong(VoiceActionReceiver.KEY_PENDING_TIME, System.currentTimeMillis())
-            .apply()
-
-        // Inicia a activity transparente — FLAG_ACTIVITY_NEW_TASK obrigatório em Service
-        val intent = Intent(this, TransparentVoiceActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        }
-        startActivity(intent)
-        Log.d(TAG, "TransparentVoiceActivity iniciada para: $actionJson")
-    }
-
-    // Convenção para criar ambiente — monta o JSON e dispara via TransparentVoiceActivity
-    private fun dispatchCreateEnvironment(envName: String) {
-        val actionJson = JSONObject().apply {
-            put("intent",      "create_environment")
-            put("environment", envName)
-        }.toString()
-        dispatchActionViaActivity(actionJson)
-        showToast("Criando ambiente '$envName'...")
-        speak("Criando ambiente $envName.")
-        Log.d(TAG, "create_environment '$envName' despachado via TransparentVoiceActivity")
     }
 
     // Lê nomes de ambientes direto do SQLite — garante nomes exatos no prompt Gemini.
@@ -872,6 +849,167 @@ Texto: $transcript
             getDatabasePath("sopro.db"),
         )
         return candidates.firstOrNull { it.exists() }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Escrita direta no SQLite — sem abrir o app, sem Flutter Engine
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Cria ambiente no banco e registra geofence nativo.
+    // Colunas Drift (environments_table.dart): id, name, latitude, longitude, radius_meters, created_at (ms).
+    // Chamado de Dispatchers.IO; registerGeofence() é postado na main thread.
+    private fun writeEnvironmentToDb(name: String, lat: Double, lon: Double, radius: Int): Boolean {
+        return try {
+            val dbFile = File(filesDir, "sopro.db")
+            if (!dbFile.exists()) {
+                logToSupabase("floating_env_error",
+                    mapOf("error" to "db_not_found", "path" to dbFile.absolutePath, "name" to name))
+                return false
+            }
+            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+                .use { db ->
+                    val id  = UUID.randomUUID().toString()
+                    val now = System.currentTimeMillis()
+                    db.execSQL(
+                        "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        arrayOf(id, name, lat, lon, radius.toDouble(), now)
+                    )
+                    // GMS addGeofences exige main thread
+                    mainHandler.post { registerGeofence(id, name, lat, lon, radius.toDouble()) }
+                    logToSupabase("floating_env_created",
+                        mapOf("env_name" to name, "lat" to lat.toString(),
+                              "lon" to lon.toString(), "id" to id))
+                }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "writeEnvironmentToDb error: ${e.message}")
+            logToSupabase("floating_env_error",
+                mapOf("error" to (e.message ?: "unknown"), "name" to name))
+            false
+        }
+    }
+
+    // Cria trigger no banco buscando ambiente pelo nome (case-insensitive).
+    // Colunas Drift (triggers_table.dart): id, environment_id, title, content, is_active, created_at (ms).
+    // Retorna true se salvo, false se ambiente não encontrado ou erro.
+    private fun writeTriggerToDb(title: String, content: String, envName: String): Boolean {
+        return try {
+            val dbFile = File(filesDir, "sopro.db")
+            if (!dbFile.exists()) {
+                logToSupabase("floating_trigger_error",
+                    mapOf("error" to "db_not_found", "env_name" to envName))
+                return false
+            }
+            var success = false
+            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+                .use { db ->
+                    val cursor = db.rawQuery(
+                        "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
+                        arrayOf(envName)
+                    )
+                    val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
+                    cursor.close()
+
+                    if (envId == null) {
+                        Log.w(TAG, "Ambiente '$envName' não encontrado")
+                        logToSupabase("floating_trigger_error",
+                            mapOf("error" to "ambiente_nao_encontrado", "env_name" to envName))
+                        return@use
+                    }
+                    val id  = UUID.randomUUID().toString()
+                    val now = System.currentTimeMillis()
+                    db.execSQL(
+                        "INSERT INTO triggers (id, environment_id, title, content, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+                        arrayOf(id, envId, title, content, now)
+                    )
+                    logToSupabase("floating_trigger_created",
+                        mapOf("title" to title, "env_name" to envName, "id" to id))
+                    success = true
+                }
+            success
+        } catch (e: Exception) {
+            Log.e(TAG, "writeTriggerToDb error: ${e.message}")
+            logToSupabase("floating_trigger_error",
+                mapOf("error" to (e.message ?: "unknown"), "env_name" to envName))
+            false
+        }
+    }
+
+    // Emoji representativo pelo nome do ambiente — melhora contexto visual.
+    private fun detectEmoji(name: String): String {
+        val n = name.lowercase()
+        return when {
+            n.contains("casa") || n.contains("lar") || n.contains("home")          -> "🏠"
+            n.contains("trabalho") || n.contains("empresa") || n.contains("escritório") -> "🏢"
+            n.contains("mercado") || n.contains("supermercado")                    -> "🛒"
+            n.contains("farmácia") || n.contains("farmacia")                       -> "💊"
+            n.contains("academia") || n.contains("ginásio")                        -> "🏋️"
+            n.contains("escola") || n.contains("faculdade") || n.contains("universidade") -> "🎓"
+            n.contains("banco")                                                    -> "🏦"
+            n.contains("restaurante")                                              -> "🍽️"
+            n.contains("padaria") || n.contains("café") || n.contains("cafe")     -> "☕"
+            n.contains("parque")                                                   -> "🌳"
+            n.contains("posto") || n.contains("mecânico")                         -> "⛽"
+            else                                                                   -> "📍"
+        }
+    }
+
+    // Registra geofence nativo — idêntico ao padrão do BootReceiver.kt.
+    // Deve ser chamado na main thread (LocationServices.getGeofencingClient é thread-safe,
+    // mas os callbacks do addGeofences são entregues na main thread).
+    @SuppressLint("MissingPermission") // permissão verificada em getLastLocationBlocking()
+    private fun registerGeofence(id: String, name: String, lat: Double, lon: Double, radius: Double) {
+        getSharedPreferences(GeofenceReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(id, name).apply()
+
+        val geofence = Geofence.Builder()
+            .setRequestId(id)
+            .setCircularRegion(lat, lon, radius.toFloat())
+            .setExpirationDuration(Geofence.NEVER_EXPIRE)
+            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT)
+            .build()
+
+        val request = GeofencingRequest.Builder()
+            .setInitialTrigger(0) // não dispara imediatamente ao registrar
+            .addGeofence(geofence)
+            .build()
+
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        else
+            PendingIntent.FLAG_UPDATE_CURRENT
+
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, id.hashCode(),
+            Intent(this, GeofenceReceiver::class.java),
+            flags
+        )
+
+        LocationServices.getGeofencingClient(this)
+            .addGeofences(request, pendingIntent)
+            .addOnSuccessListener { Log.d(TAG, "Geofence '$name' registrado ✓") }
+            .addOnFailureListener { e -> Log.e(TAG, "Falha ao registrar geofence '$name': ${e.message}") }
+    }
+
+    // Obtém última localização GPS em modo bloqueante — chamado de Dispatchers.IO.
+    // Retorna null se permissão negada ou GPS indisponível.
+    @SuppressLint("MissingPermission")
+    private fun getLastLocationBlocking(): android.location.Location? {
+        if (ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.ACCESS_FINE_LOCATION)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "ACCESS_FINE_LOCATION não concedido")
+            return null
+        }
+        return try {
+            Tasks.await(
+                LocationServices.getFusedLocationProviderClient(this).lastLocation,
+                10_000L, TimeUnit.MILLISECONDS
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "getLastLocationBlocking falhou: ${e.message}")
+            null
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

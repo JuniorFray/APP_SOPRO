@@ -1,16 +1,11 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 
 import 'package:flutter/services.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/navigation/app_router.dart';
-import '../../domain/entities/environment_entity.dart';
-import '../../domain/entities/trigger_entity.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
@@ -168,11 +163,6 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
       await BackgroundServiceManager.start();
     }
 
-    // Registra handler do canal de voz para processar triggers do botão flutuante.
-    // Deve ser registrado antes de BackgroundServiceManager.start() para garantir que
-    // qualquer ação pendente de sessões anteriores seja capturada ao retornar ao app.
-    _setupVoiceActionChannel();
-
     // Restaura o botão flutuante de voz se estava ativo na sessão anterior.
     // Verifica se a permissão SYSTEM_ALERT_WINDOW ainda é válida antes de iniciar.
     const overlayChannel = MethodChannel('com.sopro.sopro/overlay');
@@ -205,97 +195,6 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
       '/environment',
       arguments: environmentId,
     );
-  }
-
-  // Registra o handler do MethodChannel que recebe triggers criados pelo botão flutuante.
-  // VoiceActionReceiver (Kotlin) → MainActivity.processVoiceActionFromPrefs() →
-  // voiceActionChannel.invokeMethod("processAction", json) → este handler → Drift.
-  void _setupVoiceActionChannel() {
-    const channel = MethodChannel('com.sopro.sopro/voice_action');
-    channel.setMethodCallHandler((call) async {
-      if (call.method == 'processAction') {
-        await _processFloatingVoiceAction(call.arguments as String);
-      }
-    });
-  }
-
-  // Salva trigger ou cria ambiente via Drift — cache invalidado, stream listeners atualizados.
-  //
-  // Chamado pelo TransparentVoiceActivity (engine cacheado) após o usuário usar o botão
-  // flutuante. O FloatingVoiceService escreve em SharedPreferences "sopro_voice";
-  // TransparentVoiceActivity lê, limpa e invoca este método via MethodChannel.
-  Future<void> _processFloatingVoiceAction(String jsonStr) async {
-    try {
-      final json    = jsonDecode(jsonStr) as Map<String, dynamic>;
-      final intent  = (json['intent']      as String?) ?? '';
-      final envName = (json['environment'] as String?) ?? '';
-
-      if (intent == 'create_trigger') {
-        final title   = (json['title']   as String?) ?? '';
-        final content = (json['content'] as String?) ?? '';
-        if (envName.isEmpty || title.isEmpty) return;
-
-        final envs = await ref.read(environmentRepositoryProvider).getAll();
-        final idx  = envs.indexWhere(
-          (e) => e.name.toLowerCase() == envName.toLowerCase(),
-        );
-
-        if (idx < 0) {
-          AppLogger.log('trigger_created_from_floating',
-              {'status': 'env_not_found', 'env_name': envName});
-          return;
-        }
-
-        final trigger = TriggerEntity(
-          id:            const Uuid().v4(),
-          environmentId: envs[idx].id,
-          title:         title,
-          content:       content,
-          isActive:      true,
-          createdAt:     DateTime.now(),
-        );
-        await ref.read(triggerRepositoryProvider).save(trigger);
-        AppLogger.log('trigger_created_from_floating',
-            {'status': 'ok', 'env': envName, 'title': title});
-        return;
-      }
-
-      if (intent == 'create_environment') {
-        if (envName.isEmpty) return;
-
-        // Obtém posição GPS atual (FusedLocationProviderClient via MethodChannel).
-        // Retorna null se GPS indisponível — falha silenciosa com log.
-        final position = await ref
-            .read(nativeLocationServiceProvider)
-            .getCurrentPosition();
-
-        if (position == null) {
-          AppLogger.log('env_created_by_voice',
-              {'status': 'gps_unavailable', 'name': envName});
-          return;
-        }
-
-        final env = EnvironmentEntity(
-          id:           const Uuid().v4(),
-          name:         envName,
-          latitude:     position.latitude,
-          longitude:    position.longitude,
-          radiusMeters: 100,
-          createdAt:    DateTime.now(),
-        );
-        await ref.read(environmentRepositoryProvider).save(env);
-        // Registra geofence nativo imediatamente (mesmo padrão do add_environment_screen)
-        await ref.read(nativeGeofenceServiceProvider).addSingleGeofence(env);
-        AppLogger.log('env_created_by_voice',
-            {'status': 'ok', 'name': envName,
-             'lat': position.latitude.toString(),
-             'lng': position.longitude.toString()});
-        return;
-      }
-    } catch (e) {
-      AppLogger.log('floating_voice_action_error',
-          {'error': e.toString(), 'json': jsonStr.length > 200 ? jsonStr.substring(0, 200) : jsonStr});
-    }
   }
 
   @override

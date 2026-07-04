@@ -112,35 +112,11 @@
             </intent-filter>
         </receiver>
 
-        <!-- VoiceActionReceiver — recebe broadcasts do FloatingVoiceService para
-             criar triggers quando o app está em background. Salva em SharedPreferences
-             e inicia MainActivity para que o Flutter/Drift processe e salve no banco.
-             android:exported="false": só o próprio app pode enviar este broadcast. -->
-        <receiver
-            android:name=".VoiceActionReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.sopro.sopro.VOICE_ACTION" />
-            </intent-filter>
-        </receiver>
-
         <!-- FloatingVoiceService — exibe botão flutuante de voz sobre outros apps.
              Requer SYSTEM_ALERT_WINDOW concedido pelo usuário (verificado em runtime).
              android:exported="false": só o próprio app pode iniciar este serviço. -->
         <service
             android:name=".FloatingVoiceService"
-            android:exported="false"/>
-
-        <!-- TransparentVoiceActivity — activity totalmente transparente (sem UI visível)
-             que processa ações de voz do FloatingVoiceService (criar trigger/ambiente).
-             noHistory=true: nunca entra no backstack do usuário.
-             excludeFromRecents=true: não aparece na tela "App recentes".
-             Usa Theme.Translucent para zero visibilidade; fecha após invokeMethod. -->
-        <activity
-            android:name=".TransparentVoiceActivity"
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
             android:exported="false"/>
 
         <meta-data

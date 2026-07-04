@@ -1575,5 +1575,61 @@ RESULTADO:
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Atual
+Sprint: FloatingVoiceService SQLite Direto - Remocao de TransparentVoiceActivity e VoiceActionReceiver - CONCLUIDO (2026-07-04)
+Entregue:
+
+OBJETIVO: Eliminar completamente a camada de indirection (TransparentVoiceActivity +
+VoiceActionReceiver + MethodChannel) e escrever direto no SQLite a partir do
+FloatingVoiceService. Resultado: zero startActivity, zero abertura do app, zero
+Flutter Engine ao usar o botao flutuante.
+
+ARQUIVOS REMOVIDOS:
+- TransparentVoiceActivity.kt (Activity transparente que escrevia no SQLite via Intent)
+- VoiceActionReceiver.kt (BroadcastReceiver que recebia JSON e iniciava MainActivity)
+
+ANDROIDMANIFEST.XML:
+- Removidas declaracoes: <receiver .VoiceActionReceiver> e <activity .TransparentVoiceActivity>.
+
+FLOATINGVOICESERVICE.KT:
+- REMOVIDOS: dispatchActionViaActivity(), dispatchCreateEnvironment(),
+  referencias a VoiceActionReceiver.PREFS_NAME / KEY_PENDING / KEY_PENDING_TIME,
+  constantes KEY_PENDING_INTENT e KEY_PENDING_TS (sem uso apos remocao),
+  filtro "if (activity is TransparentVoiceActivity) return" no ActivityLifecycleCallbacks.
+- ADICIONADOS:
+  writeEnvironmentToDb(name, lat, lon, radius): File(filesDir, "sopro.db") +
+    INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at).
+    Colunas exatas do schema Drift. Chama registerGeofence() via mainHandler.post().
+    Loga floating_env_created ou floating_env_error no Supabase.
+  writeTriggerToDb(title, content, envName): SELECT id FROM environments (case-insensitive)
+    + INSERT INTO triggers (id, environment_id, title, content, is_active=1, created_at).
+    Retorna bool (false se ambiente nao encontrado). Loga floating_trigger_created/error.
+  detectEmoji(name): mapa de palavras-chave para emoji (casa, trabalho, mercado…).
+  registerGeofence(id, name, lat, lon, radius): Geofence.Builder + GeofencingRequest +
+    GeofencingClient.addGeofences + salva nome nas prefs do GeofenceReceiver.
+    (movido do TransparentVoiceActivity, mesmo padrao do BootReceiver).
+  getLastLocationBlocking(): Tasks.await(FusedLocationProviderClient.lastLocation, 10s).
+    Chamado de Dispatchers.IO. Retorna null se permissao negada ou GPS indisponivel.
+- NOVOS IMPORTS: Geofence, GeofencingRequest, LocationServices, Tasks, UUID, TimeUnit.
+- executeVoiceResult() — 3 spots atualizados:
+  create_trigger: serviceScope.launch { writeTriggerToDb() } + feedback condicional.
+  create_environment (nome valido): serviceScope.launch { getLastLocationBlocking() + writeEnvironmentToDb() }.
+  VAL_AWAITING_NAME: idem para o segundo nome capturado por voz.
+
+MAINACTIVITY.KT:
+- REMOVIDOS: VOICE_ACTION_CHANNEL, voiceActionChannel, voiceActionChannel setup em
+  configureFlutterEngine(), processVoiceActionFromPrefs(), bloco EXTRA_PROCESS_ACTION
+  em onNewIntent(), override onResume() (so verificava KEY_PENDING_INTENT do IPC antigo).
+
+APP_INITIALIZER.DART:
+- REMOVIDOS: _setupVoiceActionChannel(), _processFloatingVoiceAction(), imports
+  dart:convert, uuid, trigger_entity.dart, environment_entity.dart.
+  (location_providers.dart mantido — exporta notificationServiceProvider usado no _init()).
+
+CAMINHO DO BANCO CONFIRMADO: File(filesDir, "sopro.db")
+= /data/data/com.sopro.sopro/files/sopro.db (drift_flutter usa getApplicationDocumentsDirectory()).
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
