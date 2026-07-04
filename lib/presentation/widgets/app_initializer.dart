@@ -74,6 +74,14 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     final dbPath = '${dbFolder.path}/sopro.db';
     await prefs.setString('sopro_db_path', dbPath);
 
+    // Força o Drift a criar o arquivo sopro.db em disco agora.
+    // Sem isso o arquivo não existe até a primeira query real,
+    // e o FloatingVoiceService encontraria db_file_not_found.
+    try {
+      final db = ref.read(databaseProvider);
+      await db.select(db.environments).get();
+    } catch (_) {}
+
     // 5. Detecção de SharedPreferences obsoletas (OEM Auto Backup).
     //
     //    Motorola G52 e outros OEMs com Android Auto Backup podem restaurar
