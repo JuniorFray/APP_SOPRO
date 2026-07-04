@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/navigation/app_router.dart';
+import '../../domain/entities/environment_entity.dart';
 import '../../domain/entities/trigger_entity.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
@@ -218,43 +219,82 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     });
   }
 
-  // Salva o trigger via Drift — garante cache invalidado e stream listeners atualizados.
+  // Salva trigger ou cria ambiente via Drift — cache invalidado, stream listeners atualizados.
+  //
+  // Chamado pelo TransparentVoiceActivity (engine cacheado) após o usuário usar o botão
+  // flutuante. O FloatingVoiceService escreve em SharedPreferences "sopro_voice";
+  // TransparentVoiceActivity lê, limpa e invoca este método via MethodChannel.
   Future<void> _processFloatingVoiceAction(String jsonStr) async {
     try {
       final json    = jsonDecode(jsonStr) as Map<String, dynamic>;
       final intent  = (json['intent']      as String?) ?? '';
       final envName = (json['environment'] as String?) ?? '';
-      final title   = (json['title']       as String?) ?? '';
-      final content = (json['content']     as String?) ?? '';
 
-      if (intent != 'create_trigger' || envName.isEmpty || title.isEmpty) return;
+      if (intent == 'create_trigger') {
+        final title   = (json['title']   as String?) ?? '';
+        final content = (json['content'] as String?) ?? '';
+        if (envName.isEmpty || title.isEmpty) return;
 
-      final envs = await ref.read(environmentRepositoryProvider).getAll();
-      final idx  = envs.indexWhere(
-        (e) => e.name.toLowerCase() == envName.toLowerCase(),
-      );
+        final envs = await ref.read(environmentRepositoryProvider).getAll();
+        final idx  = envs.indexWhere(
+          (e) => e.name.toLowerCase() == envName.toLowerCase(),
+        );
 
-      if (idx < 0) {
+        if (idx < 0) {
+          AppLogger.log('trigger_created_from_floating',
+              {'status': 'env_not_found', 'env_name': envName});
+          return;
+        }
+
+        final trigger = TriggerEntity(
+          id:            const Uuid().v4(),
+          environmentId: envs[idx].id,
+          title:         title,
+          content:       content,
+          isActive:      true,
+          createdAt:     DateTime.now(),
+        );
+        await ref.read(triggerRepositoryProvider).save(trigger);
         AppLogger.log('trigger_created_from_floating',
-            {'status': 'env_not_found', 'env_name': envName});
+            {'status': 'ok', 'env': envName, 'title': title});
         return;
       }
 
-      final trigger = TriggerEntity(
-        id:            const Uuid().v4(),
-        environmentId: envs[idx].id,
-        title:         title,
-        content:       content,
-        isActive:      true,
-        createdAt:     DateTime.now(),
-      );
-      await ref.read(triggerRepositoryProvider).save(trigger);
+      if (intent == 'create_environment') {
+        if (envName.isEmpty) return;
 
-      AppLogger.log('trigger_created_from_floating',
-          {'status': 'ok', 'env': envName, 'title': title});
+        // Obtém posição GPS atual (FusedLocationProviderClient via MethodChannel).
+        // Retorna null se GPS indisponível — falha silenciosa com log.
+        final position = await ref
+            .read(nativeLocationServiceProvider)
+            .getCurrentPosition();
+
+        if (position == null) {
+          AppLogger.log('env_created_by_voice',
+              {'status': 'gps_unavailable', 'name': envName});
+          return;
+        }
+
+        final env = EnvironmentEntity(
+          id:           const Uuid().v4(),
+          name:         envName,
+          latitude:     position.latitude,
+          longitude:    position.longitude,
+          radiusMeters: 100,
+          createdAt:    DateTime.now(),
+        );
+        await ref.read(environmentRepositoryProvider).save(env);
+        // Registra geofence nativo imediatamente (mesmo padrão do add_environment_screen)
+        await ref.read(nativeGeofenceServiceProvider).addSingleGeofence(env);
+        AppLogger.log('env_created_by_voice',
+            {'status': 'ok', 'name': envName,
+             'lat': position.latitude.toString(),
+             'lng': position.longitude.toString()});
+        return;
+      }
     } catch (e) {
-      AppLogger.log('trigger_created_from_floating',
-          {'status': 'error', 'error': e.toString()});
+      AppLogger.log('floating_voice_action_error',
+          {'error': e.toString(), 'json': jsonStr.length > 200 ? jsonStr.substring(0, 200) : jsonStr});
     }
   }
 

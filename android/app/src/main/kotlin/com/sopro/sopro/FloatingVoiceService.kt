@@ -135,12 +135,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListening = false
 
-    // ── Confirmação de ambiente (5 segundos) ─────────────────────────────────
-    // Após Gemini retornar create_environment com nome válido, aguarda 5 s.
-    // Aguardar = confirmar (cria via IPC). Pressionar = cancelar.
-    private var pendingEnvName:  String?   = null
-    private var pendingEnvTimer: Runnable? = null
-
     // ── TTS nativo — fala resposta sem depender do app Flutter ────────────────
     private var tts: TextToSpeech? = null
 
@@ -227,10 +221,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         serviceScope.cancel()
         (applicationContext as Application).unregisterActivityLifecycleCallbacks(lifecycleCallbacks)
-        // Cancela countdown de confirmação pendente
-        pendingEnvTimer?.let { mainHandler.removeCallbacks(it) }
-        pendingEnvTimer = null
-        pendingEnvName = null
         // SpeechRecognizer.destroy() deve ser chamado na main thread
         speechRecognizer?.destroy()
         speechRecognizer = null
@@ -482,8 +472,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
                 val duration = System.currentTimeMillis() - pressStartTime
                 when {
-                    // Tap curto com ambiente pendente → cancela confirmação
-                    pendingEnvName != null && duration < 300L -> cancelPendingEnvironment()
                     // Estava escutando → encerra escuta e aguarda onResults
                     isListening     -> stopListeningAndProcess()
                     // Tap curto sem contexto → dica de uso
@@ -522,9 +510,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             showToast("Reconhecedor de voz não disponível")
             return
         }
-
-        // Nova escuta cancela qualquer confirmação pendente de ambiente
-        if (pendingEnvName != null) cancelPendingEnvironment()
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -743,7 +728,7 @@ Texto: $transcript
                 it.isNotEmpty() && !BLOCKED_ENV_NAMES.contains(it.lowercase())
             } ?: ""
             if (envName.isNotEmpty()) {
-                startPendingEnvironmentFlow(envName)
+                dispatchCreateEnvironment(envName)
             } else {
                 // Nome ainda genérico — pede novamente (loop de até 1 tentativa)
                 statePrefs.edit().putString(KEY_VOICE_STATE, VAL_AWAITING_NAME).apply()
@@ -759,9 +744,17 @@ Texto: $transcript
                 val envName = result.environment ?: ""
                 val title   = result.triggerTitle  ?: ""
                 if (envName.isNotEmpty() && title.isNotEmpty()) {
-                    // Delega ao Flutter/Drift via BroadcastReceiver — evita conflito de WAL
+                    // Delega ao Flutter/Drift via TransparentVoiceActivity — evita conflito de WAL
                     // com o banco aberto pelo Drift (escrita direta causava invisibilidade do dado).
-                    dispatchTriggerViaBroadcast(envName, title, result.triggerContent ?: "")
+                    val actionJson = JSONObject().apply {
+                        put("intent",      "create_trigger")
+                        put("environment", envName)
+                        put("title",       title)
+                        put("content",     result.triggerContent ?: "")
+                    }.toString()
+                    dispatchActionViaActivity(actionJson)
+                    showToast("Anotado! Vou te lembrar de $title em $envName ✓")
+                    speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
                 } else {
                     showToast("Diga: 'lembra de X quando chegar em Y'")
                     speak("Não entendi. Diga: lembra de X quando chegar em Y.")
@@ -785,8 +778,8 @@ Texto: $transcript
                         showToast("Segure o botão para gravar o nome.")
                     }, 2000L)
                 } else {
-                    // Nome válido → inicia countdown de 5 s para confirmação
-                    startPendingEnvironmentFlow(envName)
+                    // Nome válido → cria ambiente via TransparentVoiceActivity (sem abrir o app)
+                    dispatchCreateEnvironment(envName)
                 }
             }
             else -> {
@@ -797,83 +790,42 @@ Texto: $transcript
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Confirmação de ambiente com countdown de 5 segundos
+    // Dispatch via TransparentVoiceActivity — escrita no Drift sem abrir o app
     //
-    // Aguardar = confirmar (cria via IPC com GPS no app).
-    // Pressionar botão durante countdown = cancelar.
+    // Fluxo:
+    //   FloatingVoiceService → SharedPreferences "sopro_voice" →
+    //   startActivity(TransparentVoiceActivity) → MethodChannel processAction →
+    //   AppInitializer.dart → Drift (cache invalidado, stream listeners atualizados).
+    //
+    // TransparentVoiceActivity tem theme=Translucent + noHistory + excludeFromRecents;
+    // o usuário nunca vê o app. O engine cacheado pela MainActivity processa em < 200 ms.
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun startPendingEnvironmentFlow(envName: String) {
-        // Cancela qualquer confirmação anterior antes de iniciar nova
-        cancelPendingEnvironment()
-        pendingEnvName = envName
+    private fun dispatchActionViaActivity(actionJson: String) {
+        // Salva a ação em SharedPreferences — TransparentVoiceActivity lê e limpa
+        getSharedPreferences(VoiceActionReceiver.PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(VoiceActionReceiver.KEY_PENDING, actionJson)
+            .putLong(VoiceActionReceiver.KEY_PENDING_TIME, System.currentTimeMillis())
+            .apply()
 
-        showToast("Criar '$envName'? Aguarde 5 s para confirmar ou pressione para cancelar.")
-        speak("Criar ambiente $envName? Aguarde 5 segundos para confirmar ou pressione para cancelar.")
-
-        val timer = Runnable { confirmPendingEnvironment() }
-        pendingEnvTimer = timer
-        mainHandler.postDelayed(timer, 5000L)
-        Log.d(TAG, "Aguardando confirmação para ambiente '$envName' (5 s)")
-    }
-
-    // Cancela a confirmação pendente — chamado por tap curto durante countdown
-    private fun cancelPendingEnvironment() {
-        pendingEnvTimer?.let { mainHandler.removeCallbacks(it) }
-        pendingEnvTimer = null
-        if (pendingEnvName != null) {
-            Log.d(TAG, "Confirmação cancelada para '${pendingEnvName}'")
-            pendingEnvName = null
-            showToast("Criação cancelada.")
-            speak("Cancelado.")
+        // Inicia a activity transparente — FLAG_ACTIVITY_NEW_TASK obrigatório em Service
+        val intent = Intent(this, TransparentVoiceActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
         }
+        startActivity(intent)
+        Log.d(TAG, "TransparentVoiceActivity iniciada para: $actionJson")
     }
 
-    // Confirma a criação — chamado automaticamente após 5 s sem interrupção
-    private fun confirmPendingEnvironment() {
-        val name = pendingEnvName ?: return
-        pendingEnvTimer = null
-        pendingEnvName  = null
-
-        // Precisa de GPS → delega ao app via IPC (MainActivity.onResume)
-        savePendingIntent(JSONObject().apply {
-            put("intent", "create_environment"); put("name", name)
-        }.toString())
-        showToast("'$name' confirmado! Abra o Sopro para confirmar o local.")
-        speak("Pronto! Abra o Sopro para confirmar o local de $name.")
-        Log.d(TAG, "Ambiente '$name' confirmado via countdown — pending intent salvo")
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Dispatch de trigger via BroadcastReceiver → Flutter/Drift
-    //
-    // Escrita direta no SQLite causava invisibilidade: o Drift (WAL mode) mantém
-    // cache e não detecta linhas inseridas por outro processo. A solução correta
-    // é passar pelo Flutter para que o Drift salve e invalide o cache.
-    //
-    // Fluxo: broadcast → VoiceActionReceiver → SharedPreferences →
-    //        MainActivity.onNewIntent → MethodChannel → AppInitializer.dart → Drift.
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private fun dispatchTriggerViaBroadcast(envName: String, title: String, content: String) {
+    // Convenção para criar ambiente — monta o JSON e dispara via TransparentVoiceActivity
+    private fun dispatchCreateEnvironment(envName: String) {
         val actionJson = JSONObject().apply {
-            put("intent",      "create_trigger")
+            put("intent",      "create_environment")
             put("environment", envName)
-            put("title",       title)
-            put("content",     content)
         }.toString()
-
-        val broadcastIntent = Intent(VoiceActionReceiver.ACTION_VOICE).apply {
-            // setPackage garante que só o próprio app receba — corresponde a exported="false"
-            setPackage(packageName)
-            putExtra(VoiceActionReceiver.EXTRA_ACTION_JSON, actionJson)
-        }
-        sendBroadcast(broadcastIntent)
-
-        // Feedback imediato ao usuário (otimista — o broadcast é processado em < 100 ms)
-        showToast("Anotado! Vou te lembrar de $title em $envName ✓")
-        speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
-        Log.d(TAG, "Broadcast disparado para criar trigger '$title' em '$envName'")
+        dispatchActionViaActivity(actionJson)
+        showToast("Criando ambiente '$envName'...")
+        speak("Criando ambiente $envName.")
+        Log.d(TAG, "create_environment '$envName' despachado via TransparentVoiceActivity")
     }
 
     // Lê nomes de ambientes direto do SQLite — garante nomes exatos no prompt Gemini.
@@ -990,17 +942,6 @@ Texto: $transcript
         } catch (e: Exception) {
             Log.d(TAG, "logToSupabase falhou (ignorado): ${e.message}")
         }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // IPC — salva pedido pendente para o app processar no próximo onResume()
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private fun savePendingIntent(json: String) {
-        getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_PENDING_INTENT, json)
-            .putLong(KEY_PENDING_TS, System.currentTimeMillis())
-            .apply()
     }
 
     // ─────────────────────────────────────────────────────────────────────────

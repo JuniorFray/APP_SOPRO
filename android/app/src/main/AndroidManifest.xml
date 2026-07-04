@@ -131,6 +131,18 @@
             android:name=".FloatingVoiceService"
             android:exported="false"/>
 
+        <!-- TransparentVoiceActivity — activity totalmente transparente (sem UI visível)
+             que processa ações de voz do FloatingVoiceService (criar trigger/ambiente).
+             noHistory=true: nunca entra no backstack do usuário.
+             excludeFromRecents=true: não aparece na tela "App recentes".
+             Usa Theme.Translucent para zero visibilidade; fecha após invokeMethod. -->
+        <activity
+            android:name=".TransparentVoiceActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="false"/>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>

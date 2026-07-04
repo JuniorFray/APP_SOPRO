@@ -1359,6 +1359,60 @@ FIX 5 — NOME GENERICO BLOQUEADO (FloatingVoiceService.kt):
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
 ## Sprint Anterior
+Sprint: TransparentVoiceActivity - Acoes de Voz Sem Abrir App - CONCLUIDO (2026-07-04)
+Entregue:
+
+OBJETIVO: create_trigger e create_environment do botao flutuante sem tornar o app visivel.
+Causa anterior: VoiceActionReceiver chamava MainActivity com FLAG_REORDER_TO_FRONT, trazendo
+o app para frente. Novo fluxo: FloatingVoiceService → SharedPreferences "sopro_voice" →
+TransparentVoiceActivity (transparente, sem historico) → MethodChannel → AppInitializer.dart.
+
+1. TransparentVoiceActivity.kt (novo):
+   - Estende FlutterActivity. Theme: @android:style/Theme.Translucent.NoTitleBar.
+   - getCachedEngineId(): retorna "sopro_engine" se engine esta no FlutterEngineCache,
+     null caso contrario (FlutterActivity cria engine novo automaticamente).
+   - shouldDestroyEngineWithHost(): false — nao destroi o engine da MainActivity.
+   - onCreate(): le prefs "sopro_voice", valida timestamp < 30 s, invoca
+     MethodChannel "com.sopro.sopro/voice_action" processAction com o JSON,
+     chama finish() imediatamente. Activity transparente = zero visibilidade.
+   - noHistory=true + excludeFromRecents=true: nunca aparece no backstack/app recentes.
+
+2. MainActivity.kt:
+   - Import io.flutter.embedding.engine.FlutterEngineCache adicionado.
+   - configureFlutterEngine(): FlutterEngineCache.getInstance().put("sopro_engine", flutterEngine)
+     logo apos super.configureFlutterEngine(). Engine cacheado garante processamento < 200 ms.
+
+3. AndroidManifest.xml:
+   - <activity android:name=".TransparentVoiceActivity" ...> declarada com
+     theme=Translucent, excludeFromRecents=true, noHistory=true, exported=false.
+
+4. FloatingVoiceService.kt:
+   - REMOVIDOS: campos pendingEnvName / pendingEnvTimer; metodos startPendingEnvironmentFlow(),
+     cancelPendingEnvironment(), confirmPendingEnvironment(), dispatchTriggerViaBroadcast(),
+     savePendingIntent(). Eliminado o countdown de 5 s e o mecanismo de BroadcastReceiver.
+   - ADICIONADOS: dispatchActionViaActivity(actionJson): salva em "sopro_voice" prefs +
+     startActivity(TransparentVoiceActivity, FLAG_ACTIVITY_NEW_TASK).
+     dispatchCreateEnvironment(envName): monta JSON create_environment + chama dispatch +
+     feedback imediato via showToast/speak.
+   - executeVoiceResult create_trigger: inline JSON + dispatchActionViaActivity + feedback.
+   - executeVoiceResult create_environment (nome valido): dispatchCreateEnvironment().
+   - executeVoiceResult VAL_AWAITING_NAME: dispatchCreateEnvironment() em vez do countdown.
+   - handleTouch ACTION_UP: removida verificacao pendingEnvName.
+   - startListeningForVoice: removida chamada cancelPendingEnvironment().
+   - onDestroy: removido cancelamento do pendingEnvTimer.
+
+5. AppInitializer.dart:
+   - Import environment_entity.dart adicionado.
+   - _processFloatingVoiceAction() ampliado para tratar intent create_environment:
+     getCurrentPosition() via nativeLocationServiceProvider (retorna null se GPS indisponivel).
+     Cria EnvironmentEntity com raio 100 m + GPS atual.
+     environmentRepositoryProvider.save(env) + nativeGeofenceServiceProvider.addSingleGeofence(env).
+     Loga 'env_created_by_voice' com status/name/lat/lng no Supabase.
+     Falha silenciosa com log 'floating_voice_action_error' em caso de excecao.
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Sprint Anterior
 Sprint: V2-VoicePro-Etapa12 - SpeechRecognizer + Gemini Texto + Confirmacao 5s - CONCLUIDO (2026-07-03)
 Entregue:
 
