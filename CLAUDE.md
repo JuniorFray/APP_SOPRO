@@ -1358,7 +1358,7 @@ FIX 5 — NOME GENERICO BLOQUEADO (FloatingVoiceService.kt):
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
-## Sprint Atual
+## Sprint Anterior
 Sprint: V2-VoicePro-Etapa12 - SpeechRecognizer + Gemini Texto + Confirmacao 5s - CONCLUIDO (2026-07-03)
 Entregue:
 
@@ -1413,6 +1413,61 @@ CONTINUIDADE DE FIXES ANTERIORES:
 - Arrasto independente: ACTION_MOVE sempre reposiciona, ACTION_CANCEL cancela STT.
 - initSpeechRecognizer(): chamado em onCreate() — SpeechRecognizer.isRecognitionAvailable()
   verificado antes de criar; destroy() em onDestroy() (main thread).
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+
+## Sprint Atual
+Sprint: V2-VoicePro-FloatingTriggerFix - create_trigger via BroadcastReceiver + MethodChannel - CONCLUIDO (2026-07-03)
+Entregue:
+
+DIAGNOSTICO:
+- Supabase confirmava after_gemini http:200 para create_trigger, mas trigger nao aparecia no app.
+- Causa raiz: Drift mantem o banco em WAL mode com cache interno. Escrever direto no SQLite
+  a partir do FloatingVoiceService (outro processo) nao invalida o cache do Drift —
+  os dados existiam no arquivo mas o app nao os via nos streams/queries.
+
+SOLUCAO — BroadcastReceiver + MethodChannel (Flutter/Drift):
+
+1. VoiceActionReceiver.kt (novo):
+   - BroadcastReceiver registrado para "com.sopro.sopro.VOICE_ACTION" (exported="false").
+   - onReceive(): salva action_json + timestamp em SharedPreferences "sopro_voice".
+   - startActivity com FLAG_ACTIVITY_SINGLE_TOP + FLAG_ACTIVITY_REORDER_TO_FRONT
+     para trazer MainActivity ao foreground e disparar onNewIntent().
+
+2. AndroidManifest.xml:
+   - <receiver android:name=".VoiceActionReceiver" android:exported="false">
+     com <intent-filter> para "com.sopro.sopro.VOICE_ACTION".
+
+3. FloatingVoiceService.kt:
+   - createTriggerInDb() REMOVIDO (escrita direta ao SQLite abandonada).
+   - dispatchTriggerViaBroadcast(envName, title, content): monta JSON, chama
+     sendBroadcast(Intent(ACTION_VOICE).setPackage(packageName)) + feedback imediato
+     (toast + TTS). Escrita no banco delegada ao Flutter via broadcast.
+
+4. MainActivity.kt:
+   - voiceActionChannel: MethodChannel? adicionado (canal "com.sopro.sopro/voice_action").
+   - Inicializado em configureFlutterEngine() (sem setMethodCallHandler — so invoca Dart).
+   - onNewIntent(): +if EXTRA_PROCESS_ACTION → processVoiceActionFromPrefs().
+   - processVoiceActionFromPrefs(): le "sopro_voice" prefs, valida timestamp < 30 s,
+     limpa prefs e chama voiceActionChannel?.invokeMethod("processAction", actionJson).
+
+5. AppInitializer.dart:
+   - Imports: dart:convert, package:uuid/uuid.dart, trigger_entity.dart.
+   - _setupVoiceActionChannel(): registra handler no MethodChannel "com.sopro.sopro/voice_action".
+     Chamado em _init() antes do overlay setup.
+   - _processFloatingVoiceAction(jsonStr): parse JSON, busca ambiente por nome
+     (case-insensitive, indexWhere), cria TriggerEntity com Uuid().v4(), salva via
+     ref.read(triggerRepositoryProvider).save(). Loga trigger_created_from_floating
+     {status: ok/env_not_found/error, env, title} no Supabase.
+
+FLUXO COMPLETO:
+  FloatingVoiceService.dispatchTriggerViaBroadcast()
+    → sendBroadcast(ACTION_VOICE)
+    → VoiceActionReceiver.onReceive(): prefs + startActivity(PROCESS_VOICE_ACTION)
+    → MainActivity.onNewIntent(): processVoiceActionFromPrefs()
+    → voiceActionChannel.invokeMethod("processAction", json)
+    → AppInitializer._processFloatingVoiceAction(): Drift.save(TriggerEntity)
+    → Supabase log "trigger_created_from_floating" {status:ok}
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 

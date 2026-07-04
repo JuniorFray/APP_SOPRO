@@ -33,7 +33,6 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
-import java.util.UUID
 
 // FloatingVoiceService — botão circular flutuante de voz sobre todos os apps.
 //
@@ -760,7 +759,9 @@ Texto: $transcript
                 val envName = result.environment ?: ""
                 val title   = result.triggerTitle  ?: ""
                 if (envName.isNotEmpty() && title.isNotEmpty()) {
-                    createTriggerInDb(envName, title, result.triggerContent ?: "")
+                    // Delega ao Flutter/Drift via BroadcastReceiver — evita conflito de WAL
+                    // com o banco aberto pelo Drift (escrita direta causava invisibilidade do dado).
+                    dispatchTriggerViaBroadcast(envName, title, result.triggerContent ?: "")
                 } else {
                     showToast("Diga: 'lembra de X quando chegar em Y'")
                     speak("Não entendi. Diga: lembra de X quando chegar em Y.")
@@ -844,41 +845,35 @@ Texto: $transcript
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Escrita direta no banco SQLite (sem Flutter Engine)
+    // Dispatch de trigger via BroadcastReceiver → Flutter/Drift
+    //
+    // Escrita direta no SQLite causava invisibilidade: o Drift (WAL mode) mantém
+    // cache e não detecta linhas inseridas por outro processo. A solução correta
+    // é passar pelo Flutter para que o Drift salve e invalide o cache.
+    //
+    // Fluxo: broadcast → VoiceActionReceiver → SharedPreferences →
+    //        MainActivity.onNewIntent → MethodChannel → AppInitializer.dart → Drift.
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun createTriggerInDb(envName: String, title: String, content: String) {
-        val dbFile = findDbFile() ?: run {
-            showToast("Abra o Sopro pelo menos uma vez"); return
+    private fun dispatchTriggerViaBroadcast(envName: String, title: String, content: String) {
+        val actionJson = JSONObject().apply {
+            put("intent",      "create_trigger")
+            put("environment", envName)
+            put("title",       title)
+            put("content",     content)
+        }.toString()
+
+        val broadcastIntent = Intent(VoiceActionReceiver.ACTION_VOICE).apply {
+            // setPackage garante que só o próprio app receba — corresponde a exported="false"
+            setPackage(packageName)
+            putExtra(VoiceActionReceiver.EXTRA_ACTION_JSON, actionJson)
         }
+        sendBroadcast(broadcastIntent)
 
-        try {
-            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-                .use { db ->
-                    val envId = db.rawQuery(
-                        "SELECT id FROM environments WHERE LOWER(name) = LOWER(?)",
-                        arrayOf(envName)
-                    ).use { c -> if (c.moveToFirst()) c.getString(0) else null }
-
-                    if (envId == null) {
-                        showToast("Local '$envName' não encontrado no Sopro")
-                        speak("Não encontrei o local $envName.")
-                        return
-                    }
-
-                    db.execSQL(
-                        "INSERT INTO triggers (id, environment_id, title, content, is_active, created_at)" +
-                        " VALUES (?, ?, ?, ?, 1, ?)",
-                        arrayOf(UUID.randomUUID().toString(), envId, title, content,
-                                System.currentTimeMillis())
-                    )
-                    showToast("Anotado! Vou te lembrar de $title em $envName ✓")
-                    speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
-                }
-        } catch (e: Exception) {
-            Log.e(TAG, "Erro ao criar trigger: $e")
-            showToast("Erro ao salvar lembrete")
-        }
+        // Feedback imediato ao usuário (otimista — o broadcast é processado em < 100 ms)
+        showToast("Anotado! Vou te lembrar de $title em $envName ✓")
+        speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
+        Log.d(TAG, "Broadcast disparado para criar trigger '$title' em '$envName'")
     }
 
     // Lê nomes de ambientes direto do SQLite — garante nomes exatos no prompt Gemini.

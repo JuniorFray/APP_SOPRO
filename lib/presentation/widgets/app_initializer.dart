@@ -1,11 +1,15 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import 'package:flutter/services.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/navigation/app_router.dart';
+import '../../domain/entities/trigger_entity.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
@@ -163,6 +167,11 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
       await BackgroundServiceManager.start();
     }
 
+    // Registra handler do canal de voz para processar triggers do botão flutuante.
+    // Deve ser registrado antes de BackgroundServiceManager.start() para garantir que
+    // qualquer ação pendente de sessões anteriores seja capturada ao retornar ao app.
+    _setupVoiceActionChannel();
+
     // Restaura o botão flutuante de voz se estava ativo na sessão anterior.
     // Verifica se a permissão SYSTEM_ALERT_WINDOW ainda é válida antes de iniciar.
     const overlayChannel = MethodChannel('com.sopro.sopro/overlay');
@@ -195,6 +204,58 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
       '/environment',
       arguments: environmentId,
     );
+  }
+
+  // Registra o handler do MethodChannel que recebe triggers criados pelo botão flutuante.
+  // VoiceActionReceiver (Kotlin) → MainActivity.processVoiceActionFromPrefs() →
+  // voiceActionChannel.invokeMethod("processAction", json) → este handler → Drift.
+  void _setupVoiceActionChannel() {
+    const channel = MethodChannel('com.sopro.sopro/voice_action');
+    channel.setMethodCallHandler((call) async {
+      if (call.method == 'processAction') {
+        await _processFloatingVoiceAction(call.arguments as String);
+      }
+    });
+  }
+
+  // Salva o trigger via Drift — garante cache invalidado e stream listeners atualizados.
+  Future<void> _processFloatingVoiceAction(String jsonStr) async {
+    try {
+      final json    = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final intent  = (json['intent']      as String?) ?? '';
+      final envName = (json['environment'] as String?) ?? '';
+      final title   = (json['title']       as String?) ?? '';
+      final content = (json['content']     as String?) ?? '';
+
+      if (intent != 'create_trigger' || envName.isEmpty || title.isEmpty) return;
+
+      final envs = await ref.read(environmentRepositoryProvider).getAll();
+      final idx  = envs.indexWhere(
+        (e) => e.name.toLowerCase() == envName.toLowerCase(),
+      );
+
+      if (idx < 0) {
+        AppLogger.log('trigger_created_from_floating',
+            {'status': 'env_not_found', 'env_name': envName});
+        return;
+      }
+
+      final trigger = TriggerEntity(
+        id:            const Uuid().v4(),
+        environmentId: envs[idx].id,
+        title:         title,
+        content:       content,
+        isActive:      true,
+        createdAt:     DateTime.now(),
+      );
+      await ref.read(triggerRepositoryProvider).save(trigger);
+
+      AppLogger.log('trigger_created_from_floating',
+          {'status': 'ok', 'env': envName, 'title': title});
+    } catch (e) {
+      AppLogger.log('trigger_created_from_floating',
+          {'status': 'error', 'error': e.toString()});
+    }
   }
 
   @override

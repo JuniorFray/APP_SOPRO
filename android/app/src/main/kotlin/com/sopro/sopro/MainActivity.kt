@@ -78,6 +78,8 @@ class MainActivity : FlutterActivity() {
 
         // ── Overlay (botão flutuante de voz) ──────────────────────────────────
         private const val OVERLAY_CHANNEL       = "com.sopro.sopro/overlay"
+        // Canal para processar triggers criados pelo botão flutuante (via VoiceActionReceiver)
+        private const val VOICE_ACTION_CHANNEL  = "com.sopro.sopro/voice_action"
         private const val TAG                   = "MainActivity"
 
         // UUIDs Sopro — FIXOS (nunca alterar; identificam o app na rede BLE)
@@ -117,6 +119,8 @@ class MainActivity : FlutterActivity() {
 
     // Canal de overlay — armazenado para invocar métodos Dart a partir do onNewIntent
     private var overlayChannel: MethodChannel? = null
+    // Canal de voice action — repassa triggers do botão flutuante ao Flutter/Drift
+    private var voiceActionChannel: MethodChannel? = null
 
     // ═════════════════════════════════════════════════════════════════════════
     // Inicialização dos canais Flutter ↔ Native
@@ -226,6 +230,12 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+
+        // ── Voice Action: MethodChannel (triggers do botão flutuante → Drift) ──
+        // Apenas recebe invocações do lado Kotlin — não precisa de setMethodCallHandler.
+        voiceActionChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, VOICE_ACTION_CHANNEL
+        )
 
         // ── Geofencing nativo: MethodChannel ──────────────────────────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GEOFENCE_CHANNEL)
@@ -820,6 +830,32 @@ class MainActivity : FlutterActivity() {
         if (intent.getBooleanExtra(FloatingVoiceService.EXTRA_OPEN_VOICE, false)) {
             Log.d(TAG, "App aberto pelo botão flutuante — notificando Flutter para iniciar gravação")
             overlayChannel?.invokeMethod("openVoiceFromOverlay", null)
+        }
+        // Verifica se o VoiceActionReceiver enviou um trigger para salvar via Drift
+        if (intent.getBooleanExtra(VoiceActionReceiver.EXTRA_PROCESS_ACTION, false)) {
+            processVoiceActionFromPrefs()
+        }
+    }
+
+    // Lê a voice action pendente (< 30 s) e repassa ao Flutter via MethodChannel.
+    // Flutter/Drift garante que o dado seja salvo corretamente e o cache invalidado.
+    private fun processVoiceActionFromPrefs() {
+        val prefs      = getSharedPreferences(VoiceActionReceiver.PREFS_NAME, MODE_PRIVATE)
+        val actionJson = prefs.getString(VoiceActionReceiver.KEY_PENDING, null)
+        val actionTime = prefs.getLong(VoiceActionReceiver.KEY_PENDING_TIME, 0L)
+
+        if (actionJson != null && System.currentTimeMillis() - actionTime < 30_000L) {
+            prefs.edit()
+                .remove(VoiceActionReceiver.KEY_PENDING)
+                .remove(VoiceActionReceiver.KEY_PENDING_TIME)
+                .apply()
+            Log.d(TAG, "Voice action do FloatingVoiceService: $actionJson")
+            voiceActionChannel?.invokeMethod("processAction", actionJson)
+        } else if (actionJson != null) {
+            // Ação expirada — descarta sem processar
+            prefs.edit().remove(VoiceActionReceiver.KEY_PENDING)
+                .remove(VoiceActionReceiver.KEY_PENDING_TIME).apply()
+            Log.d(TAG, "Voice action expirada — descartada")
         }
     }
 
