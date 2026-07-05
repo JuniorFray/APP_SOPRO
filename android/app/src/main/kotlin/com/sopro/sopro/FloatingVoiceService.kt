@@ -619,10 +619,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         val envCtx = if (envNames.isNotEmpty()) "Ambientes: $envNames" else ""
         val prompt = """JSON apenas, sem markdown.
 Schemas:
-create_trigger: {"intent":"create_trigger","environment":"nome","trigger":{"title":"acao","content":""}}
-create_environment: {"intent":"create_environment","environment":{"name":"nome"}}
-delete_environment: {"intent":"delete_environment","environment":"nome"}
-delete_trigger: {"intent":"delete_trigger","environment":"nome","title":"titulo"}
+create_trigger: {"intent":"create_trigger","environment":"Casa","trigger":{"title":"ligar para medico","content":""}}
+create_environment: {"intent":"create_environment","environment":{"name":"Farmacia"}}
+delete_environment: {"intent":"delete_environment","environment":"Trabalho"}
+delete_trigger: {"intent":"delete_trigger","environment":"Mercado","title":"comprar leite"}
 unknown: {"intent":"unknown"}
 Exemplos create_trigger: "me lembre de X em Y", "preciso de X em Y", "nao esquecer X em Y", "quando chegar em Y, X"
 Exemplos delete_trigger: "ja fiz X", "pode apagar X de Y", "remover X de Y"
@@ -914,22 +914,28 @@ Texto: $transcript""".trimIndent()
                         .apply()
                     return
                 }
+                val resolvedEnvCapitalized = resolvedEnv.trim()
+                    .split(" ")
+                    .joinToString(" ") { word ->
+                        word.lowercase(java.util.Locale("pt", "BR"))
+                            .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
+                    }
                 if (title.isNotEmpty()) {
                     serviceScope.launch(Dispatchers.IO) {
-                        val ok = writeTriggerToDb(title, result.triggerContent ?: "", resolvedEnv)
+                        val ok = writeTriggerToDb(title, result.triggerContent ?: "", resolvedEnvCapitalized)
                         withContext(Dispatchers.Main) {
                             if (ok) {
-                                showToast("Anotado! Vou te lembrar de $title em $resolvedEnv ✓")
-                                speak("Anotado! Vou te lembrar de $title quando chegar em $resolvedEnv.")
+                                showToast("Anotado! Vou te lembrar de $title em $resolvedEnvCapitalized ✓")
+                                speak("Anotado! Vou te lembrar de $title quando chegar em $resolvedEnvCapitalized.")
                             } else {
-                                showToast("Não encontrei o ambiente '$resolvedEnv'")
+                                showToast("Não encontrei o ambiente '$resolvedEnvCapitalized'")
                                 statePrefs.edit()
                                     .putString("pending_trigger_title", result.triggerTitle)
-                                    .putString("pending_trigger_env", resolvedEnv)
+                                    .putString("pending_trigger_env", resolvedEnvCapitalized)
                                     .putString(KEY_VOICE_STATE, "awaiting_env_confirm")
                                     .putLong("voice_state_set_at", System.currentTimeMillis())
                                     .apply()
-                                speak("Não encontrei o ambiente $resolvedEnv. Quer que eu crie agora?")
+                                speak("Não encontrei o ambiente $resolvedEnvCapitalized. Quer que eu crie agora?")
                             }
                         }
                     }
