@@ -67,6 +67,11 @@ dependencies:
   # Usado para a chave Gemini — nunca hardcode de secrets no fonte
   flutter_dotenv: ^5.2.1
 
+  # Agenda tarefas Dart em background via WorkManager (Android).
+  # Usado pelo FloatingVoiceService para persistir envs/triggers via Drift
+  # sem abrir o app — evita o problema de cache WAL do SQLite direto.
+  workmanager: ^0.5.1
+
 dependency_overrides:
   # record_platform_interface >=1.3.0 torna startStream ABSTRATO; record_linux 0.7.2
   # nao implementa, quebrando compilacao Dart (mesmo em build Android).

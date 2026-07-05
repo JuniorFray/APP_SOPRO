@@ -2,14 +2,17 @@
 // O ProviderScope envolve todo o app — obrigatório para o Riverpod.
 // O AppInitializer inicializa serviços assíncronos dentro do escopo dos providers.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:workmanager/workmanager.dart';
 
 import 'core/constants/strings.dart';
 import 'core/navigation/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'infrastructure/background/background_service_manager.dart';
+import 'infrastructure/background/voice_action_worker.dart';
 import 'presentation/screens/environment/environment_loader_screen.dart';
 import 'presentation/screens/home/home_screen.dart';
 import 'presentation/screens/onboarding/onboarding_screen.dart';
@@ -19,6 +22,10 @@ import 'presentation/widgets/app_initializer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Registra o dispatcher Dart do WorkManager — chamado pelo FloatingVoiceService
+  // para persistir ambientes e gatilhos via Drift sem abrir o app.
+  await Workmanager().initialize(callbackDispatcher, isInDebugMode: kDebugMode);
 
   // Carrega variáveis de ambiente do arquivo .env (incluído como Flutter asset).
   // mergeWith: {} evita exceção se .env não existir (instalação sem dotenv local).

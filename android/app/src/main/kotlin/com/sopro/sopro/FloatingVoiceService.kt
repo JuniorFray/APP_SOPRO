@@ -26,6 +26,12 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
+import androidx.work.ListenableWorker
+import androidx.work.OneTimeWorkRequest
+import androidx.work.OutOfQuotaPolicy
+import androidx.work.WorkManager
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -105,6 +111,11 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         private const val GEMINI_ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/models/" +
             "gemini-2.5-flash:generateContent"
+
+        // Nome da tarefa WorkManager — deve coincidir com kVoiceActionTask em voice_action_worker.dart
+        private const val VOICE_ACTION_TASK = "voice_action"
+        // Chave do input data do WorkManager plugin (legacy key mantida por compatibilidade)
+        private const val WM_DART_TASK_KEY  = "be.tramckrijte.workmanagerexample.dart_task"
 
         // FIX 5: nomes genéricos que não identificam um lugar real
         // Se Gemini retornar um desses, tratamos como "sem nome" e pedimos novamente
@@ -734,10 +745,22 @@ Texto: $transcript
                 showToast("Criando '$envName'...")
                 serviceScope.launch(Dispatchers.IO) {
                     val loc = getLastLocationBlocking()
-                    val ok  = if (loc != null) writeEnvironmentToDb(envName, loc.latitude, loc.longitude, 100) else false
-                    withContext(Dispatchers.Main) {
-                        if (ok) speak("Pronto! Ambiente $envName criado.")
-                        else speak("Não consegui criar o ambiente.")
+                    if (loc != null) {
+                        val envId = UUID.randomUUID().toString()
+                        scheduleVoiceAction(JSONObject().apply {
+                            put("intent", "create_environment")
+                            put("id", envId)
+                            put("name", envName)
+                            put("lat", loc.latitude)
+                            put("lon", loc.longitude)
+                            put("radius", 100)
+                        }.toString())
+                        withContext(Dispatchers.Main) {
+                            registerGeofence(envId, envName, loc.latitude, loc.longitude, 100.0)
+                            speak("Pronto! Ambiente $envName criado.")
+                        }
+                    } else {
+                        withContext(Dispatchers.Main) { speak("Não consegui criar o ambiente.") }
                     }
                 }
             } else {
@@ -755,10 +778,22 @@ Texto: $transcript
                 val envName = result.environment ?: ""
                 val title   = result.triggerTitle  ?: ""
                 if (envName.isNotEmpty() && title.isNotEmpty()) {
+                    // Verifica existência do ambiente antes de agendar (feedback imediato)
                     serviceScope.launch(Dispatchers.IO) {
-                        val ok = writeTriggerToDb(title, result.triggerContent ?: "", envName)
+                        val envNames = readEnvironmentNamesFromDb()
+                        val found = envNames.any {
+                            it.lowercase() == envName.lowercase() ||
+                            it.lowercase().contains(envName.lowercase()) ||
+                            envName.lowercase().contains(it.lowercase())
+                        }
                         withContext(Dispatchers.Main) {
-                            if (ok) {
+                            if (found) {
+                                scheduleVoiceAction(JSONObject().apply {
+                                    put("intent",   "create_trigger")
+                                    put("env_name", envName)
+                                    put("title",    title)
+                                    put("content",  result.triggerContent ?: "")
+                                }.toString())
                                 showToast("Anotado! Vou te lembrar de $title em $envName ✓")
                                 speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
                             } else {
@@ -790,14 +825,28 @@ Texto: $transcript
                         showToast("Segure o botão para gravar o nome.")
                     }, 2000L)
                 } else {
-                    // Nome válido → cria ambiente diretamente no SQLite + registra geofence
+                    // Nome válido → agenda WorkManager para DB + registra geofence nativo
                     showToast("Criando '$envName'...")
                     serviceScope.launch(Dispatchers.IO) {
                         val loc = getLastLocationBlocking()
-                        val ok  = if (loc != null) writeEnvironmentToDb(envName, loc.latitude, loc.longitude, 100) else false
-                        withContext(Dispatchers.Main) {
-                            if (ok) speak("Pronto! Ambiente $envName criado.")
-                            else speak("Não consegui criar o ambiente. Tente novamente.")
+                        if (loc != null) {
+                            val envId = UUID.randomUUID().toString()
+                            scheduleVoiceAction(JSONObject().apply {
+                                put("intent", "create_environment")
+                                put("id", envId)
+                                put("name", envName)
+                                put("lat", loc.latitude)
+                                put("lon", loc.longitude)
+                                put("radius", 100)
+                            }.toString())
+                            withContext(Dispatchers.Main) {
+                                registerGeofence(envId, envName, loc.latitude, loc.longitude, 100.0)
+                                speak("Pronto! Ambiente $envName criado.")
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                speak("Não consegui criar o ambiente. Tente novamente.")
+                            }
                         }
                     }
                 }
@@ -852,98 +901,48 @@ Texto: $transcript
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Escrita direta no SQLite — sem abrir o app, sem Flutter Engine
+    // WorkManager — agenda tarefa Dart para persistir ação via Drift
     // ─────────────────────────────────────────────────────────────────────────
 
-    // Cria ambiente no banco e registra geofence nativo.
-    // Colunas Drift (environments_table.dart): id, name, latitude, longitude, radius_meters, created_at (ms).
-    // Chamado de Dispatchers.IO; registerGeofence() é postado na main thread.
-    private fun writeEnvironmentToDb(name: String, lat: Double, lon: Double, radius: Int): Boolean {
-        return try {
-            val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
-                .getString("flutter.sopro_db_path", null) ?: run {
-                    logToSupabase("floating_env_error",
-                        mapOf("error" to "db_path_not_in_prefs_open_app_first"))
-                    return false
-                }
-            val dbFile = File(dbPath)
-            if (!dbFile.exists()) {
-                logToSupabase("floating_env_error",
-                    mapOf("error" to "db_file_not_found", "path" to dbPath))
-                return false
-            }
-            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-                .use { db ->
-                    val id  = UUID.randomUUID().toString()
-                    val now = System.currentTimeMillis()
-                    db.execSQL(
-                        "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        arrayOf(id, name, lat, lon, radius.toDouble(), now)
-                    )
-                    // GMS addGeofences exige main thread
-                    mainHandler.post { registerGeofence(id, name, lat, lon, radius.toDouble()) }
-                    logToSupabase("floating_env_created",
-                        mapOf("env_name" to name, "lat" to lat.toString(),
-                              "lon" to lon.toString(), "id" to id))
-                }
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "writeEnvironmentToDb error: ${e.message}")
-            logToSupabase("floating_env_error",
-                mapOf("error" to (e.message ?: "unknown"), "name" to name))
-            false
-        }
-    }
+    // Grava JSON em SharedPreferences e enfileira um OneTimeWorkRequest para o
+    // BackgroundWorker do plugin workmanager. O dispatcher Dart (callbackDispatcher
+    // em voice_action_worker.dart) lê a chave 'voice_pending_action' e salva via Drift.
+    //
+    // Para ambientes: chame registerGeofence() nativamente após this — o geofence
+    // não pode ser registrado do isolate Dart (sem MethodChannel disponível).
+    private fun scheduleVoiceAction(actionJson: String) {
+        // Prefixo 'flutter.' é obrigatório: o plugin Dart lê 'voice_pending_action'
+        // mas a lib adiciona 'flutter.' automaticamente — Kotlin deve incluir o prefixo.
+        getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .edit().putString("flutter.voice_pending_action", actionJson).apply()
 
-    // Cria trigger no banco buscando ambiente pelo nome (case-insensitive).
-    // Colunas Drift (triggers_table.dart): id, environment_id, title, content, is_active, created_at (ms).
-    // Retorna true se salvo, false se ambiente não encontrado ou erro.
-    private fun writeTriggerToDb(title: String, content: String, envName: String): Boolean {
-        return try {
-            val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
-                .getString("flutter.sopro_db_path", null) ?: run {
-                    logToSupabase("floating_trigger_error",
-                        mapOf("error" to "db_path_not_in_prefs_open_app_first"))
-                    return false
-                }
-            val dbFile = File(dbPath)
-            if (!dbFile.exists()) {
-                logToSupabase("floating_trigger_error",
-                    mapOf("error" to "db_file_not_found", "path" to dbPath))
-                return false
-            }
-            var success = false
-            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-                .use { db ->
-                    val cursor = db.rawQuery(
-                        "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
-                        arrayOf(envName)
-                    )
-                    val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
-                    cursor.close()
+        try {
+            @Suppress("UNCHECKED_CAST")
+            val workerClass = Class.forName(
+                "dev.fluttercommunity.workmanager.BackgroundWorker"
+            ) as Class<ListenableWorker>
 
-                    if (envId == null) {
-                        Log.w(TAG, "Ambiente '$envName' não encontrado")
-                        logToSupabase("floating_trigger_error",
-                            mapOf("error" to "ambiente_nao_encontrado", "env_name" to envName))
-                        return@use
-                    }
-                    val id  = UUID.randomUUID().toString()
-                    val now = System.currentTimeMillis()
-                    db.execSQL(
-                        "INSERT INTO triggers (id, environment_id, title, content, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
-                        arrayOf(id, envId, title, content, now)
-                    )
-                    logToSupabase("floating_trigger_created",
-                        mapOf("title" to title, "env_name" to envName, "id" to id))
-                    success = true
-                }
-            success
+            val workRequest = OneTimeWorkRequest.Builder(workerClass)
+                .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                .setInputData(
+                    Data.Builder()
+                        .putString(WM_DART_TASK_KEY, VOICE_ACTION_TASK)
+                        .build()
+                )
+                .build()
+
+            WorkManager.getInstance(applicationContext)
+                .enqueueUniqueWork(
+                    "sopro_voice_action",
+                    ExistingWorkPolicy.REPLACE,
+                    workRequest
+                )
+
+            Log.d(TAG, "WorkManager voice_action agendado: ${actionJson.take(80)}")
         } catch (e: Exception) {
-            Log.e(TAG, "writeTriggerToDb error: ${e.message}")
-            logToSupabase("floating_trigger_error",
-                mapOf("error" to (e.message ?: "unknown"), "env_name" to envName))
-            false
+            Log.e(TAG, "WorkManager schedule falhou: ${e.message}")
+            logToSupabase("voice_action_schedule_error",
+                mapOf("error" to (e.message ?: "unknown")))
         }
     }
 

@@ -50,4 +50,9 @@ dependencies {
     implementation 'com.google.android.gms:play-services-location:21.3.0'
     // Coroutines para chamadas de rede fora da main thread no FloatingVoiceService
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+    // WorkManager — necessário para FloatingVoiceService agendar tarefas Dart via Drift.
+    // O plugin Flutter workmanager ^0.5.x adiciona work-runtime como dependência interna,
+    // mas o app module precisa declarar explicitamente para o compilador Kotlin resolver
+    // androidx.work.* no FloatingVoiceService.kt.
+    implementation 'androidx.work:work-runtime-ktx:2.9.1'
 }
