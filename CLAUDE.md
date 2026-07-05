@@ -151,6 +151,15 @@ WorkManager — Tentativa de WorkManager para contornar WAL; depois revertido.
 GPS-Fallback — Fallback de ultima localizacao (flutter.last_known_lat/lon) quando GPS null.
 DbCloseFix + Delete — db.close() em finally em todos os metodos; delete_environment/trigger por voz.
 SQLiteDireto-InvalidateResume — WorkManager revertido; SQLite direto + invalidate no onResume. ESTADO FINAL.
+DebugLogs — logToSupabase estrategicos em processTextWithGemini (raw response, catch, before_main, dispatch).
+FallbackAwaitingName — fallback GPS (last_known_lat/lon) no fluxo awaiting_name (bloco 1).
+Expiracao30s — VAL_AWAITING_NAME expira em 30s com timestamp voice_state_set_at.
+JsonExtraction — indexOf/lastIndexOf para extrair JSON entre primeiro { e ultimo } no parseGeminiResponse.
+PromptMinimo — prompt Gemini reduzido + maxOutputTokens 1024.
+Capitalizacao — nomes de ambiente capitalizados com Locale pt-BR ao salvar/deletar.
+NeedsRefresh — flag flutter.needs_refresh em SharedPreferences apos delete; onResume async verifica e invalida.
+TriggerAmbienteInexistente — awaiting_env_confirm: TTS pergunta se cria ambiente + bypass Gemini + handler GPS+create.
+FeedbackDelete — TTS especifico quando ambiente/trigger nao encontrado no delete; compileStatement para rowsAffected.
 
 ## STATUS ATUAL (2026-07-05)
 
@@ -163,7 +172,9 @@ SQLiteDireto-InvalidateResume — WorkManager revertido; SQLite direto + invalid
 | Voz no app                   | OK (AudioRecorder + Gemini 2.5 Flash)          |
 | Banco de dados               | OK (Drift schemaV4, path explicito)            |
 | Notif apos reboot            | OK (BootReceiver re-registra geofences)        |
-| Dados visiveis apos overlay  | OK (invalidate no onResume)                    |
+| Dados visiveis apos overlay  | OK (invalidate no onResume, async + needs_refresh) |
+| Trigger amb. inexistente     | OK (awaiting_env_confirm, cria amb + trigger)  |
+| Feedback delete falha        | OK (TTS especifico, compileStatement rowsAffected) |
 
 ## V3 — Proximos Passos
 - SQLCipher: substituir conexao SQLite por cifrada (Android Keystore)

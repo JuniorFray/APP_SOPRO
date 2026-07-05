@@ -290,6 +290,19 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     return
                 }
 
+                if (statePrefs.getString(KEY_VOICE_STATE, null) == "awaiting_env_confirm") {
+                    val syntheticResult = FloatVoiceResult(
+                        intent         = "awaiting_env_confirm",
+                        environment    = null,
+                        triggerTitle   = null,
+                        triggerContent = null,
+                        transcript     = text,
+                    )
+                    revertButtonAppearance()
+                    executeVoiceResult(syntheticResult)
+                    return
+                }
+
                 // Caso geral — envia ao Gemini para classificação em IO thread
                 serviceScope.launch { processTextWithGemini(text) }
             }
@@ -802,6 +815,45 @@ Texto: $transcript""".trimIndent()
             return
         }
 
+        if (voiceState == "awaiting_env_confirm" && !stateExpired) {
+            val pendingTitle   = statePrefs.getString("pending_trigger_title", null) ?: ""
+            val pendingContent = statePrefs.getString("pending_trigger_content", null) ?: ""
+            val pendingEnv     = statePrefs.getString("pending_trigger_env", null) ?: ""
+            statePrefs.edit()
+                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
+                .remove("pending_trigger_title").remove("pending_trigger_content")
+                .remove("pending_trigger_env").apply()
+            val text = (result.transcript ?: "").lowercase(java.util.Locale("pt", "BR"))
+            val confirmed = listOf("sim", "pode", "cria", "quero").any { text.contains(it) }
+            val denied    = listOf("nao", "não", "nope", "cancela", "deixa").any { text.contains(it) }
+            when {
+                confirmed && pendingEnv.isNotEmpty() -> {
+                    showToast("Criando ambiente e lembrete...")
+                    serviceScope.launch(Dispatchers.IO) {
+                        val loc   = getLastLocationBlocking()
+                        val prefs = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
+                        val lat   = loc?.latitude  ?: prefs.getFloat("flutter.last_known_lat", 0f).toDouble()
+                        val lon   = loc?.longitude ?: prefs.getFloat("flutter.last_known_lon", 0f).toDouble()
+                        if (lat != 0.0 && lon != 0.0) {
+                            val envOk     = writeEnvironmentToDb(pendingEnv, lat, lon, 100)
+                            val triggerOk = if (envOk) writeTriggerToDb(pendingTitle, pendingContent, pendingEnv) else false
+                            withContext(Dispatchers.Main) {
+                                if (triggerOk) speak("Pronto! Ambiente $pendingEnv criado e lembrete '$pendingTitle' registrado.")
+                                else           speak("Ambiente criado, mas não consegui salvar o lembrete.")
+                            }
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                speak("Não foi possível obter sua localização.")
+                            }
+                        }
+                    }
+                }
+                denied -> speak("Tudo bem, lembrete cancelado.")
+                else   -> speak("Não entendi. Diga 'sim' para criar o ambiente ou 'não' para cancelar.")
+            }
+            return
+        }
+
         when (result.intent) {
             "create_trigger" -> {
                 val envName = result.environment ?: ""
@@ -815,7 +867,7 @@ Texto: $transcript""".trimIndent()
                                 speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
                             } else {
                                 showToast("Não encontrei o ambiente '$envName'")
-                                speak("Não encontrei o local $envName.")
+                                speak("Não encontrei o ambiente $envName. Quer que eu crie agora?")
                             }
                         }
                     }
@@ -898,7 +950,6 @@ Texto: $transcript""".trimIndent()
                     val ok = deleteTriggerFromDb(envName, title)
                     withContext(Dispatchers.Main) {
                         if (ok) speak("Lembrete removido.")
-                        else speak("Não encontrei o lembrete.")
                     }
                 }
             }
@@ -969,7 +1020,10 @@ Texto: $transcript""".trimIndent()
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val envNameCapitalized = name.trim()
                 .split(" ")
-                .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
+                .joinToString(" ") { word ->
+                    word.lowercase(java.util.Locale("pt", "BR"))
+                        .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
+                }
             val id  = UUID.randomUUID().toString()
             val now = System.currentTimeMillis()
             db.execSQL(
@@ -1017,9 +1071,16 @@ Texto: $transcript""".trimIndent()
             val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
             cursor.close()
             if (envId == null) {
-                Log.w(TAG, "Ambiente '$envName' não encontrado")
+                Log.w(TAG, "Ambiente '$envName' não encontrado — salva awaiting_env_confirm")
                 logToSupabase("floating_trigger_error",
                     mapOf("error" to "ambiente_nao_encontrado", "env_name" to envName))
+                getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
+                    .putString("pending_trigger_title", title)
+                    .putString("pending_trigger_content", content)
+                    .putString("pending_trigger_env", envName)
+                    .putString(KEY_VOICE_STATE, "awaiting_env_confirm")
+                    .putLong("voice_state_set_at", System.currentTimeMillis())
+                    .apply()
                 return false
             }
             val id  = UUID.randomUUID().toString()
@@ -1061,7 +1122,10 @@ Texto: $transcript""".trimIndent()
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val envNameCapitalized = envName.trim()
                 .split(" ")
-                .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
+                .joinToString(" ") { word ->
+                    word.lowercase(java.util.Locale("pt", "BR"))
+                        .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
+                }
             val cursor = db.rawQuery(
                 "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
                 arrayOf(envNameCapitalized)
@@ -1069,8 +1133,8 @@ Texto: $transcript""".trimIndent()
             val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
             cursor.close()
             if (envId == null) {
-                logToSupabase("floating_delete_error",
-                    mapOf("error" to "env_not_found", "name" to envNameCapitalized))
+                logToSupabase("floating_delete_not_found", mapOf("name" to envNameCapitalized))
+                mainHandler.post { speak("Não encontrei o ambiente $envNameCapitalized. Verifique o nome e tente novamente.") }
                 return false
             }
             // Remove triggers primeiro (FK), depois o ambiente
@@ -1113,13 +1177,21 @@ Texto: $transcript""".trimIndent()
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val envNameCapitalized = envName.trim()
                 .split(" ")
-                .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
+                .joinToString(" ") { word ->
+                    word.lowercase(java.util.Locale("pt", "BR"))
+                        .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
+                }
             if (triggerTitle != null) {
-                db.execSQL(
+                val stmt = db.compileStatement(
                     "DELETE FROM triggers WHERE LOWER(title) LIKE LOWER(?) AND environment_id IN " +
-                    "(SELECT id FROM environments WHERE LOWER(name) = LOWER(?))",
-                    arrayOf("%$triggerTitle%", envNameCapitalized)
+                    "(SELECT id FROM environments WHERE LOWER(name) = LOWER(?))"
                 )
+                stmt.bindString(1, "%${triggerTitle}%")
+                stmt.bindString(2, envNameCapitalized)
+                val rowsAffected = stmt.executeUpdateDelete()
+                if (rowsAffected == 0) {
+                    mainHandler.post { speak("Não encontrei esse lembrete em $envNameCapitalized.") }
+                }
             } else {
                 db.execSQL(
                     "DELETE FROM triggers WHERE environment_id IN " +
