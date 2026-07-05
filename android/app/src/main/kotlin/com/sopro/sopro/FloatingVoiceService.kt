@@ -590,23 +590,16 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
         // Lê ambientes direto do SQLite — garante nomes exatos do banco no prompt
         val envNames = readEnvironmentNamesFromDb()
-        val envCtx   = if (envNames.isNotEmpty())
-            "\nAmbientes existentes: ${envNames.joinToString(", ")}." else ""
-
-        val prompt = """
-Classifique o texto do usuário em JSON. Responda APENAS com JSON, sem markdown.
+        val envCtx = if (envNames.isNotEmpty()) "Ambientes: $envNames" else ""
+        val prompt = """JSON apenas, sem markdown.
 Schemas:
-  create_trigger:     {"intent":"create_trigger","environment":"nome_exato","trigger":{"title":"acao_infinitivo","content":""}}
-  create_environment: {"intent":"create_environment","environment":{"name":"nome_do_local"}}
-  delete_environment: {"intent":"delete_environment","environment":"nome_exato"}
-  delete_trigger:     {"intent":"delete_trigger","environment":"nome_exato","title":"titulo_parcial_ou_null"}
-  unknown:            {"intent":"unknown","transcricao":"texto_original"}
-
-REGRA trigger.title: apenas a ação, infinitivo, máx 50 chars, sem pronomes.
-IMPORTANTE: use nomes de ambiente EXATAMENTE como estão na lista abaixo.$envCtx
-
-Texto: $transcript
-""".trimIndent()
+create_trigger: {"intent":"create_trigger","environment":"nome","trigger":{"title":"acao","content":""}}
+create_environment: {"intent":"create_environment","environment":{"name":"nome"}}
+delete_environment: {"intent":"delete_environment","environment":"nome"}
+delete_trigger: {"intent":"delete_trigger","environment":"nome","title":"titulo"}
+unknown: {"intent":"unknown","transcricao":"texto"}
+$envCtx
+Texto: $transcript""".trimIndent()
 
         val body = JSONObject().apply {
             put("contents", JSONArray().apply {
@@ -617,7 +610,7 @@ Texto: $transcript
                 })
             })
             put("generationConfig", JSONObject().apply {
-                put("temperature", 0); put("maxOutputTokens", 256)
+                put("temperature", 0); put("maxOutputTokens", 1024)
             })
         }.toString()
 
