@@ -598,6 +598,8 @@ Classifique o texto do usuário em JSON. Responda APENAS com JSON, sem markdown.
 Schemas:
   create_trigger:     {"intent":"create_trigger","environment":"nome_exato","trigger":{"title":"acao_infinitivo","content":""}}
   create_environment: {"intent":"create_environment","environment":{"name":"nome_do_local"}}
+  delete_environment: {"intent":"delete_environment","environment":"nome_exato"}
+  delete_trigger:     {"intent":"delete_trigger","environment":"nome_exato","title":"titulo_parcial_ou_null"}
   unknown:            {"intent":"unknown","transcricao":"texto_original"}
 
 REGRA trigger.title: apenas a ação, infinitivo, máx 50 chars, sem pronomes.
@@ -694,6 +696,19 @@ Texto: $transcript
                         transcript     = transcript,
                     )
                 }
+                "delete_environment" -> FloatVoiceResult(
+                    intent         = intent,
+                    environment    = parsed.optString("environment").takeIf { it.isNotEmpty() },
+                    triggerTitle   = null, triggerContent = null,
+                    transcript     = transcript,
+                )
+                "delete_trigger" -> FloatVoiceResult(
+                    intent         = intent,
+                    environment    = parsed.optString("environment").takeIf { it.isNotEmpty() },
+                    triggerTitle   = parsed.optString("title").takeIf { it.isNotEmpty() },
+                    triggerContent = null,
+                    transcript     = transcript,
+                )
                 else -> FloatVoiceResult(
                     intent         = "unknown",
                     environment    = null,
@@ -802,6 +817,31 @@ Texto: $transcript
                     }
                 }
             }
+            "delete_environment" -> {
+                val envName = result.environment ?: ""
+                if (envName.isNotEmpty()) {
+                    serviceScope.launch(Dispatchers.IO) {
+                        val ok = deleteEnvironmentFromDb(envName)
+                        withContext(Dispatchers.Main) {
+                            if (ok) speak("Ambiente $envName removido.")
+                            else speak("Não encontrei o ambiente $envName.")
+                        }
+                    }
+                } else {
+                    speak("Qual ambiente você quer remover?")
+                }
+            }
+            "delete_trigger" -> {
+                val envName = result.environment ?: ""
+                val title   = result.triggerTitle
+                serviceScope.launch(Dispatchers.IO) {
+                    val ok = deleteTriggerFromDb(envName, title)
+                    withContext(Dispatchers.Main) {
+                        if (ok) speak("Lembrete removido.")
+                        else speak("Não encontrei o lembrete.")
+                    }
+                }
+            }
             else -> {
                 showToast("Não entendi. Abra o Sopro para comandos avançados.")
                 speak("Não entendi. Pressione novamente para tentar.")
@@ -813,31 +853,23 @@ Texto: $transcript
     // Chamado de Dispatchers.IO, portanto acesso ao DB é seguro.
     private fun readEnvironmentNamesFromDb(): List<String> {
         val dbFile = findDbFile() ?: return emptyList()
+        var db: SQLiteDatabase? = null
         return try {
-            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-                .use { db ->
-                    db.rawQuery("SELECT name FROM environments WHERE deleted_at IS NULL", null)
-                        .use { cursor ->
-                            val names = mutableListOf<String>()
-                            while (cursor.moveToNext()) names.add(cursor.getString(0))
-                            names
-                        }
-                }
-        } catch (_: Exception) {
-            // Tabela pode não ter deleted_at — tenta sem WHERE
-            try {
-                SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-                    .use { db ->
-                        db.rawQuery("SELECT name FROM environments", null).use { cursor ->
-                            val names = mutableListOf<String>()
-                            while (cursor.moveToNext()) names.add(cursor.getString(0))
-                            names
-                        }
-                    }
-            } catch (e2: Exception) {
-                Log.w(TAG, "readEnvironmentNamesFromDb falhou: ${e2.message}")
-                emptyList()
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            // Tenta com deleted_at; se coluna não existir cai no catch e tenta sem WHERE
+            val cursor = try {
+                db.rawQuery("SELECT name FROM environments WHERE deleted_at IS NULL", null)
+            } catch (_: Exception) {
+                db.rawQuery("SELECT name FROM environments", null)
             }
+            val names = mutableListOf<String>()
+            cursor.use { while (it.moveToNext()) names.add(it.getString(0)) }
+            names
+        } catch (e: Exception) {
+            Log.w(TAG, "readEnvironmentNamesFromDb falhou: ${e.message}")
+            emptyList()
+        } finally {
+            try { db?.close() } catch (_: Exception) {}
         }
     }
 
@@ -858,90 +890,178 @@ Texto: $transcript
     // Cria ambiente no banco usando o caminho gravado pelo Flutter em SharedPreferences.
     // Chamado de Dispatchers.IO; registerGeofence() é postado na main thread.
     private fun writeEnvironmentToDb(name: String, lat: Double, lon: Double, radius: Int): Boolean {
-        return try {
-            val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
-                .getString("flutter.sopro_db_path", null) ?: run {
-                    logToSupabase("floating_env_error",
-                        mapOf("error" to "db_path_not_in_prefs_open_app_first"))
-                    return false
-                }
-            val dbFile = File(dbPath)
-            if (!dbFile.exists()) {
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
                 logToSupabase("floating_env_error",
-                    mapOf("error" to "db_file_not_found", "path" to dbPath))
+                    mapOf("error" to "db_path_not_in_prefs_open_app_first"))
                 return false
             }
-            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-                .use { db ->
-                    val id  = UUID.randomUUID().toString()
-                    val now = System.currentTimeMillis()
-                    db.execSQL(
-                        "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        arrayOf(id, name, lat, lon, radius.toDouble(), now)
-                    )
-                    // GMS addGeofences exige main thread
-                    mainHandler.post { registerGeofence(id, name, lat, lon, radius.toDouble()) }
-                    logToSupabase("floating_env_created",
-                        mapOf("env_name" to name, "lat" to lat.toString(),
-                              "lon" to lon.toString(), "id" to id))
-                }
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) {
+            logToSupabase("floating_env_error",
+                mapOf("error" to "db_file_not_found", "path" to dbPath))
+            return false
+        }
+        var db: SQLiteDatabase? = null
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val id  = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            db.execSQL(
+                "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                arrayOf(id, name, lat, lon, radius.toDouble(), now)
+            )
+            // GMS addGeofences exige main thread
+            mainHandler.post { registerGeofence(id, name, lat, lon, radius.toDouble()) }
+            logToSupabase("floating_env_created",
+                mapOf("env_name" to name, "lat" to lat.toString(),
+                      "lon" to lon.toString(), "id" to id))
             true
         } catch (e: Exception) {
             Log.e(TAG, "writeEnvironmentToDb error: ${e.message}")
             logToSupabase("floating_env_error",
                 mapOf("error" to (e.message ?: "unknown"), "name" to name))
             false
+        } finally {
+            try { db?.close() } catch (_: Exception) {}
         }
     }
 
     // Cria trigger no banco buscando ambiente pelo nome (case-insensitive).
     // Retorna true se salvo, false se ambiente não encontrado ou erro.
     private fun writeTriggerToDb(title: String, content: String, envName: String): Boolean {
-        return try {
-            val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
-                .getString("flutter.sopro_db_path", null) ?: run {
-                    logToSupabase("floating_trigger_error",
-                        mapOf("error" to "db_path_not_in_prefs_open_app_first"))
-                    return false
-                }
-            val dbFile = File(dbPath)
-            if (!dbFile.exists()) {
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
                 logToSupabase("floating_trigger_error",
-                    mapOf("error" to "db_file_not_found", "path" to dbPath))
+                    mapOf("error" to "db_path_not_in_prefs_open_app_first"))
                 return false
             }
-            var success = false
-            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
-                .use { db ->
-                    val cursor = db.rawQuery(
-                        "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
-                        arrayOf(envName)
-                    )
-                    val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
-                    cursor.close()
-
-                    if (envId == null) {
-                        Log.w(TAG, "Ambiente '$envName' não encontrado")
-                        logToSupabase("floating_trigger_error",
-                            mapOf("error" to "ambiente_nao_encontrado", "env_name" to envName))
-                        return@use
-                    }
-                    val id  = UUID.randomUUID().toString()
-                    val now = System.currentTimeMillis()
-                    db.execSQL(
-                        "INSERT INTO triggers (id, environment_id, title, content, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
-                        arrayOf(id, envId, title, content, now)
-                    )
-                    logToSupabase("floating_trigger_created",
-                        mapOf("title" to title, "env_name" to envName, "id" to id))
-                    success = true
-                }
-            success
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) {
+            logToSupabase("floating_trigger_error",
+                mapOf("error" to "db_file_not_found", "path" to dbPath))
+            return false
+        }
+        var db: SQLiteDatabase? = null
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val cursor = db.rawQuery(
+                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
+                arrayOf(envName)
+            )
+            val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
+            cursor.close()
+            if (envId == null) {
+                Log.w(TAG, "Ambiente '$envName' não encontrado")
+                logToSupabase("floating_trigger_error",
+                    mapOf("error" to "ambiente_nao_encontrado", "env_name" to envName))
+                return false
+            }
+            val id  = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            db.execSQL(
+                "INSERT INTO triggers (id, environment_id, title, content, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
+                arrayOf(id, envId, title, content, now)
+            )
+            logToSupabase("floating_trigger_created",
+                mapOf("title" to title, "env_name" to envName, "id" to id))
+            true
         } catch (e: Exception) {
             Log.e(TAG, "writeTriggerToDb error: ${e.message}")
             logToSupabase("floating_trigger_error",
                 mapOf("error" to (e.message ?: "unknown"), "env_name" to envName))
             false
+        } finally {
+            try { db?.close() } catch (_: Exception) {}
+        }
+    }
+
+    // Remove ambiente e todos os seus triggers do banco (case-insensitive por nome).
+    // Retorna true se removido, false se não encontrado ou erro.
+    private fun deleteEnvironmentFromDb(envName: String): Boolean {
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
+                logToSupabase("floating_delete_error",
+                    mapOf("error" to "db_path_not_in_prefs", "method" to "deleteEnv"))
+                return false
+            }
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) {
+            logToSupabase("floating_delete_error",
+                mapOf("error" to "db_file_not_found", "method" to "deleteEnv"))
+            return false
+        }
+        var db: SQLiteDatabase? = null
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val cursor = db.rawQuery(
+                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
+                arrayOf(envName)
+            )
+            val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
+            cursor.close()
+            if (envId == null) {
+                logToSupabase("floating_delete_error",
+                    mapOf("error" to "env_not_found", "name" to envName))
+                return false
+            }
+            // Remove triggers primeiro (FK), depois o ambiente
+            db.execSQL("DELETE FROM triggers WHERE environment_id = ?", arrayOf(envId))
+            db.execSQL("DELETE FROM environments WHERE id = ?", arrayOf(envId))
+            logToSupabase("floating_env_deleted", mapOf("env_name" to envName))
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteEnvironmentFromDb error: ${e.message}")
+            logToSupabase("floating_delete_error",
+                mapOf("error" to (e.message ?: "unknown"), "name" to envName))
+            false
+        } finally {
+            try { db?.close() } catch (_: Exception) {}
+        }
+    }
+
+    // Remove trigger(s) do banco.
+    // triggerTitle não nulo → remove por título parcial (LIKE) no ambiente.
+    // triggerTitle nulo    → remove TODOS os triggers do ambiente.
+    private fun deleteTriggerFromDb(envName: String, triggerTitle: String?): Boolean {
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
+                logToSupabase("floating_delete_error",
+                    mapOf("error" to "db_path_not_in_prefs", "method" to "deleteTrigger"))
+                return false
+            }
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) {
+            logToSupabase("floating_delete_error",
+                mapOf("error" to "db_file_not_found", "method" to "deleteTrigger"))
+            return false
+        }
+        var db: SQLiteDatabase? = null
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            if (triggerTitle != null) {
+                db.execSQL(
+                    "DELETE FROM triggers WHERE LOWER(title) LIKE LOWER(?) AND environment_id IN " +
+                    "(SELECT id FROM environments WHERE LOWER(name) = LOWER(?))",
+                    arrayOf("%$triggerTitle%", envName)
+                )
+            } else {
+                db.execSQL(
+                    "DELETE FROM triggers WHERE environment_id IN " +
+                    "(SELECT id FROM environments WHERE LOWER(name) = LOWER(?))",
+                    arrayOf(envName)
+                )
+            }
+            logToSupabase("floating_trigger_deleted",
+                mapOf("env_name" to envName, "title" to (triggerTitle ?: "all")))
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteTriggerFromDb error: ${e.message}")
+            logToSupabase("floating_delete_error",
+                mapOf("error" to (e.message ?: "unknown"), "env_name" to envName))
+            false
+        } finally {
+            try { db?.close() } catch (_: Exception) {}
         }
     }
 

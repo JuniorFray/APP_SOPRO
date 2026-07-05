@@ -1689,41 +1689,74 @@ COMPORTAMENTO ESPERADO APOS A MUDANCA:
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 - flutter build apk --release --split-per-abi: success (arm64-v8a 22.1 MB).
 
+## Sprint Anterior
+Sprint: SQLite Direto + Invalidate Provider no Resume - CONCLUIDO (2026-07-05)
+Entregue:
+
+DECISAO: WorkManager revertido. SQLite direto restaurado.
+Motivo: WorkManager funcionou em testes mas adiciona complexidade desnecessaria
+para o caso de uso principal. A solucao definitiva e mais simples:
+SQLite direto (que ja funcionava nos logs 33/34) + invalidate do provider
+quando o app volta ao foreground.
+
+1. FloatingVoiceService.kt — REVERTIDO para SQLite direto:
+   - scheduleVoiceAction() REMOVIDO. Imports WorkManager REMOVIDOS.
+   - writeEnvironmentToDb(name, lat, lon, radius): restaurado.
+     Le caminho do banco via getSharedPreferences(FLUTTER_PREFS)
+     .getString("flutter.sopro_db_path", null). File(dbPath) + OPEN_READWRITE.
+     INSERT INTO environments. mainHandler.post { registerGeofence() }.
+     Loga floating_env_created no Supabase.
+   - writeTriggerToDb(title, content, envName): restaurado.
+     Mesmo padrao de caminho. SELECT id FROM environments (LOWER, case-insensitive).
+     INSERT INTO triggers (is_active=1). Loga floating_trigger_created no Supabase.
+   - executeVoiceResult() — 3 spots revertidos para chamar writeEnvironmentToDb()
+     e writeTriggerToDb() diretamente (sem JSON, sem WorkManager).
+
+2. HomeScreen (lib/presentation/screens/home/home_screen.dart):
+   - AppLifecycleListener adicionado a _HomeScreenState.
+   - initState(): _lifecycleListener = AppLifecycleListener(
+       onResume: () => ref.invalidate(environmentsProvider));
+   - dispose(): _lifecycleListener.dispose().
+   - Efeito: quando o app volta ao foreground (usuario minimizou, usou o botao
+     flutuante, e voltou), environmentsProvider e invalidado forcando o Drift a
+     re-executar watchAll() e exibir os novos dados escritos pelo servico Kotlin.
+
+ARQUITETURA FINAL DO FLOATING BUTTON:
+  Segurar botao → SpeechRecognizer (pt-BR) → Gemini texto (NLU) → intent
+  create_trigger  → writeTriggerToDb() SQLite direto → loga floating_trigger_created
+  create_environment → getLastLocationBlocking() → writeEnvironmentToDb() SQLite
+    direto → registerGeofence() nativo → loga floating_env_created
+  App abre/resume → ref.invalidate(environmentsProvider) → Drift re-query → dados visiveis
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+- flutter build apk --release --split-per-abi: success (arm64-v8a 22.1 MB).
+
 ## STATUS ATUAL - Julho 2026
 
-### Arquitetura do Floating Button — Estado Atual (2026-07-05)
+### Arquitetura do Floating Button — Estado Final (2026-07-05)
 
-| Componente                   | Status                        |
-|------------------------------|-------------------------------|
-| SpeechRecognizer (pt-BR)     | OK                            |
-| Gemini texto (NLU)           | OK — http 200                 |
-| Persistencia via Drift       | OK — WorkManager implementado |
-| Geofence nativo              | OK — registerGeofence() Kotlin|
-| Streams watchAll() em tempo real | Limitacao conhecida (ver abaixo) |
-
-### Limitacao Conhecida — Streams em Tempo Real
-
-Dart streams Riverpod (watchAll()) no app principal NAO atualizam automaticamente
-quando o WorkManager worker escreve, porque o SQLite update hook nao dispara entre
-isolates Dart distintos. Os dados aparecem na proxima abertura do app ou navegacao
-que force um rebuild dos providers.
-
-Para uso tipico (botao flutuante com app fechado/minimizado), o comportamento e
-transparente ao usuario — os dados estao prontos quando o app abre.
+| Componente                   | Status                                  |
+|------------------------------|-----------------------------------------|
+| SpeechRecognizer (pt-BR)     | OK                                      |
+| Gemini texto (NLU)           | OK — http 200                           |
+| SQLite write direto          | OK — floating_env/trigger_created logs  |
+| Geofence nativo              | OK — registerGeofence() Kotlin          |
+| Dados visiveis no app        | OK — invalidate no onResume             |
 
 ### Mudancas Recentes (pos-V1, nao documentadas nos sprints anteriores)
 
 - sopro_database.dart: LazyDatabase com path explicito substitui
   driftDatabase(name:'sopro'). Persiste caminho em flutter.sopro_db_path
   nas SharedPreferences a cada abertura do banco.
-- FloatingVoiceService: writeEnvironmentToDb() e writeTriggerToDb() REMOVIDOS.
-  scheduleVoiceAction() agenda WorkManager; findDbFile() mantido apenas para
-  readEnvironmentNamesFromDb() (prompt Gemini).
+- FloatingVoiceService: writeEnvironmentToDb() e writeTriggerToDb() usam
+  caminho via SharedPreferences (flutter.sopro_db_path). findDbFile() mantido
+  apenas para readEnvironmentNamesFromDb() (prompt Gemini).
 - TransparentVoiceActivity e VoiceActionReceiver removidos completamente.
 - SpeechRecognizer (Etapa12) substituiu AudioRecord + MediaRecorder + AMR.
   Zero arquivo de audio, zero base64 — transcript enviado ao Gemini como texto.
 - app_initializer.dart: forca criacao do banco (db.select(db.environments).get())
   antes de qualquer acesso pelo FloatingVoiceService.
+- HomeScreen: AppLifecycleListener invalida environmentsProvider no onResume.
 
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
