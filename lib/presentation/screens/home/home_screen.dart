@@ -28,6 +28,7 @@ import '../../../infrastructure/logging/app_logger.dart';
 import '../../../infrastructure/voice/voice_service.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
+import '../../providers/trigger_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../../widgets/environment_card.dart';
@@ -53,7 +54,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     // Invalida o provider ao voltar ao foreground — garante que ambientes/triggers
     // criados pelo botão flutuante (SQLite direto) apareçam sem reiniciar o app.
     _lifecycleListener = AppLifecycleListener(
-      onResume: () => ref.invalidate(environmentsProvider),
+      onResume: () {
+        ref.invalidate(environmentsProvider);
+        ref.invalidate(triggersByEnvironmentProvider);
+      },
     );
     // Executa depois do primeiro frame para que o Navigator esteja disponível
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkOnboarding());
