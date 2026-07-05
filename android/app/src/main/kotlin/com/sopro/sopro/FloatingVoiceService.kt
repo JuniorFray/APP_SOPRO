@@ -809,10 +809,25 @@ Texto: $transcript
                     showToast("Criando '$envName'...")
                     serviceScope.launch(Dispatchers.IO) {
                         val loc = getLastLocationBlocking()
-                        val ok  = if (loc != null) writeEnvironmentToDb(envName, loc.latitude, loc.longitude, 100) else false
+                        // Fallback: usa última localização salva se GPS retornou null agora
+                        val prefs = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
+                        val lat = loc?.latitude
+                            ?: prefs.getFloat("flutter.last_known_lat", 0f).toDouble()
+                        val lon = loc?.longitude
+                            ?: prefs.getFloat("flutter.last_known_lon", 0f).toDouble()
+                        val ok = if (lat != 0.0 && lon != 0.0) {
+                            writeEnvironmentToDb(envName, lat, lon, 100)
+                        } else {
+                            logToSupabase("floating_env_error",
+                                mapOf("error" to "no_gps_no_fallback", "name" to envName))
+                            withContext(Dispatchers.Main) {
+                                speak("Não foi possível obter sua localização. Abra o app e defina manualmente.")
+                            }
+                            false
+                        }
                         withContext(Dispatchers.Main) {
                             if (ok) speak("Pronto! Ambiente $envName criado.")
-                            else speak("Não consegui criar o ambiente. Tente novamente.")
+                            else if (lat != 0.0 || lon != 0.0) speak("Não consegui criar o ambiente. Tente novamente.")
                         }
                     }
                 }
@@ -1132,10 +1147,18 @@ Texto: $transcript
             return null
         }
         return try {
-            Tasks.await(
+            val location = Tasks.await(
                 LocationServices.getFusedLocationProviderClient(this).lastLocation,
                 10_000L, TimeUnit.MILLISECONDS
             )
+            // Persiste última localização válida — usada como fallback quando GPS retorna null
+            if (location != null) {
+                getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
+                    .putFloat("flutter.last_known_lat", location.latitude.toFloat())
+                    .putFloat("flutter.last_known_lon", location.longitude.toFloat())
+                    .apply()
+            }
+            location
         } catch (e: Exception) {
             Log.w(TAG, "getLastLocationBlocking falhou: ${e.message}")
             null
