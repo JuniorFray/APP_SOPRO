@@ -1631,5 +1631,46 @@ CAMINHO DO BANCO CONFIRMADO: File(filesDir, "sopro.db")
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## STATUS ATUAL - Julho 2026
+
+### Problema em Aberto
+
+FloatingVoiceService escreve no SQLite diretamente (floating_env_created
+confirmado nos logs Supabase), mas o Drift no app Flutter nao ve os dados
+porque mantem uma conexao aberta em cache (WAL mode). O dado existe no
+arquivo .db mas nao aparece nos streams/queries do Drift enquanto o app
+esta rodando.
+
+### Proxima Solucao a Implementar
+
+Substituir escrita direta no SQLite por WorkManager que acorda o Flutter
+engine em background, executa o save via Drift (conexao correta, cache
+invalidado) e termina. Zero interacao do usuario necessaria.
+
+### Arquitetura do Floating Button — Estado Atual (2026-07-04)
+
+| Componente                  | Status           |
+|-----------------------------|------------------|
+| SpeechRecognizer (pt-BR)    | OK               |
+| Gemini texto (NLU)          | OK — http 200    |
+| SQLite write direto         | OK — logs confirmam |
+| Drift ve os dados no app    | BUG ABERTO       |
+| Solucao pendente            | WorkManager      |
+
+### Mudancas Recentes (pos-V1, nao documentadas nos sprints anteriores)
+
+- sopro_database.dart: LazyDatabase com path explicito substitui
+  driftDatabase(name:'sopro'). Persiste caminho em flutter.sopro_db_path
+  nas SharedPreferences a cada abertura do banco.
+- FloatingVoiceService: writeEnvironmentToDb() e writeTriggerToDb() leem
+  o caminho do banco via SharedPreferences (flutter.sopro_db_path) em vez
+  de testar candidatos. findDbFile() mantido apenas para readEnvironmentNamesFromDb().
+- TransparentVoiceActivity e VoiceActionReceiver removidos completamente.
+  FloatingVoiceService escreve no SQLite direto sem startActivity.
+- SpeechRecognizer (Etapa12) substituiu AudioRecord + MediaRecorder + AMR.
+  Zero arquivo de audio, zero base64 — transcript enviado ao Gemini como texto.
+- app_initializer.dart: forca criacao do banco (db.select(db.environments).get())
+  antes de qualquer acesso pelo FloatingVoiceService.
+
 ## Repositorio
 https://github.com/JuniorFray/APP_SOPRO.git
