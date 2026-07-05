@@ -45,12 +45,24 @@ class HomeScreen extends ConsumerStatefulWidget {
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   // false enquanto verifica o flag de onboarding e inicia serviços
   bool _ready = false;
+  late final AppLifecycleListener _lifecycleListener;
 
   @override
   void initState() {
     super.initState();
+    // Invalida o provider ao voltar ao foreground — garante que ambientes/triggers
+    // criados pelo botão flutuante (SQLite direto) apareçam sem reiniciar o app.
+    _lifecycleListener = AppLifecycleListener(
+      onResume: () => ref.invalidate(environmentsProvider),
+    );
     // Executa depois do primeiro frame para que o Navigator esteja disponível
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkOnboarding());
+  }
+
+  @override
+  void dispose() {
+    _lifecycleListener.dispose();
+    super.dispose();
   }
 
   // Verifica se o onboarding já foi concluído pelo usuário.
