@@ -1690,6 +1690,49 @@ COMPORTAMENTO ESPERADO APOS A MUDANCA:
 - flutter build apk --release --split-per-abi: success (arm64-v8a 22.1 MB).
 
 ## Sprint Anterior
+Sprint: FloatingVoiceService - db.close finally + delete environment e trigger - CONCLUIDO (2026-07-05)
+Entregue:
+
+FIX 1 — db.close() em finally em TODOS os metodos SQLite (causa raiz de lock):
+- readEnvironmentNamesFromDb(): convertido de .use{} para var db: SQLiteDatabase? = null
+  + try/catch/finally com try { db?.close() }. Fallback de deleted_at preservado.
+- writeEnvironmentToDb(): mesmo padrao. Verificacoes de dbPath/dbFile mantidas fora do try.
+- writeTriggerToDb(): mesmo padrao. return false quando envId == null dispara finally.
+- deleteEnvironmentFromDb() (novo): mesmo padrao.
+- deleteTriggerFromDb() (novo): mesmo padrao.
+- Padrao obrigatorio: var db: SQLiteDatabase? = null → try { db = open... }
+  catch { log; false } finally { try { db?.close() } catch (_) {} }
+
+FIX 2 — deleteEnvironmentFromDb(envName):
+- Busca id do ambiente (LOWER case-insensitive). Retorna false se nao encontrado.
+- DELETE FROM triggers WHERE environment_id = ? (remove cascata manual).
+- DELETE FROM environments WHERE id = ?
+- Loga floating_env_deleted no Supabase.
+
+FIX 3 — deleteTriggerFromDb(envName, triggerTitle):
+- triggerTitle != null → DELETE por titulo parcial (LIKE) no ambiente especificado.
+- triggerTitle == null → DELETE todos os triggers do ambiente.
+- Loga floating_trigger_deleted {env_name, title} no Supabase.
+
+FIX 4 — Dispatcher executeVoiceResult() + parseGeminiResponse():
+- Prompt Gemini ampliado com 2 novos schemas:
+    delete_environment: {"intent":"delete_environment","environment":"nome_exato"}
+    delete_trigger:     {"intent":"delete_trigger","environment":"nome_exato","title":"titulo_parcial_ou_null"}
+- parseGeminiResponse(): 2 novos cases mapeando os schemas JSON para FloatVoiceResult.
+- executeVoiceResult(): 2 novos cases com serviceScope.launch(IO):
+    delete_environment: deleteEnvironmentFromDb() + TTS "Ambiente X removido."
+    delete_trigger: deleteTriggerFromDb() + TTS "Lembrete removido."
+
+### FloatingVoiceService — Acoes Suportadas
+- create_environment: cria ambiente via SQLite direto + geofence nativo
+- create_trigger: cria gatilho vinculado ao ambiente
+- delete_environment: remove ambiente e seus triggers (cascata manual)
+- delete_trigger: remove trigger por titulo (LIKE) ou todos do ambiente (title=null)
+- Padrao obrigatorio: db?.close() em finally em todos os metodos SQLite
+
+- flutter build apk --debug: success.
+
+## Sprint Anterior
 Sprint: SQLite Direto + Invalidate Provider no Resume - CONCLUIDO (2026-07-05)
 Entregue:
 
