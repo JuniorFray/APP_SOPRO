@@ -17,6 +17,8 @@ dependencies:
 
   # Necessario para localizar o diretorio do banco no dispositivo
   path_provider: ^2.1.5
+  # Manipulacao de caminhos de arquivo (usado em sopro_database.dart)
+  path: ^1.9.0
 
   # Geracao de UUIDs para IDs das entidades
   uuid: ^4.5.1

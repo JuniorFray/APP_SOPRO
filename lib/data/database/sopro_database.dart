@@ -1,5 +1,10 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart';
-import 'package:drift_flutter/drift_flutter.dart';
+import 'package:drift/native.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'daos/ble_encounters_dao.dart';
 import 'daos/context_cards_dao.dart';
@@ -81,8 +86,15 @@ class SoproDatabase extends _$SoproDatabase {
       );
 }
 
-// Abre a conexão com o banco usando drift_flutter (sqlite3_flutter_libs).
-// O nome do arquivo é "sopro.db" no diretório de dados do app.
+// Abre a conexão com o banco usando LazyDatabase com caminho explícito.
+// Persiste o caminho em SharedPreferences para uso pelo FloatingVoiceService.
 QueryExecutor _openConnection() {
-  return driftDatabase(name: 'sopro');
+  return LazyDatabase(() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final file = File(p.join(dir.path, 'sopro.db'));
+    // Salvar o caminho exato para o FloatingVoiceService usar
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('flutter.sopro_db_path', file.absolute.path);
+    return NativeDatabase(file);
+  });
 }
