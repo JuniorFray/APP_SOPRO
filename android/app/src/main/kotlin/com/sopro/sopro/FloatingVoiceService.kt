@@ -791,6 +791,10 @@ Texto: $transcript
                 }
             }
             "create_environment" -> {
+                logToSupabase("floating_dispatch", mapOf(
+                    "intent" to "create_environment",
+                    "name" to (result.environment ?: "null")
+                ))
                 val rawName = result.environment ?: ""
                 // FIX 5: rejeita nomes genéricos (ambiente, local, aqui…) como null
                 val envName = rawName.takeIf {
