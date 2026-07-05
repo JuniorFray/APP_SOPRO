@@ -805,6 +805,7 @@ Texto: $transcript
                         showToast("Segure o botão para gravar o nome.")
                     }, 2000L)
                 } else {
+                    Log.d("FloatingVoice", "=== CREATE_ENV INICIADO nome=$envName ===")
                     // Nome válido → cria ambiente diretamente no SQLite + registra geofence
                     showToast("Criando '$envName'...")
                     serviceScope.launch(Dispatchers.IO) {
@@ -906,15 +907,17 @@ Texto: $transcript
     // Chamado de Dispatchers.IO; registerGeofence() é postado na main thread.
     private fun writeEnvironmentToDb(name: String, lat: Double, lon: Double, radius: Int): Boolean {
         val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
-            .getString("flutter.sopro_db_path", null) ?: run {
+            .getString("flutter.sopro_db_path", null)
+        Log.d("FloatingVoice", "=== WRITE_ENV CHAMADO nome=$name dbPath=$dbPath ===")
+        val resolvedPath = dbPath ?: run {
                 logToSupabase("floating_env_error",
                     mapOf("error" to "db_path_not_in_prefs_open_app_first"))
                 return false
             }
-        val dbFile = File(dbPath)
+        val dbFile = File(resolvedPath)
         if (!dbFile.exists()) {
             logToSupabase("floating_env_error",
-                mapOf("error" to "db_file_not_found", "path" to dbPath))
+                mapOf("error" to "db_file_not_found", "path" to resolvedPath))
             return false
         }
         var db: SQLiteDatabase? = null
