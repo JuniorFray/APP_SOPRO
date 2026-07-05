@@ -1690,6 +1690,27 @@ COMPORTAMENTO ESPERADO APOS A MUDANCA:
 - flutter build apk --release --split-per-abi: success (arm64-v8a 22.1 MB).
 
 ## Sprint Anterior
+Sprint: FloatingVoiceService - fallback ultima localizacao GPS - CONCLUIDO (2026-07-05)
+Entregue:
+
+FIX 1 — getLastLocationBlocking(): persiste ultima localizacao valida:
+- Apos Tasks.await() retornar location != null, salva em FlutterSharedPreferences:
+  flutter.last_known_lat (Float) e flutter.last_known_lon (Float).
+- Garante que qualquer chamada GPS bem-sucedida (app principal ou foreground service)
+  atualiza o fallback automaticamente.
+
+FIX 2 — create_environment: fallback quando GPS retorna null:
+- Substituiu `if (loc != null) writeEnvironmentToDb(...) else false` por:
+  lat = loc?.latitude ?: prefs.getFloat("flutter.last_known_lat", 0f).toDouble()
+  lon = loc?.longitude ?: prefs.getFloat("flutter.last_known_lon", 0f).toDouble()
+- Se lat/lon != 0.0: chama writeEnvironmentToDb() com coordenadas (GPS ou fallback).
+- Se lat/lon == 0.0 (sem GPS e sem fallback): loga floating_env_error no Supabase
+  e TTS "Nao foi possivel obter sua localizacao. Abra o app e defina manualmente."
+- TTS de sucesso/falha condicional: nao fala duas vezes no caminho de erro sem GPS.
+
+- flutter build apk --debug: success.
+
+## Sprint Anterior
 Sprint: FloatingVoiceService - db.close finally + delete environment e trigger - CONCLUIDO (2026-07-05)
 Entregue:
 
