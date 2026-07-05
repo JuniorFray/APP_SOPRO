@@ -303,6 +303,19 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     return
                 }
 
+                if (statePrefs.getString(KEY_VOICE_STATE, null) == "awaiting_env_for_trigger") {
+                    val syntheticResult = FloatVoiceResult(
+                        intent         = "awaiting_env_for_trigger",
+                        environment    = null,
+                        triggerTitle   = null,
+                        triggerContent = null,
+                        transcript     = text,
+                    )
+                    revertButtonAppearance()
+                    executeVoiceResult(syntheticResult)
+                    return
+                }
+
                 // Caso geral — envia ao Gemini para classificação em IO thread
                 serviceScope.launch { processTextWithGemini(text) }
             }
@@ -610,7 +623,9 @@ create_trigger: {"intent":"create_trigger","environment":"nome","trigger":{"titl
 create_environment: {"intent":"create_environment","environment":{"name":"nome"}}
 delete_environment: {"intent":"delete_environment","environment":"nome"}
 delete_trigger: {"intent":"delete_trigger","environment":"nome","title":"titulo"}
-unknown: {"intent":"unknown","transcricao":"texto"}
+unknown: {"intent":"unknown"}
+Exemplos create_trigger: "me lembre de X em Y", "preciso de X em Y", "nao esquecer X em Y", "quando chegar em Y, X"
+Exemplos delete_trigger: "ja fiz X", "pode apagar X de Y", "remover X de Y"
 $envCtx
 Texto: $transcript""".trimIndent()
 
@@ -854,20 +869,67 @@ Texto: $transcript""".trimIndent()
             return
         }
 
+        if (voiceState == "awaiting_env_for_trigger" && !stateExpired) {
+            val pendingTitle = statePrefs.getString("pending_trigger_title", null) ?: ""
+            statePrefs.edit()
+                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
+                .remove("pending_trigger_title").apply()
+            val envName = result.transcript?.trim() ?: ""
+            if (envName.isNotEmpty() && pendingTitle.isNotEmpty()) {
+                showToast("Salvando lembrete em $envName...")
+                serviceScope.launch(Dispatchers.IO) {
+                    val ok = writeTriggerToDb(pendingTitle, "", envName)
+                    withContext(Dispatchers.Main) {
+                        if (ok) speak("Anotado! Vou te lembrar de $pendingTitle quando chegar em $envName.")
+                        else    speak("Não encontrei o ambiente $envName. Quer que eu crie agora?")
+                    }
+                }
+            } else {
+                speak("Não entendi. Tente: 'lembra de X quando chegar em Y'.")
+            }
+            return
+        }
+
         when (result.intent) {
             "create_trigger" -> {
-                val envName = result.environment ?: ""
-                val title   = result.triggerTitle  ?: ""
-                if (envName.isNotEmpty() && title.isNotEmpty()) {
+                val title = result.triggerTitle ?: ""
+                val resolvedEnv = if (result.environment.isNullOrEmpty()) {
+                    val transcript = result.transcript ?: ""
+                    val patterns = listOf(
+                        Regex("(?:chegar\\s+(?:n[ao]|em)\\s+)([\\wÀ-ú\\s]+?)(?:\\s*$|,|\\.)", RegexOption.IGNORE_CASE),
+                        Regex("(?:n[ao]\\s+)([\\wÀ-ú]+)\\s*$", RegexOption.IGNORE_CASE)
+                    )
+                    patterns.firstNotNullOfOrNull { regex ->
+                        regex.find(transcript)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.length > 2 }
+                    }
+                } else {
+                    result.environment
+                }
+                if (resolvedEnv.isNullOrEmpty()) {
+                    speak("Em qual ambiente devo salvar esse lembrete?")
+                    statePrefs.edit()
+                        .putString("pending_trigger_title", result.triggerTitle)
+                        .putString(KEY_VOICE_STATE, "awaiting_env_for_trigger")
+                        .putLong("voice_state_set_at", System.currentTimeMillis())
+                        .apply()
+                    return
+                }
+                if (title.isNotEmpty()) {
                     serviceScope.launch(Dispatchers.IO) {
-                        val ok = writeTriggerToDb(title, result.triggerContent ?: "", envName)
+                        val ok = writeTriggerToDb(title, result.triggerContent ?: "", resolvedEnv)
                         withContext(Dispatchers.Main) {
                             if (ok) {
-                                showToast("Anotado! Vou te lembrar de $title em $envName ✓")
-                                speak("Anotado! Vou te lembrar de $title quando chegar em $envName.")
+                                showToast("Anotado! Vou te lembrar de $title em $resolvedEnv ✓")
+                                speak("Anotado! Vou te lembrar de $title quando chegar em $resolvedEnv.")
                             } else {
-                                showToast("Não encontrei o ambiente '$envName'")
-                                speak("Não encontrei o ambiente $envName. Quer que eu crie agora?")
+                                showToast("Não encontrei o ambiente '$resolvedEnv'")
+                                statePrefs.edit()
+                                    .putString("pending_trigger_title", result.triggerTitle)
+                                    .putString("pending_trigger_env", resolvedEnv)
+                                    .putString(KEY_VOICE_STATE, "awaiting_env_confirm")
+                                    .putLong("voice_state_set_at", System.currentTimeMillis())
+                                    .apply()
+                                speak("Não encontrei o ambiente $resolvedEnv. Quer que eu crie agora?")
                             }
                         }
                     }

@@ -160,6 +160,8 @@ Capitalizacao — nomes de ambiente capitalizados com Locale pt-BR ao salvar/del
 NeedsRefresh — flag flutter.needs_refresh em SharedPreferences apos delete; onResume async verifica e invalida.
 TriggerAmbienteInexistente — awaiting_env_confirm: TTS pergunta se cria ambiente + bypass Gemini + handler GPS+create.
 FeedbackDelete — TTS especifico quando ambiente/trigger nao encontrado no delete; compileStatement para rowsAffected.
+ResolvedEnvRegex — create_trigger extrai ambiente do transcript via regex quando Gemini retorna vazio; awaiting_env_for_trigger pede ambiente se nao resolvido.
+PromptExemplos — prompt Gemini inclui exemplos de variacoes naturais (me lembre, ja fiz, pode apagar).
 
 ## STATUS ATUAL (2026-07-05)
 
