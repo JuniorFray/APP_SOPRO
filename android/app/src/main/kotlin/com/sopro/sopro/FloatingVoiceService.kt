@@ -749,11 +749,16 @@ Texto: $transcript
 
         val statePrefs = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE)
         val voiceState = statePrefs.getString(KEY_VOICE_STATE, null)
+        val stateSetAt = statePrefs.getLong("voice_state_set_at", 0L)
+        val stateExpired = System.currentTimeMillis() - stateSetAt > 30_000L
+        if (stateExpired && voiceState != null) {
+            statePrefs.edit().remove(KEY_VOICE_STATE).remove("voice_state_set_at").apply()
+        }
 
         // Se estava aguardando nome de ambiente, usa transcript como nome.
         // NÃO reenvia ao Gemini — transcript vem direto do SpeechRecognizer (onResults).
-        if (voiceState == VAL_AWAITING_NAME) {
-            statePrefs.edit().remove(KEY_VOICE_STATE).apply()
+        if (voiceState == VAL_AWAITING_NAME && !stateExpired) {
+            statePrefs.edit().remove(KEY_VOICE_STATE).remove("voice_state_set_at").apply()
             val rawName = result.transcript?.trim() ?: ""
             // FIX 5: rejeita nomes genéricos mesmo no fluxo de "aguardando nome"
             val envName = rawName.takeIf {
@@ -774,7 +779,10 @@ Texto: $transcript
                 }
             } else {
                 // Nome ainda genérico — pede novamente (loop de até 1 tentativa)
-                statePrefs.edit().putString(KEY_VOICE_STATE, VAL_AWAITING_NAME).apply()
+                statePrefs.edit()
+                    .putString(KEY_VOICE_STATE, VAL_AWAITING_NAME)
+                    .putLong("voice_state_set_at", System.currentTimeMillis())
+                    .apply()
                 showToast("Esse não parece um nome de lugar. Tente um nome mais específico.")
                 speak("Qual é o nome do lugar? Por exemplo: casa, trabalho ou academia.")
                 mainHandler.postDelayed({ showToast("Segure o botão para gravar o nome.") }, 2500L)
@@ -817,7 +825,10 @@ Texto: $transcript
 
                 if (envName.isEmpty()) {
                     // Sem nome válido — salva estado e pede via TTS
-                    statePrefs.edit().putString(KEY_VOICE_STATE, VAL_AWAITING_NAME).apply()
+                    statePrefs.edit()
+                        .putString(KEY_VOICE_STATE, VAL_AWAITING_NAME)
+                        .putLong("voice_state_set_at", System.currentTimeMillis())
+                        .apply()
                     showToast("Qual é o nome do ambiente?")
                     speak("Qual é o nome do ambiente?")
                     // Delay de 2000 ms antes de pedir a gravação — evita que o mic
