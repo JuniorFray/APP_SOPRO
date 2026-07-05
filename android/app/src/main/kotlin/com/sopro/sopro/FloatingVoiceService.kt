@@ -621,6 +621,7 @@ Texto: $transcript
             })
         }.toString()
 
+        var responseBody = ""
         val result = try {
             val url  = URL("$GEMINI_ENDPOINT?key=$apiKey")
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -632,7 +633,7 @@ Texto: $transcript
 
             val code = conn.responseCode
             // readBytes() garante leitura completa — sem truncamento em respostas grandes
-            val responseBody = if (code == 200) {
+            responseBody = if (code == 200) {
                 conn.inputStream.readBytes().toString(Charsets.UTF_8)
             } else {
                 conn.errorStream?.readBytes()?.toString(Charsets.UTF_8) ?: ""
@@ -653,6 +654,10 @@ Texto: $transcript
                 parseGeminiResponse(responseBody, transcript)
             }
         } catch (e: Exception) {
+            logToSupabase("floating_parse_error", mapOf(
+                "error" to (e.message ?: "unknown"),
+                "response_preview" to responseBody.take(200)
+            ))
             Log.e(TAG, "Gemini request error: $e")
             FloatVoiceResult(null, null, null, null, transcript, error = e.message)
         }
