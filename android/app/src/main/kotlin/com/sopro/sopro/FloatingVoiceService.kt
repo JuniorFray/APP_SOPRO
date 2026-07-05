@@ -967,16 +967,19 @@ Texto: $transcript""".trimIndent()
         var db: SQLiteDatabase? = null
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val envNameCapitalized = name.trim()
+                .split(" ")
+                .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
             val id  = UUID.randomUUID().toString()
             val now = System.currentTimeMillis()
             db.execSQL(
                 "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                arrayOf(id, name, lat, lon, radius.toDouble(), now)
+                arrayOf(id, envNameCapitalized, lat, lon, radius.toDouble(), now)
             )
             // GMS addGeofences exige main thread
-            mainHandler.post { registerGeofence(id, name, lat, lon, radius.toDouble()) }
+            mainHandler.post { registerGeofence(id, envNameCapitalized, lat, lon, radius.toDouble()) }
             logToSupabase("floating_env_created",
-                mapOf("env_name" to name, "lat" to lat.toString(),
+                mapOf("env_name" to envNameCapitalized, "lat" to lat.toString(),
                       "lon" to lon.toString(), "id" to id))
             true
         } catch (e: Exception) {
@@ -1056,21 +1059,28 @@ Texto: $transcript""".trimIndent()
         var db: SQLiteDatabase? = null
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val envNameCapitalized = envName.trim()
+                .split(" ")
+                .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
             val cursor = db.rawQuery(
                 "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
-                arrayOf(envName)
+                arrayOf(envNameCapitalized)
             )
             val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
             cursor.close()
             if (envId == null) {
                 logToSupabase("floating_delete_error",
-                    mapOf("error" to "env_not_found", "name" to envName))
+                    mapOf("error" to "env_not_found", "name" to envNameCapitalized))
                 return false
             }
             // Remove triggers primeiro (FK), depois o ambiente
             db.execSQL("DELETE FROM triggers WHERE environment_id = ?", arrayOf(envId))
             db.execSQL("DELETE FROM environments WHERE id = ?", arrayOf(envId))
-            logToSupabase("floating_env_deleted", mapOf("env_name" to envName))
+            logToSupabase("floating_env_deleted", mapOf("env_name" to envNameCapitalized))
+            getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
+                .putBoolean("flutter.needs_refresh", true)
+                .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
+                .apply()
             true
         } catch (e: Exception) {
             Log.e(TAG, "deleteEnvironmentFromDb error: ${e.message}")
@@ -1101,21 +1111,24 @@ Texto: $transcript""".trimIndent()
         var db: SQLiteDatabase? = null
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val envNameCapitalized = envName.trim()
+                .split(" ")
+                .joinToString(" ") { word -> word.replaceFirstChar { it.uppercase() } }
             if (triggerTitle != null) {
                 db.execSQL(
                     "DELETE FROM triggers WHERE LOWER(title) LIKE LOWER(?) AND environment_id IN " +
                     "(SELECT id FROM environments WHERE LOWER(name) = LOWER(?))",
-                    arrayOf("%$triggerTitle%", envName)
+                    arrayOf("%$triggerTitle%", envNameCapitalized)
                 )
             } else {
                 db.execSQL(
                     "DELETE FROM triggers WHERE environment_id IN " +
                     "(SELECT id FROM environments WHERE LOWER(name) = LOWER(?))",
-                    arrayOf(envName)
+                    arrayOf(envNameCapitalized)
                 )
             }
             logToSupabase("floating_trigger_deleted",
-                mapOf("env_name" to envName, "title" to (triggerTitle ?: "all")))
+                mapOf("env_name" to envNameCapitalized, "title" to (triggerTitle ?: "all")))
             true
         } catch (e: Exception) {
             Log.e(TAG, "deleteTriggerFromDb error: ${e.message}")

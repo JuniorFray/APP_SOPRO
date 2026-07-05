@@ -54,7 +54,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     // Invalida o provider ao voltar ao foreground — garante que ambientes/triggers
     // criados pelo botão flutuante (SQLite direto) apareçam sem reiniciar o app.
     _lifecycleListener = AppLifecycleListener(
-      onResume: () {
+      onResume: () async {
+        final prefs = await SharedPreferences.getInstance();
+        final needsRefresh = prefs.getBool('needs_refresh') ?? false;
+        if (needsRefresh) {
+          await prefs.setBool('needs_refresh', false);
+        }
         ref.invalidate(environmentsProvider);
         ref.invalidate(triggersByEnvironmentProvider);
       },
