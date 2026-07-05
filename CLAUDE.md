@@ -1631,42 +1631,95 @@ CAMINHO DO BANCO CONFIRMADO: File(filesDir, "sopro.db")
 
 - flutter analyze lib/: No issues found. flutter build apk --debug: success.
 
+## Sprint Anterior
+Sprint: WorkManager - Persistencia via Dart/Drift sem abrir o app - CONCLUIDO (2026-07-05)
+Entregue:
+
+PROBLEMA RESOLVIDO — bug de cache WAL do SQLite direto:
+- FloatingVoiceService escrevia no SQLite diretamente (floating_env_created confirmado
+  no Supabase), mas o Drift no app Flutter nao via os dados porque mantem uma conexao
+  aberta em cache (WAL mode). O dado existia no arquivo .db mas nao aparecia nos
+  streams/queries enquanto o app estava rodando.
+
+SOLUCAO — WorkManager + callbackDispatcher Dart:
+1. pubspec.yaml: workmanager: ^0.5.1 adicionado.
+2. lib/infrastructure/background/voice_action_worker.dart (novo):
+   - callbackDispatcher() com @pragma('vm:entry-point') — entry-point do WorkManager.
+   - kVoiceActionTask = 'voice_action' — nome da tarefa (coincide com Kotlin).
+   - _kPendingKey = 'voice_pending_action' — chave SharedPreferences (Flutter adiciona
+     prefixo 'flutter.' automaticamente; Kotlin grava como 'flutter.voice_pending_action').
+   - _createEnvironment(): le id/name/lat/lon/radius do JSON, cria EnvironmentEntity
+     com o UUID pre-gerado pelo Kotlin (mesmo ID do geofence), salva via
+     EnvironmentRepository(db.environmentsDao). Geofence NAO registrado aqui —
+     ja feito pelo FloatingVoiceService.registerGeofence() no mesmo fluxo.
+   - _createTrigger(): busca ambiente por nome (exact match case-insensitive, depois
+     contains como fallback), cria TriggerEntity, salva via TriggerRepository(db.triggersDao).
+   - Ambas fecham SoproDatabase() no finally. AppLogger.log() para diagnostico.
+3. lib/main.dart: Workmanager().initialize(callbackDispatcher, isInDebugMode: kDebugMode)
+   adicionado apos WidgetsFlutterBinding.ensureInitialized(), antes do dotenv.load().
+4. FloatingVoiceService.kt — REMOVIDOS: writeEnvironmentToDb(), writeTriggerToDb().
+   ADICIONADO: scheduleVoiceAction(actionJson: String):
+   - Grava JSON em 'flutter.voice_pending_action' no arquivo FlutterSharedPreferences.
+   - Enfileira OneTimeWorkRequest.Builder(BackgroundWorker).setExpedited() via
+     WorkManager.enqueueUniqueWork('sopro_voice_action', ExistingWorkPolicy.REPLACE).
+   - Input data key: 'be.tramckrijte.workmanagerexample.dart_task' = 'voice_action'
+     (key legacy do plugin, mantida por compatibilidade em todas as versoes 0.5.x).
+   - executeVoiceResult() — 3 spots atualizados:
+     create_trigger: verifica existencia do ambiente via readEnvironmentNamesFromDb()
+       antes de agendar (feedback imediato ao usuario sem esperar o WorkManager).
+     create_environment (nome valido): gera UUID, chama scheduleVoiceAction() +
+       registerGeofence() com o mesmo UUID — garante ID consistente entre DB e geofence.
+     VAL_AWAITING_NAME: idem para segundo nome capturado por voz.
+   - NOVOS IMPORTS: androidx.work.Data/ExistingWorkPolicy/ListenableWorker/
+     OneTimeWorkRequest/OutOfQuotaPolicy/WorkManager.
+   - NOVAS CONSTANTES no companion: VOICE_ACTION_TASK, WM_DART_TASK_KEY.
+5. android/app/build.gradle: androidx.work:work-runtime-ktx:2.9.1 declarado
+   explicitamente — o compilador Kotlin nao resolve androidx.work.* apenas via
+   dependencia transitiva do plugin Flutter.
+
+COMPORTAMENTO ESPERADO APOS A MUDANCA:
+- Botao flutuante com app FECHADO: WorkManager executa em background, Drift salva
+  corretamente. Na proxima abertura do app, os streams Riverpod carregam os novos dados.
+- Botao flutuante com app ABERTO: WorkManager escreve via Drift em isolate separado.
+  Os streams watchAll() do app principal nao atualizam automaticamente (SQLite update
+  hook nao dispara entre isolates), mas a proxima navegacao/refresh exibe os dados.
+- Geofence: sempre registrado nativamente pelo FloatingVoiceService (sem dependencia
+  de MethodChannel no isolate WorkManager).
+
+- flutter analyze lib/: No issues found. flutter build apk --debug: success.
+- flutter build apk --release --split-per-abi: success (arm64-v8a 22.1 MB).
+
 ## STATUS ATUAL - Julho 2026
 
-### Problema em Aberto
+### Arquitetura do Floating Button — Estado Atual (2026-07-05)
 
-FloatingVoiceService escreve no SQLite diretamente (floating_env_created
-confirmado nos logs Supabase), mas o Drift no app Flutter nao ve os dados
-porque mantem uma conexao aberta em cache (WAL mode). O dado existe no
-arquivo .db mas nao aparece nos streams/queries do Drift enquanto o app
-esta rodando.
+| Componente                   | Status                        |
+|------------------------------|-------------------------------|
+| SpeechRecognizer (pt-BR)     | OK                            |
+| Gemini texto (NLU)           | OK — http 200                 |
+| Persistencia via Drift       | OK — WorkManager implementado |
+| Geofence nativo              | OK — registerGeofence() Kotlin|
+| Streams watchAll() em tempo real | Limitacao conhecida (ver abaixo) |
 
-### Proxima Solucao a Implementar
+### Limitacao Conhecida — Streams em Tempo Real
 
-Substituir escrita direta no SQLite por WorkManager que acorda o Flutter
-engine em background, executa o save via Drift (conexao correta, cache
-invalidado) e termina. Zero interacao do usuario necessaria.
+Dart streams Riverpod (watchAll()) no app principal NAO atualizam automaticamente
+quando o WorkManager worker escreve, porque o SQLite update hook nao dispara entre
+isolates Dart distintos. Os dados aparecem na proxima abertura do app ou navegacao
+que force um rebuild dos providers.
 
-### Arquitetura do Floating Button — Estado Atual (2026-07-04)
-
-| Componente                  | Status           |
-|-----------------------------|------------------|
-| SpeechRecognizer (pt-BR)    | OK               |
-| Gemini texto (NLU)          | OK — http 200    |
-| SQLite write direto         | OK — logs confirmam |
-| Drift ve os dados no app    | BUG ABERTO       |
-| Solucao pendente            | WorkManager      |
+Para uso tipico (botao flutuante com app fechado/minimizado), o comportamento e
+transparente ao usuario — os dados estao prontos quando o app abre.
 
 ### Mudancas Recentes (pos-V1, nao documentadas nos sprints anteriores)
 
 - sopro_database.dart: LazyDatabase com path explicito substitui
   driftDatabase(name:'sopro'). Persiste caminho em flutter.sopro_db_path
   nas SharedPreferences a cada abertura do banco.
-- FloatingVoiceService: writeEnvironmentToDb() e writeTriggerToDb() leem
-  o caminho do banco via SharedPreferences (flutter.sopro_db_path) em vez
-  de testar candidatos. findDbFile() mantido apenas para readEnvironmentNamesFromDb().
+- FloatingVoiceService: writeEnvironmentToDb() e writeTriggerToDb() REMOVIDOS.
+  scheduleVoiceAction() agenda WorkManager; findDbFile() mantido apenas para
+  readEnvironmentNamesFromDb() (prompt Gemini).
 - TransparentVoiceActivity e VoiceActionReceiver removidos completamente.
-  FloatingVoiceService escreve no SQLite direto sem startActivity.
 - SpeechRecognizer (Etapa12) substituiu AudioRecord + MediaRecorder + AMR.
   Zero arquivo de audio, zero base64 — transcript enviado ao Gemini como texto.
 - app_initializer.dart: forca criacao do banco (db.select(db.environments).get())
