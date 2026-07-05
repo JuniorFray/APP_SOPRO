@@ -749,7 +749,10 @@ Texto: $transcript
                 showToast("Criando '$envName'...")
                 serviceScope.launch(Dispatchers.IO) {
                     val loc = getLastLocationBlocking()
-                    val ok  = if (loc != null) writeEnvironmentToDb(envName, loc.latitude, loc.longitude, 100) else false
+                    val prefs = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
+                    val lat = loc?.latitude ?: prefs.getFloat("flutter.last_known_lat", 0f).toDouble()
+                    val lon = loc?.longitude ?: prefs.getFloat("flutter.last_known_lon", 0f).toDouble()
+                    val ok = if (lat != 0.0 && lon != 0.0) writeEnvironmentToDb(envName, lat, lon, 100) else false
                     withContext(Dispatchers.Main) {
                         if (ok) speak("Pronto! Ambiente $envName criado.")
                         else speak("Não consegui criar o ambiente.")
