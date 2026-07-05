@@ -647,6 +647,15 @@ Texto: $transcript
                 "transcript"      to transcript,
             ))
 
+            logToSupabase("floating_raw_response", mapOf(
+                "response_preview" to responseBody.take(500),
+                "response_length" to responseBody.length.toString()
+            ))
+
+            logToSupabase("floating_before_parse", mapOf(
+                "code" to code.toString()
+            ))
+
             if (code != 200) {
                 Log.d(TAG, "Gemini HTTP $code: ${responseBody.take(200)}")
                 FloatVoiceResult(null, null, null, null, transcript, error = "http_$code")
@@ -658,9 +667,19 @@ Texto: $transcript
                 "error" to (e.message ?: "unknown"),
                 "response_preview" to responseBody.take(200)
             ))
+            logToSupabase("floating_catch_error", mapOf(
+                "error_message" to (e.message ?: "null"),
+                "error_type" to e.javaClass.simpleName,
+                "stack_trace" to e.stackTrace.take(3).joinToString(" | ") { it.toString() }
+            ))
             Log.e(TAG, "Gemini request error: $e")
             FloatVoiceResult(null, null, null, null, transcript, error = e.message)
         }
+
+        logToSupabase("floating_before_main", mapOf(
+            "result_intent" to (result.intent ?: "null"),
+            "result_error" to (result.error ?: "null")
+        ))
 
         withContext(Dispatchers.Main) {
             logToSupabase("floating_main_thread", mapOf(
