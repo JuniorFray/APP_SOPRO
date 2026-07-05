@@ -663,6 +663,10 @@ Texto: $transcript
         }
 
         withContext(Dispatchers.Main) {
+            logToSupabase("floating_main_thread", mapOf(
+                "intent" to (result.intent ?: "null"),
+                "error" to (result.error ?: "none")
+            ))
             revertButtonAppearance()
             executeVoiceResult(result)
         }
