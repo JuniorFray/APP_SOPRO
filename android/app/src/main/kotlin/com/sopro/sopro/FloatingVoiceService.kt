@@ -680,7 +680,12 @@ Texto: $transcript
                 .getString("text")
                 .replace(Regex("```[a-zA-Z]*\\n?"), "").replace("```", "").trim()
 
-            val parsed = JSONObject(text)
+            val jsonStart = text.indexOf('{')
+            val jsonEnd = text.lastIndexOf('}')
+            val cleanJson = if (jsonStart >= 0 && jsonEnd > jsonStart)
+                text.substring(jsonStart, jsonEnd + 1)
+            else text
+            val parsed = JSONObject(cleanJson)
             val intent = parsed.optString("intent", "unknown")
 
             when (intent) {
