@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -11,6 +9,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/constants/strings.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../domain/entities/environment_entity.dart';
+import '../../../infrastructure/geocoding/geocoding_repository.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
@@ -60,6 +59,8 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   bool _recordingName   = false;
   // Timer de auto-stop para gravação de nome (7 s máximo)
   Timer? _nameRecordTimer;
+  // Debounce de 400 ms para evitar buscas a cada tecla digitada
+  Timer? _searchDebounce;
 
   // Estado da busca por endereço via Nominatim
   bool _searching = false;
@@ -107,6 +108,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   @override
   void dispose() {
     _nameRecordTimer?.cancel();
+    _searchDebounce?.cancel();
     ref.read(voiceServiceProvider).cancelRecording();
     _nameController.dispose();
     _radiusController.dispose();
@@ -287,12 +289,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                                   ),
                                   textInputAction: TextInputAction.search,
                                   onSubmitted: (_) => _searchAddress(),
-                                  onChanged: (v) {
-                                    // Limpa resultados ao apagar o campo
-                                    if (v.isEmpty && _searchResults.isNotEmpty) {
-                                      setState(() => _searchResults = []);
-                                    }
-                                  },
+                                  onChanged: _onSearchChanged,
                                 ),
                               ),
                               // Botão para limpar o campo
@@ -461,19 +458,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     });
   }
 
-  // Busca um endereço usando Photon como fonte primária e Nominatim como fallback.
-  //
-  // Fluxo:
-  //   1. Photon (photon.komoot.io) — gratuito, sem chave, melhor cobertura de
-  //      endereços brasileiros com número de porta.
-  //   2. Se Photon retornar vazio → Nominatim com busca estruturada (number+rua)
-  //      e depois busca livre (só logradouro) como última tentativa.
-  //
-  // Padrões de número reconhecidos para o fallback Nominatim:
-  //   "Rua X, 123"    — vírgula seguida de número (formato mais comum no BR)
-  //   "Rua X, nº 123" — com prefixo "nº" ou "n°"
-  //   "123 Rua X"     — número no início
-  //   "Rua X 123"     — número ao final sem vírgula
+  // Busca um endereço via GeocodingRepository (cascata: cache → Geocoder nativo → Photon).
   Future<void> _searchAddress() async {
     final query = _searchCtrl.text.trim();
     if (query.isEmpty) return;
@@ -483,50 +468,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     });
 
     try {
-      // ── Etapa 1: Photon — trata número de porta nativamente ───────────
-      List<_SearchResult> results = await _fetchPhoton(query);
-
-      // ── Etapa 2: Nominatim como fallback se Photon não encontrou nada ──
-      if (results.isEmpty) {
-        // Tenta extrair o número do logradouro para busca estruturada
-        String? houseNumber;
-        String  streetName = query;
-
-        // "Rua X, 123" ou "Rua X, nº 123"
-        final commaMatch =
-            RegExp(r'^(.+?),\s*(?:n[°º]?\s*)?(\d+)\s*$').firstMatch(query);
-        if (commaMatch != null) {
-          streetName  = commaMatch.group(1)!.trim();
-          houseNumber = commaMatch.group(2)!.trim();
-        } else {
-          // "123 Rua X"
-          final startMatch = RegExp(r'^(\d+)\s+(.+)$').firstMatch(query);
-          if (startMatch != null) {
-            houseNumber = startMatch.group(1)!.trim();
-            streetName  = startMatch.group(2)!.trim();
-          } else {
-            // "Rua X 123"
-            final endMatch = RegExp(r'^(.+?)\s+(\d+)\s*$').firstMatch(query);
-            if (endMatch != null) {
-              houseNumber = endMatch.group(2)!.trim();
-              streetName  = endMatch.group(1)!.trim();
-            }
-          }
-        }
-
-        // Nominatim busca estruturada com número (quando detectado)
-        if (houseNumber != null) {
-          results = await _fetchNominatim(
-            streetParam: '$houseNumber $streetName',
-          );
-        }
-
-        // Nominatim busca livre como última tentativa
-        if (results.isEmpty) {
-          results = await _fetchNominatim(queryParam: streetName);
-        }
-      }
-
+      final results = await _fetchGeocodingService(query);
       if (!mounted) return;
       setState(() => _searchResults = results);
     } catch (e) {
@@ -542,150 +484,31 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     }
   }
 
-  // Chama a API Photon (photon.komoot.io) — gratuita, sem chave de API.
-  //
-  // Retorna GeoJSON FeatureCollection. Cada feature tem:
-  //   geometry.coordinates = [longitude, latitude]  ← ordem GeoJSON (lon antes de lat)
-  //   properties = { name, street, housenumber, city, county, state, country, ... }
-  //
-  // Parâmetros usados:
-  //   lang=pt  — rótulos e nomes em português quando disponível
-  //   bbox=...  — bounding box do Brasil (lon_min, lat_min, lon_max, lat_max)
-  //              filtra resultados para o território nacional
-  //
-  // Retorna lista vazia se nenhum resultado útil foi encontrado ou em erro de rede.
-  Future<List<_SearchResult>> _fetchPhoton(String query) async {
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 10);
-
-    final uri = Uri.https('photon.komoot.io', '/api/', {
-      'q':     query,
-      'limit': '5',
-      // Brasil: longitude oeste=-73.9, latitude sul=-33.7,
-      //         longitude leste=-34.7, latitude norte=5.3
-      'bbox':  '-73.9,-33.7,-34.7,5.3',
-    });
-
-    final request = await client.getUrl(uri);
-    request.headers.set('User-Agent', 'Sopro/0.1 (Android)');
-
-    final response = await request.close();
-    final body     = await response.transform(utf8.decoder).join();
-    client.close();
-
-    final json     = jsonDecode(body) as Map<String, dynamic>;
-    final features =
-        (json['features'] as List? ?? []).cast<Map<String, dynamic>>();
-
-    return features
-        .map((f) {
-          final props  = f['properties'] as Map<String, dynamic>;
-          final coords =
-              (f['geometry'] as Map<String, dynamic>)['coordinates'] as List;
-
-          final label = _buildPhotonLabel(props);
-          if (label.isEmpty) return null; // descarta resultados sem nome útil
-
-          return _SearchResult(
-            displayName: label,
-            // GeoJSON: coordinates = [longitude, latitude] — ordem invertida
-            lat: (coords[1] as num).toDouble(),
-            lon: (coords[0] as num).toDouble(),
-          );
-        })
-        .whereType<_SearchResult>()
-        .toList();
-  }
-
-  // Monta o rótulo de exibição de um resultado Photon.
-  //
-  // Formato preferido: "Logradouro Número, Cidade"
-  //   Ex: "Rua Virgilio Furlan 1118, Maringá"
-  //
-  // Fallback para POIs/bairros sem rua: "Nome, Cidade"
-  //   Ex: "Parque Estadual da Cantareira, São Paulo"
-  //
-  // Hierarquia de cidade: city → county (microrregião) → state (UF)
-  String _buildPhotonLabel(Map<String, dynamic> props) {
-    final street      = (props['street']      as String?) ?? '';
-    final housenumber = (props['housenumber'] as String?) ?? '';
-    final city        = (props['city']    as String?)
-                     ?? (props['county']  as String?)
-                     ?? (props['state']   as String?)
-                     ?? '';
-    final name        = (props['name']        as String?) ?? '';
-
-    if (street.isNotEmpty) {
-      // Monta "Rua Virgilio Furlan 1118, Maringá"
-      final addrPart = housenumber.isNotEmpty
-          ? '$street $housenumber'
-          : street;
-      return city.isNotEmpty ? '$addrPart, $city' : addrPart;
-    }
-
-    if (name.isNotEmpty) {
-      return city.isNotEmpty ? '$name, $city' : name;
-    }
-
-    return city;
-  }
-
-  // Chama a API Nominatim com busca ESTRUTURADA ([streetParam]) ou LIVRE ([queryParam]).
-  //
-  // Usado somente como fallback quando Photon não retorna resultados.
-  //
-  // [streetParam] — "NÚMERO LOGRADOURO": Nominatim trata número e rua separadamente,
-  //   o que melhora a precisão em endereços numerados (ex: "1118 Rua Virgilio Furlan").
-  // [queryParam]  — busca livre sem número (ex: "Rua Virgilio Furlan").
-  //
-  // Parâmetros fixos: format=json, limit=5, addressdetails=1, countrycodes=br.
-  // Retorna lista vazia em caso de erro de rede.
-  Future<List<_SearchResult>> _fetchNominatim({
-    String? streetParam, // ex: "1118 Rua Virgilio Furlan"
-    String? queryParam,  // ex: "Rua Virgilio Furlan"
-  }) async {
-    assert(streetParam != null || queryParam != null,
-        '_fetchNominatim requer streetParam ou queryParam');
-
-    final params = <String, String>{
-      'format':          'json',
-      'limit':           '5',
-      'addressdetails':  '1',
-      'countrycodes':    'br',
-      'accept-language': 'pt-BR,pt',
-    };
-
-    if (streetParam != null) {
-      params['street'] = streetParam;
-    } else {
-      params['q'] = queryParam!;
-    }
-
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 10);
-
-    final request = await client.getUrl(
-      Uri.https('nominatim.openstreetmap.org', '/search', params),
-    );
-    // Nominatim exige User-Agent identificado — política de uso justo da API
-    request.headers.set(
-      'User-Agent',
-      'Sopro/0.1 (Android; github.com/JuniorFray/APP_SOPRO)',
-    );
-
-    final response = await request.close();
-    final body     = await response.transform(utf8.decoder).join();
-    client.close();
-
-    final raw = (jsonDecode(body) as List).cast<Map<String, dynamic>>();
-    return raw
+  // Delega a busca ao GeocodingRepository (cache → Geocoder nativo → Photon).
+  // Converte GeocodingResult para o tipo interno _SearchResult.
+  Future<List<_SearchResult>> _fetchGeocodingService(String query) async {
+    final repo = ref.read(geocodingRepositoryProvider);
+    final results = await repo.search(query);
+    return results
         .map((r) => _SearchResult(
-              displayName: r['display_name'] as String? ?? '',
-              lat: double.tryParse(r['lat'] as String? ?? '') ?? 0.0,
-              lon: double.tryParse(r['lon'] as String? ?? '') ?? 0.0,
+              displayName: r.displayName,
+              lat: r.lat,
+              lon: r.lon,
             ))
-        .where((r) => r.lat != 0.0 && r.lon != 0.0)
         .toList();
+  }
+
+  // Debounce de 400 ms: só dispara _searchAddress() após o usuário parar de digitar.
+  // Limpa os resultados imediatamente ao esvaziar o campo.
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    if (value.isEmpty && _searchResults.isNotEmpty) {
+      setState(() => _searchResults = []);
+      return;
+    }
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (value.length >= 3) _searchAddress();
+    });
   }
 
   // Seleciona um resultado da busca: move o mapa e posiciona o pin
