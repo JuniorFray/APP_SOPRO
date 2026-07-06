@@ -11,7 +11,7 @@ O app lembra o usuario de tarefas no momento e local exato em que sao relevantes
 |--------------|-------------------------------------------------------------|
 | Framework    | Flutter 3.x + Dart                                          |
 | State        | Riverpod 2.x                                                |
-| Banco local  | Drift + SQLite schemaVersion=4                              |
+| Banco local  | Drift + SQLite schemaVersion=5                              |
 | GPS          | FusedLocationProviderClient via MethodChannel               |
 | BLE Social   | MethodChannel + EventChannel nativos                        |
 | Voz (app)    | record ^5.1.2 (M4A) + flutter_tts ^3.6.3 (pt-BR)          |
@@ -106,8 +106,23 @@ return try {
 - Capitalizacao pt-BR em todos os nomes de ambiente salvos
 - Extracao de ambiente do transcript via regex quando Gemini retorna vazio
 
+## Status — Sprint F3-1 Concluida (Geocoding com Cache)
+
+- Cache SQLite tabela geocoding_cache (schemaV5, TTL 30 dias, migration v4->v5)
+- GeocodingCacheDao: findByKey (TTL-aware), saveAll, deleteExpired, buildEntry
+- Cascata: cache local -> Geocoder nativo Android -> Photon/OSM fallback
+- GeocodingPlatformInterface + GeocodingResult (iOS-ready, sem acoplamento de plataforma)
+- AndroidGeocodingService: normalizeKey, _parseNativeResult, _searchPhoton, _saveToCache
+- IOSGeocodingService stub (UnsupportedError, Fase 4)
+- PremiumGeocodingService stub (HERE/Google Places slot, zero custo)
+- GeocodingRepository com provider Riverpod
+- MethodChannel reverseGeocode adicionado ao MainActivity.kt
+- Menu benchmark geocoder removido das Configuracoes (tela inerte preservada)
+
 ## Proximos Passos — Fase 3
 
+- Sprint F3-2: Mapa Redesenhado — campo de busca com autocomplete usando geocoding F3-1
+- Sprint F3-3: Auto-Detect — paradas de 10 min via WorkManager (app fechado)
 - SQLCipher: banco cifrado via Android Keystore
 - Widget Android: ambiente ativo e gatilhos na home screen
 - iOS: Core Bluetooth, CoreLocation, UNUserNotificationCenter

@@ -329,6 +329,38 @@ class MainActivity : FlutterActivity() {
                             ))
                         }
                     }
+                    // Geocoding reverso: lat/lon → nome do local mais próximo
+                    "reverseGeocode" -> {
+                        val lat = call.argument<Double>("lat") ?: 0.0
+                        val lon = call.argument<Double>("lon") ?: 0.0
+                        try {
+                            @Suppress("DEPRECATION")
+                            val geocoder = android.location.Geocoder(
+                                this, java.util.Locale("pt", "BR"))
+                            val addresses = geocoder.getFromLocation(lat, lon, 1)
+                            if (!addresses.isNullOrEmpty()) {
+                                val addr = addresses[0]
+                                // Prefere featureName, cai para thoroughfare, bairro ou cidade
+                                val displayName = addr.featureName
+                                    ?: addr.thoroughfare
+                                    ?: addr.subLocality
+                                    ?: addr.locality
+                                    ?: "Local desconhecido"
+                                result.success(mapOf(
+                                    "found"            to true,
+                                    "display_name"     to displayName,
+                                    "returned_address" to (addr.getAddressLine(0) ?: ""),
+                                    "lat"              to lat,
+                                    "lon"              to lon
+                                ))
+                            } else {
+                                result.success(mapOf("found" to false))
+                            }
+                        } catch (e: Exception) {
+                            result.success(mapOf("found" to false))
+                        }
+                    }
+
                     else -> result.notImplemented()
                 }
             }

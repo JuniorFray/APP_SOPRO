@@ -9,10 +9,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'daos/ble_encounters_dao.dart';
 import 'daos/context_cards_dao.dart';
 import 'daos/environments_dao.dart';
+import 'daos/geocoding_cache_dao.dart';
 import 'daos/triggers_dao.dart';
 import 'tables/ble_encounters_table.dart';
 import 'tables/context_cards_table.dart';
 import 'tables/environments_table.dart';
+import 'tables/geocoding_cache_table.dart';
 import 'tables/triggers_table.dart';
 
 // Arquivo gerado automaticamente pelo build_runner — não editar manualmente.
@@ -37,18 +39,21 @@ part 'sopro_database.g.dart';
 //   v2 (Sprint 8): adição de role + company na tabela ContextCards
 //   v3 (Sprint 9): nova tabela BleEncounters — histórico de encontros BLE
 //   v4 (Sprint 13): adição de phone em ContextCards e BleEncounters
+//   v5 (Sprint F3-1): nova tabela GeocodingCache — cache de resultados de geocoding
 @DriftDatabase(
   tables: [
     Environments,
     Triggers,
     ContextCards,
     BleEncounters,
+    GeocodingCache,
   ],
   daos: [
     EnvironmentsDao,
     TriggersDao,
     ContextCardsDao,
     BleEncountersDao,
+    GeocodingCacheDao,
   ],
 )
 class SoproDatabase extends _$SoproDatabase {
@@ -58,7 +63,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -81,6 +86,10 @@ class SoproDatabase extends _$SoproDatabase {
             // Sprint 13: campo phone/WhatsApp no ContextCard e BleEncounters
             await m.addColumn(contextCards, contextCards.phone);
             await m.addColumn(bleEncounters, bleEncounters.phone);
+          }
+          if (from < 5) {
+            // Sprint F3-1: cache de resultados de geocoding (TTL 30 dias)
+            await m.createTable(geocodingCache);
           }
         },
       );
