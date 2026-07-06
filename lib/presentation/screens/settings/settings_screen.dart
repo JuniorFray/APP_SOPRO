@@ -9,6 +9,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/voice_providers.dart';
+import '../dev/geocoder_benchmark_screen.dart';
 import '../encounters/encounters_screen.dart';
 
 // Canal nativo para o FloatingVoiceService (botão flutuante de voz)
@@ -224,6 +225,32 @@ class SettingsScreen extends ConsumerWidget {
             value: AppStrings.settingsAppVersion,
           ),
 
+          const SizedBox(height: 32),
+
+          // DEV — remover após benchmark
+          const _Divider(),
+          const _SectionHeader(label: 'Desenvolvimento'),
+          ListTile(
+            leading: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: Colors.orange.withAlpha(40),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.science_outlined, color: Colors.orange, size: 20),
+            ),
+            title: const Text(
+              'Benchmark Geocoder',
+              style: TextStyle(color: Color(0xFFE0E0E0), fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+            subtitle: const Text(
+              'Teste de geocodificação nativa (500 endereços)',
+              style: TextStyle(color: Color(0xFF9E9E9E), fontSize: 12),
+            ),
+            trailing: const Icon(Icons.chevron_right, color: Color(0xFF616161)),
+            onTap: () => pushScreen(context, const GeocoderBenchmarkScreen()),
+          ),
           const SizedBox(height: 32),
         ],
       ),

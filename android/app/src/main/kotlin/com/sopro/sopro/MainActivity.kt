@@ -276,6 +276,62 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // ── Geocoder Benchmark Channel ────────────────────────────────────────
+        // Canal temporário para testar o Geocoder nativo do Android.
+        // Remove a entrada do menu após os testes — o código pode permanecer inerte.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.sopro.sopro/geocoder")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+
+                    // Busca um único endereço — retorna mapa com resultados
+                    "searchAddress" -> {
+                        val query = call.argument<String>("query") ?: ""
+                        val startTime = System.currentTimeMillis()
+                        try {
+                            @Suppress("DEPRECATION")
+                            val geocoder = android.location.Geocoder(
+                                this, java.util.Locale("pt", "BR"))
+                            val addresses = geocoder.getFromLocationName(query, 3)
+                            val duration = (System.currentTimeMillis() - startTime).toInt()
+
+                            if (!addresses.isNullOrEmpty()) {
+                                val addr = addresses[0]
+                                // Verifica se o resultado contém número de rua
+                                val hasNumber = !addr.subThoroughfare.isNullOrEmpty()
+                                result.success(mapOf(
+                                    "found"             to true,
+                                    "lat"               to addr.latitude,
+                                    "lon"               to addr.longitude,
+                                    "returned_address"  to (addr.getAddressLine(0) ?: ""),
+                                    "has_number"        to hasNumber,
+                                    "duration_ms"       to duration
+                                ))
+                            } else {
+                                result.success(mapOf(
+                                    "found"             to false,
+                                    "lat"               to 0.0,
+                                    "lon"               to 0.0,
+                                    "returned_address"  to "",
+                                    "has_number"        to false,
+                                    "duration_ms"       to duration
+                                ))
+                            }
+                        } catch (e: Exception) {
+                            val duration = (System.currentTimeMillis() - startTime).toInt()
+                            result.success(mapOf(
+                                "found"             to false,
+                                "lat"               to 0.0,
+                                "lon"               to 0.0,
+                                "returned_address"  to "",
+                                "has_number"        to false,
+                                "duration_ms"       to duration
+                            ))
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
     }
 
     // ═════════════════════════════════════════════════════════════════════════

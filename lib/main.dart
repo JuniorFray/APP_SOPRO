@@ -13,6 +13,7 @@ import 'core/navigation/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'infrastructure/background/background_service_manager.dart';
 import 'infrastructure/background/voice_action_worker.dart';
+import 'presentation/screens/dev/geocoder_benchmark_screen.dart';
 import 'presentation/screens/environment/environment_loader_screen.dart';
 import 'presentation/screens/home/home_screen.dart';
 import 'presentation/screens/onboarding/onboarding_screen.dart';
@@ -68,6 +69,7 @@ class SoproApp extends ConsumerWidget {
         '/onboarding': (_) => const OnboardingScreen(),
         '/profile':    (_) => const ProfileScreen(),
         '/settings':   (_) => const SettingsScreen(),
+        '/benchmark':  (_) => const GeocoderBenchmarkScreen(),
 
         // Rota de deep-link para notificações de trigger.
         // O argumento é o ID do ambiente (String); a tela carrega a entidade
