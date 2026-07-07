@@ -239,6 +239,17 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
           .whereType<GeocodingResult>()
           .toList();
 
+      AppLogger.log('photon_result', {
+        'query':          query,
+        'status':         response.statusCode,
+        'features_raw':   features.length,
+        'results_parsed': results.length,
+        'first_raw':      features.isNotEmpty
+            ? ((features[0] as Map?)?['properties']?['name'] ?? 'sem nome')
+            : 'nenhum',
+        'first_parsed':   results.isNotEmpty ? results.first.displayName : 'nenhum',
+      });
+
       if (results.isNotEmpty) {
         await _saveToCache(results, key);
       }
