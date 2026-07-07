@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import '../logging/app_logger.dart';
-
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -31,10 +29,17 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   Future<List<GeocodingResult>> search(String query) async {
     final key = _normalizeKey(query);
 
-    // Camada 1: cache local
+    // Camada 1: cache local (apenas resultados com qualidade suficiente)
     final cached = await _cacheDao.findByKey(key);
-    if (cached.isNotEmpty) {
-      return cached
+    final qualityCached = cached.where((row) =>
+        _isQualityResult(GeocodingResult(
+          displayName: row.displayName,
+          lat: row.lat,
+          lon: row.lon,
+          source: row.source,
+        ))).toList();
+    if (qualityCached.isNotEmpty) {
+      return qualityCached
           .map((row) => GeocodingResult(
                 displayName: row.displayName,
                 lat: row.lat,
@@ -49,11 +54,10 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     final prefs   = await SharedPreferences.getInstance();
     final userLat = await _readCoord(prefs, 'last_known_lat');
     final userLon = await _readCoord(prefs, 'last_known_lon');
-    AppLogger.log('geocoding_debug', {
-      'userLat': userLat,
-      'userLon': userLon,
-      'query': query,
-    });
+    // Estabelecimentos (sem palavra de rua ou número) vão direto ao Photon
+    if (_looksLikeEstablishment(query)) {
+      return _searchPhoton(query, key, userLat: userLat, userLon: userLon);
+    }
 
     // Camada 2: Geocoder nativo Android com bounding box do usuário
     try {
@@ -84,13 +88,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
             .toList();
         final qualityResults = results.where(_isQualityResult).toList();
         if (qualityResults.isNotEmpty) {
-          AppLogger.log('native_geocoder_result', {
-            'query': query,
-            'count': qualityResults.length,
-            'first': qualityResults.first.displayName,
-            'lat':   qualityResults.first.lat,
-            'lon':   qualityResults.first.lon,
-          });
           await _saveToCache(qualityResults, key);
           return qualityResults;
         }
@@ -159,6 +156,17 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     return 0.0;
   }
 
+  // Queries sem palavra de rua e sem número são tratadas como estabelecimento —
+  // o Photon (OSM) é mais preciso que o Geocoder nativo para esses casos
+  bool _looksLikeEstablishment(String query) {
+    final q = query.toLowerCase();
+    const streetWords = ['rua', 'av.', 'avenida', 'travessa',
+                         'alameda', 'estrada', 'rodovia', 'praca'];
+    final hasStreetWord = streetWords.any((w) => q.contains(w));
+    final hasNumber     = RegExp(r'\d+').hasMatch(q);
+    return !hasStreetWord && !hasNumber;
+  }
+
   // Rejeita resultados que contêm apenas cidade/estado/país sem rua ou estabelecimento
   bool _isQualityResult(GeocodingResult r) {
     final d = r.displayName.toLowerCase();
@@ -218,14 +226,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
 
       final json = jsonDecode(body) as Map<String, dynamic>;
       final features = json['features'] as List<dynamic>? ?? [];
-      AppLogger.log('photon_debug', {
-        'clean_query': query.trim(),
-        'status': response.statusCode,
-        'features_count': features.length,
-        'first_result': features.isNotEmpty
-            ? (features[0] as Map?)?['properties']?['name'] ?? ''
-            : 'nenhum',
-      });
 
       final results = features
           .map((f) => _parsePhotonFeature(f as Map<String, dynamic>))
