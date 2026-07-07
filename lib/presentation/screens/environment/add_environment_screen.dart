@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/strings.dart';
@@ -102,6 +103,19 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _mapController.move(widget.initialPosition!, 15.0);
       });
+    } else {
+      // Modo criação sem posição pré-definida: centraliza no último GPS salvo
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          final lat = prefs.getDouble('flutter.last_known_lat') ?? 0.0;
+          final lon = prefs.getDouble('flutter.last_known_lon') ?? 0.0;
+          if (lat != 0.0 && lon != 0.0) {
+            if (mounted) _mapController.move(LatLng(lat, lon), 14.0);
+          }
+        } catch (_) {}
+      });
     }
   }
 
@@ -197,6 +211,120 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
               ),
             ),
 
+            // Campo de busca por endereço + lista de resultados (fora do mapa)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Material(
+                    elevation: 2,
+                    borderRadius: BorderRadius.circular(8),
+                    color: AppTheme.backgroundElevated,
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 10),
+                        _searching
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppTheme.accent,
+                                ),
+                              )
+                            : const Icon(
+                                Icons.search,
+                                color: AppTheme.textSecondary,
+                                size: 18,
+                              ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: TextField(
+                            controller: _searchCtrl,
+                            style: const TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontSize: 13,
+                            ),
+                            decoration: const InputDecoration(
+                              hintText: AppStrings.searchAddressHint,
+                              hintStyle: TextStyle(
+                                color: AppTheme.textDisabled,
+                                fontSize: 13,
+                              ),
+                              border: InputBorder.none,
+                              contentPadding:
+                                  EdgeInsets.symmetric(vertical: 10),
+                            ),
+                            textInputAction: TextInputAction.search,
+                            onSubmitted: (_) => _searchAddress(),
+                            onChanged: _onSearchChanged,
+                          ),
+                        ),
+                        if (_searchCtrl.text.isNotEmpty)
+                          GestureDetector(
+                            onTap: () => setState(() {
+                              _searchCtrl.clear();
+                              _searchResults = [];
+                            }),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 8),
+                              child: Icon(
+                                Icons.clear,
+                                size: 16,
+                                color: AppTheme.textDisabled,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (_searchResults.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(top: 2),
+                      decoration: BoxDecoration(
+                        color: AppTheme.backgroundSurface,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: _searchResults.take(4).map((r) {
+                          return ListTile(
+                            dense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 0,
+                            ),
+                            leading: const Icon(
+                              Icons.location_on_outlined,
+                              color: AppTheme.accent,
+                              size: 18,
+                            ),
+                            title: Text(
+                              r.displayName,
+                              style: const TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: 12,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () => _selectResult(r),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
             // Mapa interativo (ocupa a maior parte da tela)
             Expanded(
               child: Stack(
@@ -236,127 +364,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                           ],
                         ),
                     ],
-                  ),
-
-                  // ── Barra de busca por endereço (Nominatim) ─────────────────
-                  // Posicionada no topo do mapa, à esquerda do botão de GPS
-                  Positioned(
-                    top: 8,
-                    left: 8,
-                    right: 60, // espaço para o botão GPS
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Campo de busca
-                        Material(
-                          elevation: 4,
-                          borderRadius: BorderRadius.circular(8),
-                          color: AppTheme.backgroundElevated,
-                          child: Row(
-                            children: [
-                              const SizedBox(width: 10),
-                              _searching
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: AppTheme.accent,
-                                      ),
-                                    )
-                                  : const Icon(
-                                      Icons.search,
-                                      color: AppTheme.textSecondary,
-                                      size: 18,
-                                    ),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: TextField(
-                                  controller: _searchCtrl,
-                                  style: const TextStyle(
-                                    color: AppTheme.textPrimary,
-                                    fontSize: 13,
-                                  ),
-                                  decoration: const InputDecoration(
-                                    hintText: AppStrings.searchAddressHint,
-                                    hintStyle: TextStyle(
-                                      color: AppTheme.textDisabled,
-                                      fontSize: 13,
-                                    ),
-                                    border: InputBorder.none,
-                                    contentPadding:
-                                        EdgeInsets.symmetric(vertical: 10),
-                                  ),
-                                  textInputAction: TextInputAction.search,
-                                  onSubmitted: (_) => _searchAddress(),
-                                  onChanged: _onSearchChanged,
-                                ),
-                              ),
-                              // Botão para limpar o campo
-                              if (_searchCtrl.text.isNotEmpty)
-                                GestureDetector(
-                                  onTap: () => setState(() {
-                                    _searchCtrl.clear();
-                                    _searchResults = [];
-                                  }),
-                                  child: const Padding(
-                                    padding: EdgeInsets.symmetric(horizontal: 8),
-                                    child: Icon(
-                                      Icons.clear,
-                                      size: 16,
-                                      color: AppTheme.textDisabled,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-
-                        // Lista de resultados da busca
-                        if (_searchResults.isNotEmpty)
-                          Container(
-                            margin: const EdgeInsets.only(top: 2),
-                            decoration: BoxDecoration(
-                              color: AppTheme.backgroundSurface,
-                              borderRadius: BorderRadius.circular(8),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Colors.black26,
-                                  blurRadius: 4,
-                                  offset: Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: _searchResults.take(4).map((r) {
-                                return ListTile(
-                                  dense: true,
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 0,
-                                  ),
-                                  leading: const Icon(
-                                    Icons.location_on_outlined,
-                                    color: AppTheme.accent,
-                                    size: 18,
-                                  ),
-                                  title: Text(
-                                    r.displayName,
-                                    style: const TextStyle(
-                                      color: AppTheme.textPrimary,
-                                      fontSize: 12,
-                                    ),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  onTap: () => _selectResult(r),
-                                );
-                              }).toList(),
-                            ),
-                          ),
-                      ],
-                    ),
                   ),
 
                   // Instrução exibida enquanto nenhum ponto está selecionado
@@ -485,10 +492,13 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   }
 
   // Delega a busca ao GeocodingRepository (cache → Geocoder nativo → Photon).
+  // Queries de estabelecimento (1 palavra, sem número) são enriquecidas com
+  // contexto de localização via reverse geocoding para melhorar a precisão.
   // Converte GeocodingResult para o tipo interno _SearchResult.
   Future<List<_SearchResult>> _fetchGeocodingService(String query) async {
     final repo = ref.read(geocodingRepositoryProvider);
-    final results = await repo.search(query);
+    final enrichedQuery = await _enrichQueryWithLocation(query, repo);
+    final results = await repo.search(enrichedQuery);
     return results
         .map((r) => _SearchResult(
               displayName: r.displayName,
@@ -496,6 +506,32 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
               lon: r.lon,
             ))
         .toList();
+  }
+
+  // Enriquece queries curtas de estabelecimento (< 2 palavras, sem dígito)
+  // com o nome do local obtido via reverse geocoding da última posição GPS.
+  // Exemplo: "farmacia" → "farmacia, Santos" se o GPS indicar Santos.
+  // Retorna a query original se GPS indisponível ou query já for específica.
+  Future<String> _enrichQueryWithLocation(
+      String query, GeocodingRepository repo) async {
+    final words = query.trim().split(RegExp(r'\s+'));
+    final hasDigit = RegExp(r'\d').hasMatch(query);
+    if (words.length >= 2 || hasDigit) return query;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lat = prefs.getDouble('flutter.last_known_lat') ?? 0.0;
+      final lon = prefs.getDouble('flutter.last_known_lon') ?? 0.0;
+      if (lat == 0.0 && lon == 0.0) return query;
+
+      final location = await repo.reverse(lat, lon);
+      if (location == null || location.displayName == 'Local desconhecido') {
+        return query;
+      }
+      return '$query, ${location.displayName}';
+    } catch (_) {
+      return query;
+    }
   }
 
   // Debounce de 400 ms: só dispara _searchAddress() após o usuário parar de digitar.
