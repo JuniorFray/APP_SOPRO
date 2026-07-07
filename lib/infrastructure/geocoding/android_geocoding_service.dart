@@ -46,12 +46,13 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
           .toList();
     }
 
+    // Lê localização do usuário antes do try — necessário no fallback Photon também
+    final prefs   = await SharedPreferences.getInstance();
+    final userLat = prefs.getDouble('last_known_lat') ?? 0.0;
+    final userLon = prefs.getDouble('last_known_lon') ?? 0.0;
+
     // Camada 2: Geocoder nativo Android com bounding box do usuário
     try {
-      final prefs  = await SharedPreferences.getInstance();
-      final userLat = prefs.getDouble('last_known_lat') ?? 0.0;
-      final userLon = prefs.getDouble('last_known_lon') ?? 0.0;
-
       final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
           'searchAddress', {
             'query':   query,
@@ -87,7 +88,7 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     }
 
     // Camada 3: Photon fallback
-    return _searchPhoton(query, key);
+    return _searchPhoton(query, key, userLat: userLat, userLon: userLon);
   }
 
   // ── Reverse geocoding ─────────────────────────────────────────────────────
@@ -156,11 +157,15 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   }
 
   // Chama a API Photon (OSM) com bounding box do Brasil
-  Future<List<GeocodingResult>> _searchPhoton(String query, String key) async {
+  Future<List<GeocodingResult>> _searchPhoton(String query, String key,
+      {double userLat = 0.0, double userLon = 0.0}) async {
     try {
       final encodedQuery = Uri.encodeComponent(query);
+      final locationParam = (userLat != 0.0 && userLon != 0.0)
+          ? '&lat=$userLat&lon=$userLon'
+          : '';
       final uri = Uri.parse(
-          'https://photon.komoot.io/api/?q=$encodedQuery&limit=5&$_photonBbox');
+          'https://photon.komoot.io/api/?q=$encodedQuery&limit=5$locationParam&$_photonBbox');
 
       final client = HttpClient();
       client.connectionTimeout = const Duration(seconds: 8);
