@@ -200,6 +200,14 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
 
       final json = jsonDecode(body) as Map<String, dynamic>;
       final features = json['features'] as List<dynamic>? ?? [];
+      AppLogger.log('photon_debug', {
+        'clean_query': query.trim(),
+        'status': response.statusCode,
+        'features_count': features.length,
+        'first_result': features.isNotEmpty
+            ? (features[0] as Map?)?['properties']?['name'] ?? ''
+            : 'nenhum',
+      });
 
       final results = features
           .map((f) => _parsePhotonFeature(f as Map<String, dynamic>))
