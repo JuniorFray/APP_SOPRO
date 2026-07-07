@@ -226,7 +226,14 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       request.headers.set('Accept', 'application/json');
       final response = await request.close();
 
-      if (response.statusCode != 200) return [];
+      if (response.statusCode != 200) {
+        AppLogger.log('photon_http_error', {
+          'query':  query,
+          'status': response.statusCode,
+          'uri':    uri.toString(),
+        });
+        return [];
+      }
 
       final body = await response.transform(const Utf8Decoder()).join();
       client.close();
