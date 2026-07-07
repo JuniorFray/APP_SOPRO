@@ -1331,8 +1331,8 @@ Texto: $transcript""".trimIndent()
             // Persiste última localização válida — usada como fallback quando GPS retorna null
             if (location != null) {
                 getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
-                    .putFloat("flutter.last_known_lat", location.latitude.toFloat())
-                    .putFloat("flutter.last_known_lon", location.longitude.toFloat())
+                    .putLong("flutter.last_known_lat", java.lang.Double.doubleToRawLongBits(location.latitude))
+                    .putLong("flutter.last_known_lon", java.lang.Double.doubleToRawLongBits(location.longitude))
                     .apply()
             }
             location
