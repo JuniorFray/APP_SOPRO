@@ -50,8 +50,8 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
 
     // Lê localização do usuário antes do try — necessário no fallback Photon também
     final prefs   = await SharedPreferences.getInstance();
-    final userLat = prefs.getDouble('last_known_lat') ?? 0.0;
-    final userLon = prefs.getDouble('last_known_lon') ?? 0.0;
+    final userLat = await _readCoord(prefs, 'last_known_lat');
+    final userLon = await _readCoord(prefs, 'last_known_lon');
     AppLogger.log('geocoding_debug', {
       'userLat': userLat,
       'userLon': userLon,
@@ -144,6 +144,15 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+
+  // Lê coordenada com fallback: Double → String → 0.0
+  Future<double> _readCoord(SharedPreferences prefs, String key) async {
+    final d = prefs.getDouble(key);
+    if (d != null && d != 0.0) return d;
+    final s = prefs.getString(key);
+    if (s != null) return double.tryParse(s) ?? 0.0;
+    return 0.0;
+  }
 
   // Normaliza a chave de cache: lowercase + remove acentos + trim
   String _normalizeKey(String query) => query

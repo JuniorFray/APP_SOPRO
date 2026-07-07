@@ -120,6 +120,14 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
           }
         } catch (_) {}
       });
+      // Atualiza SharedPreferences com GPS fresco para garantir coords corretas na busca
+      ref.read(nativeLocationServiceProvider).getCurrentPosition().then((pos) async {
+        if (pos != null) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setDouble('last_known_lat', pos.latitude);
+          await prefs.setDouble('last_known_lon', pos.longitude);
+        }
+      }).catchError((_) {});
     }
   }
 
