@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../data/database/daos/geocoding_cache_dao.dart';
@@ -45,15 +46,40 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
           .toList();
     }
 
-    // Camada 2: Geocoder nativo Android
+    // Camada 2: Geocoder nativo Android com bounding box do usuário
     try {
+      final prefs  = await SharedPreferences.getInstance();
+      final userLat = prefs.getDouble('last_known_lat') ?? 0.0;
+      final userLon = prefs.getDouble('last_known_lon') ?? 0.0;
+
       final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
-          'searchAddress', {'query': query});
-      if (raw != null) {
-        final result = _parseNativeResult(raw);
-        if (result != null) {
-          await _saveToCache([result], key);
-          return [result];
+          'searchAddress', {
+            'query':   query,
+            'userLat': userLat,
+            'userLon': userLon,
+          });
+      if (raw != null && raw['found'] == true) {
+        final rawList = raw['results'] as List<Object?>? ?? [];
+        final results = rawList
+            .whereType<Map<Object?, Object?>>()
+            .map((item) {
+              final address = item['returned_address'] as String? ?? '';
+              final name    = item['name']  as String? ?? '';
+              final city    = item['city']  as String? ?? '';
+              final state   = item['state'] as String? ?? '';
+              return GeocodingResult(
+                displayName: _buildDisplayName(address, name, city, state),
+                lat:       (item['lat'] as num?)?.toDouble() ?? 0.0,
+                lon:       (item['lon'] as num?)?.toDouble() ?? 0.0,
+                source:    'geocoder_native',
+                hasNumber: item['has_number'] as bool? ?? false,
+              );
+            })
+            .where((r) => r.displayName.isNotEmpty && r.lat != 0.0)
+            .toList();
+        if (results.isNotEmpty) {
+          await _saveToCache(results, key);
+          return results;
         }
       }
     } catch (_) {
@@ -122,25 +148,11 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       .replaceAll(RegExp(r'[úùûü]'), 'u')
       .replaceAll(RegExp(r'[ç]'), 'c');
 
-  // Converte resposta do MethodChannel 'searchAddress' em GeocodingResult
-  GeocodingResult? _parseNativeResult(Map<Object?, Object?> raw) {
-    final found = raw['found'] as bool? ?? false;
-    if (!found) return null;
-
-    final lat = (raw['lat'] as num?)?.toDouble() ?? 0.0;
-    final lon = (raw['lon'] as num?)?.toDouble() ?? 0.0;
-    final address = raw['returned_address'] as String? ?? '';
-    final hasNumber = raw['has_number'] as bool? ?? false;
-
-    if (address.isEmpty) return null;
-
-    return GeocodingResult(
-      displayName: address,
-      lat: lat,
-      lon: lon,
-      source: 'geocoder_native',
-      hasNumber: hasNumber,
-    );
+  // Monta o displayName preferindo o endereço completo; fallback para partes disponíveis
+  String _buildDisplayName(
+      String address, String name, String city, String state) {
+    if (address.isNotEmpty) return address;
+    return [name, city, state].where((s) => s.isNotEmpty).join(', ');
   }
 
   // Chama a API Photon (OSM) com bounding box do Brasil

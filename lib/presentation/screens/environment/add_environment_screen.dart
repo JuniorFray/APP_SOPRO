@@ -50,7 +50,8 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameController;
   late final TextEditingController _radiusController;
-  final _searchCtrl = TextEditingController(); // campo de busca por endereço
+  final _searchCtrl       = TextEditingController(); // campo de busca por endereço
+  final _searchFocusNode  = FocusNode();             // isola foco do campo de busca
 
   // Ponto selecionado pelo usuário no mapa; null enquanto nenhum foi tocado
   LatLng? _selectedPoint;
@@ -104,15 +105,18 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
         if (mounted) _mapController.move(widget.initialPosition!, 15.0);
       });
     } else {
-      // Modo criação sem posição pré-definida: centraliza no último GPS salvo
+      // Modo criação sem posição pré-definida: centraliza e pina no último GPS salvo.
+      // Chave sem prefixo "flutter." — o plugin Dart já remove o prefixo automaticamente.
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
         try {
           final prefs = await SharedPreferences.getInstance();
-          final lat = prefs.getDouble('flutter.last_known_lat') ?? 0.0;
-          final lon = prefs.getDouble('flutter.last_known_lon') ?? 0.0;
-          if (lat != 0.0 && lon != 0.0) {
-            if (mounted) _mapController.move(LatLng(lat, lon), 14.0);
+          final lat = prefs.getDouble('last_known_lat') ?? 0.0;
+          final lon = prefs.getDouble('last_known_lon') ?? 0.0;
+          if (lat != 0.0 && lon != 0.0 && mounted) {
+            final pos = LatLng(lat, lon);
+            setState(() => _selectedPoint = pos);
+            _mapController.move(pos, 15.0);
           }
         } catch (_) {}
       });
@@ -127,6 +131,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     _nameController.dispose();
     _radiusController.dispose();
     _searchCtrl.dispose();
+    _searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -242,6 +247,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                         Expanded(
                           child: TextField(
                             controller: _searchCtrl,
+                            focusNode: _searchFocusNode,
                             style: const TextStyle(
                               color: AppTheme.textPrimary,
                               fontSize: 13,
@@ -520,8 +526,8 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final lat = prefs.getDouble('flutter.last_known_lat') ?? 0.0;
-      final lon = prefs.getDouble('flutter.last_known_lon') ?? 0.0;
+      final lat = prefs.getDouble('last_known_lat') ?? 0.0;
+      final lon = prefs.getDouble('last_known_lon') ?? 0.0;
       if (lat == 0.0 && lon == 0.0) return query;
 
       final location = await repo.reverse(lat, lon);

@@ -284,48 +284,60 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
 
-                    // Busca um único endereço — retorna mapa com resultados
+                    // Busca até 5 endereços com bounding box opcional centrada no usuário (~55 km)
                     "searchAddress" -> {
-                        val query = call.argument<String>("query") ?: ""
+                        val query   = call.argument<String>("query")  ?: ""
+                        val userLat = call.argument<Double>("userLat") ?: 0.0
+                        val userLon = call.argument<Double>("userLon") ?: 0.0
                         val startTime = System.currentTimeMillis()
                         try {
                             @Suppress("DEPRECATION")
                             val geocoder = android.location.Geocoder(
                                 this, java.util.Locale("pt", "BR"))
-                            val addresses = geocoder.getFromLocationName(query, 3)
+
+                            // delta ~0.5° ≈ 55 km; limita resultados à região do usuário
+                            val delta = 0.5
+                            val addresses = if (userLat != 0.0 && userLon != 0.0) {
+                                geocoder.getFromLocationName(
+                                    query, 5,
+                                    userLat - delta, userLon - delta,
+                                    userLat + delta, userLon + delta
+                                )
+                            } else {
+                                geocoder.getFromLocationName(query, 5)
+                            }
+
                             val duration = (System.currentTimeMillis() - startTime).toInt()
 
                             if (!addresses.isNullOrEmpty()) {
-                                val addr = addresses[0]
-                                // Verifica se o resultado contém número de rua
-                                val hasNumber = !addr.subThoroughfare.isNullOrEmpty()
+                                val resultList = addresses.map { addr ->
+                                    mapOf(
+                                        "lat"              to addr.latitude,
+                                        "lon"              to addr.longitude,
+                                        "returned_address" to (addr.getAddressLine(0) ?: ""),
+                                        "has_number"       to (!addr.subThoroughfare.isNullOrEmpty()),
+                                        "name"             to (addr.featureName ?: ""),
+                                        "city"             to (addr.locality ?: addr.subAdminArea ?: ""),
+                                        "state"            to (addr.adminArea ?: "")
+                                    )
+                                }
                                 result.success(mapOf(
-                                    "found"             to true,
-                                    "lat"               to addr.latitude,
-                                    "lon"               to addr.longitude,
-                                    "returned_address"  to (addr.getAddressLine(0) ?: ""),
-                                    "has_number"        to hasNumber,
-                                    "duration_ms"       to duration
+                                    "found"       to true,
+                                    "results"     to resultList,
+                                    "duration_ms" to duration
                                 ))
                             } else {
                                 result.success(mapOf(
-                                    "found"             to false,
-                                    "lat"               to 0.0,
-                                    "lon"               to 0.0,
-                                    "returned_address"  to "",
-                                    "has_number"        to false,
-                                    "duration_ms"       to duration
+                                    "found"       to false,
+                                    "results"     to emptyList<Map<String, Any>>(),
+                                    "duration_ms" to duration
                                 ))
                             }
                         } catch (e: Exception) {
-                            val duration = (System.currentTimeMillis() - startTime).toInt()
                             result.success(mapOf(
-                                "found"             to false,
-                                "lat"               to 0.0,
-                                "lon"               to 0.0,
-                                "returned_address"  to "",
-                                "has_number"        to false,
-                                "duration_ms"       to duration
+                                "found"       to false,
+                                "results"     to emptyList<Map<String, Any>>(),
+                                "duration_ms" to 0
                             ))
                         }
                     }
