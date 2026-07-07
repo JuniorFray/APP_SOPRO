@@ -523,30 +523,11 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
         .toList();
   }
 
-  // Enriquece queries curtas de estabelecimento (< 2 palavras, sem dígito)
-  // com o nome do local obtido via reverse geocoding da última posição GPS.
-  // Exemplo: "farmacia" → "farmacia, Santos" se o GPS indicar Santos.
-  // Retorna a query original se GPS indisponível ou query já for específica.
+  // O Photon já usa lat/lon como bias de proximidade.
+  // Enriquecimento causava encoding corrompido e sufixos incorretos.
   Future<String> _enrichQueryWithLocation(
       String query, GeocodingRepository repo) async {
-    final words = query.trim().split(RegExp(r'\s+'));
-    final hasDigit = RegExp(r'\d').hasMatch(query);
-    if (words.length >= 2 || hasDigit) return query;
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final lat = prefs.getDouble('last_known_lat') ?? 0.0;
-      final lon = prefs.getDouble('last_known_lon') ?? 0.0;
-      if (lat == 0.0 && lon == 0.0) return query;
-
-      final location = await repo.reverse(lat, lon);
-      if (location == null || location.displayName == 'Local desconhecido') {
-        return query;
-      }
-      return '$query, ${location.displayName}';
-    } catch (_) {
-      return query;
-    }
+    return query;
   }
 
   // Debounce de 400 ms: só dispara _searchAddress() após o usuário parar de digitar.
