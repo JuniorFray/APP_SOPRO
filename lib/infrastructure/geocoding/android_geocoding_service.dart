@@ -21,9 +21,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   static const _channel = MethodChannel('com.sopro.sopro/geocoder');
   static const _uuid = Uuid();
 
-  // Bounding box aproximada do Brasil para o Photon (reduz resultados irrelevantes)
-  static const _photonBbox = 'bbox=-73.9,-33.7,-34.7,5.3';
-
   final GeocodingCacheDao _cacheDao;
 
   AndroidGeocodingService(this._cacheDao);
@@ -176,12 +173,18 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   Future<List<GeocodingResult>> _searchPhoton(String query, String key,
       {double userLat = 0.0, double userLon = 0.0}) async {
     try {
-      final encodedQuery = Uri.encodeComponent(query);
-      final locationParam = (userLat != 0.0 && userLon != 0.0)
-          ? '&lat=$userLat&lon=$userLon'
-          : '';
-      final uri = Uri.parse(
-          'https://photon.komoot.io/api/?q=$encodedQuery&limit=5$locationParam&$_photonBbox');
+      // Remove sufixos numéricos do debounce (ex: ", 52") e monta URL com encoding correto
+      final cleanQuery = query.replaceAll(RegExp(r'\s*,\s*\d+\s*$'), '').trim();
+      final params = <String, String>{
+        'q':     cleanQuery,
+        'limit': '5',
+        'bbox':  '-73.9,-33.7,-34.7,5.3',
+      };
+      if (userLat != 0.0 && userLon != 0.0) {
+        params['lat'] = userLat.toString();
+        params['lon'] = userLon.toString();
+      }
+      final uri = Uri.https('photon.komoot.io', '/api/', params);
 
       final client = HttpClient();
       client.connectionTimeout = const Duration(seconds: 8);
