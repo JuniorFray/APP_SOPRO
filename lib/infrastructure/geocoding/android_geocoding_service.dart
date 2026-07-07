@@ -83,6 +83,13 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
             .where((r) => r.displayName.isNotEmpty && r.lat != 0.0)
             .toList();
         if (results.isNotEmpty) {
+          AppLogger.log('native_geocoder_result', {
+            'query': query,
+            'count': results.length,
+            'first': results.first.displayName,
+            'lat':   results.first.lat,
+            'lon':   results.first.lon,
+          });
           await _saveToCache(results, key);
           return results;
         }
