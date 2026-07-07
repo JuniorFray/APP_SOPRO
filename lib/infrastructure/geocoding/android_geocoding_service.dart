@@ -82,16 +82,17 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
             })
             .where((r) => r.displayName.isNotEmpty && r.lat != 0.0)
             .toList();
-        if (results.isNotEmpty) {
+        final qualityResults = results.where(_isQualityResult).toList();
+        if (qualityResults.isNotEmpty) {
           AppLogger.log('native_geocoder_result', {
             'query': query,
-            'count': results.length,
-            'first': results.first.displayName,
-            'lat':   results.first.lat,
-            'lon':   results.first.lon,
+            'count': qualityResults.length,
+            'first': qualityResults.first.displayName,
+            'lat':   qualityResults.first.lat,
+            'lon':   qualityResults.first.lon,
           });
-          await _saveToCache(results, key);
-          return results;
+          await _saveToCache(qualityResults, key);
+          return qualityResults;
         }
       }
     } catch (_) {
@@ -156,6 +157,16 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     final s = prefs.getString(key);
     if (s != null) return double.tryParse(s) ?? 0.0;
     return 0.0;
+  }
+
+  // Rejeita resultados que contêm apenas cidade/estado/país sem rua ou estabelecimento
+  bool _isQualityResult(GeocodingResult r) {
+    final d = r.displayName.toLowerCase();
+    final cityOnlyPatterns = [
+      RegExp(r'^[^,]+,\s*(SP|RJ|MG|RS|PR|SC|BA|CE|PE|GO|AM|PA|MT|MS|DF|ES|MA|PB|PI|RN|AL|SE|RO|AC|AP|RR|TO)\s*,?\s*brasil\s*$', caseSensitive: false),
+      RegExp(r'^[^,]+,\s*(SP|RJ|MG|RS|PR|SC|BA|CE|PE|GO|AM|PA|MT|MS|DF|ES|MA|PB|PI|RN|AL|SE|RO|AC|AP|RR|TO)\s*,?\s*(brasil)?\s*$', caseSensitive: false),
+    ];
+    return !cityOnlyPatterns.any((p) => p.hasMatch(d));
   }
 
   // Normaliza a chave de cache: lowercase + remove acentos + trim
