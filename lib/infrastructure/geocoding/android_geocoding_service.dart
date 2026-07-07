@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../logging/app_logger.dart';
+
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -50,6 +52,11 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     final prefs   = await SharedPreferences.getInstance();
     final userLat = prefs.getDouble('last_known_lat') ?? 0.0;
     final userLon = prefs.getDouble('last_known_lon') ?? 0.0;
+    AppLogger.log('geocoding_debug', {
+      'userLat': userLat,
+      'userLon': userLon,
+      'query': query,
+    });
 
     // Camada 2: Geocoder nativo Android com bounding box do usuário
     try {
