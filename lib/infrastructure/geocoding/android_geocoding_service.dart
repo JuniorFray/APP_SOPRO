@@ -255,7 +255,11 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       }
 
       return results;
-    } catch (_) {
+    } catch (e) {
+      AppLogger.log('photon_error', {
+        'query': query,
+        'error': e.toString(),
+      });
       return [];
     }
   }
