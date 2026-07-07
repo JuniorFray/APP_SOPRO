@@ -513,6 +513,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     final repo = ref.read(geocodingRepositoryProvider);
     final enrichedQuery = await _enrichQueryWithLocation(query, repo);
     final results = await repo.search(enrichedQuery);
+    debugPrint('[GeocodingScreen] query=$query enriched=$enrichedQuery results=${results.length}');
     return results
         .map((r) => _SearchResult(
               displayName: r.displayName,

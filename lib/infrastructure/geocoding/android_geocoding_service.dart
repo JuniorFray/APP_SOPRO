@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+
+import '../logging/app_logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -198,6 +200,11 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // Chama a API Photon (OSM) com bounding box do Brasil
   Future<List<GeocodingResult>> _searchPhoton(String query, String key,
       {double userLat = 0.0, double userLon = 0.0}) async {
+    AppLogger.log('photon_called', {
+      'query':   query,
+      'userLat': userLat,
+      'userLon': userLon,
+    });
     try {
       // Remove sufixos numéricos do debounce (ex: ", 52") e monta URL com encoding correto
       final cleanQuery = query.replaceAll(RegExp(r'\s*,\s*\d+\s*$'), '').trim();
