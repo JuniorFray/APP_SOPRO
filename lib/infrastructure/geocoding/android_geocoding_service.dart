@@ -224,6 +224,7 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
 
       final request = await client.getUrl(uri);
       request.headers.set('Accept', 'application/json');
+      request.headers.set('User-Agent', 'Sopro/1.0 (Android; komoot-photon-client)');
       final response = await request.close();
 
       if (response.statusCode != 200) {
