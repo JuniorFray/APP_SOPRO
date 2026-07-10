@@ -1,5 +1,5 @@
 import '../repositories/i_trigger_repository.dart';
-import '../../infrastructure/logging/app_logger.dart';
+import '../../infrastructure/logging/core/logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
 
 // Caso de uso: dado um Environment ao qual o usuário acabou de entrar,
@@ -62,11 +62,11 @@ class FireTriggersUseCase {
       final lastFired = _triggerLastFired[trigger.id];
       if (lastFired != null &&
           DateTime.now().difference(lastFired).inSeconds < _debounceSecs) {
-        AppLogger.log('duplicate_trigger_blocked', {
+        Logger.debug('duplicate_trigger_blocked', payload: {
           'trigger_id':         trigger.id,
           'environment_id':     environmentId,
           'seconds_since_last': DateTime.now().difference(lastFired).inSeconds,
-        });
+        }, feature: 'notification', action: 'debounce');
         continue;
       }
       _triggerLastFired[trigger.id] = DateTime.now();
@@ -74,13 +74,13 @@ class FireTriggersUseCase {
       // Loga a intenção de disparar — confirmação de que o use case chegou aqui.
       // Se trigger_fired aparece no Supabase mas notification_displayed não,
       // o problema está em showTrigger() → flutter_local_notifications → Android.
-      AppLogger.log('trigger_fired', {
+      Logger.info('trigger_fired', payload: {
         'environment_id':   environmentId,
         'environment_name': environmentName,
         'trigger_id':       trigger.id,
         'trigger_title':    trigger.title,
         'with_sound':       withSound,
-      });
+      }, feature: 'notification', action: 'fire');
 
       try {
         await _notifications.showTrigger(
@@ -99,18 +99,16 @@ class FireTriggersUseCase {
         // Loga apenas se show() completou sem exceção — indica que a API Android
         // recebeu a notificação. Se este evento não aparece no Supabase, o problema
         // está no flutter_local_notifications (plugin crash, permissão revogada, etc.).
-        AppLogger.log('notification_displayed', {
+        Logger.info('notification_displayed', payload: {
           'trigger_id':     trigger.id,
           'trigger_title':  trigger.title,
           'environment_id': environmentId,
           'with_sound':     withSound,
-        });
-      } catch (e) {
-        // Loga falha de exibição — ajuda a identificar exceções do plugin/canal
-        AppLogger.log('notification_error', {
+        }, feature: 'notification', action: 'display');
+      } catch (e, st) {
+        Logger.error('notification_error', payload: {
           'trigger_id': trigger.id,
-          'error':      e.toString(),
-        });
+        }, exception: e, stackTrace: st, feature: 'notification', action: 'display_failed');
       }
     }
   }

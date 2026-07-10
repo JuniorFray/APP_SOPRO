@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 
 import '../../domain/entities/environment_entity.dart';
-import '../logging/app_logger.dart';
+import '../logging/core/logger.dart';
 
 // Wrapper Dart para o MethodChannel "com.sopro.sopro/native_geofence".
 // Delega o monitoramento de geofences ao GeofencingClient do Android —
@@ -23,10 +23,10 @@ class NativeGeofenceService {
       radiusMeters: env.radiusMeters,
       name:         env.name,
     );
-    AppLogger.log('native_geofence_added', {
+    Logger.debug('native_geofence_added', payload: {
       'env_id':   env.id,
       'env_name': env.name,
-    });
+    }, feature: 'geofence', action: 'add_single');
   }
 
   // Registra um geofence circular permanente no GeofencingClient.

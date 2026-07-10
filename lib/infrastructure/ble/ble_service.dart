@@ -7,7 +7,8 @@ import 'package:flutter/services.dart';
 
 import '../../core/constants/strings.dart';
 import '../../domain/entities/context_card_entity.dart';
-import '../logging/app_logger.dart';
+import '../logging/core/correlation_manager.dart';
+import '../logging/core/logger.dart';
 import 'discovered_sopro_user.dart';
 
 // BleService gerencia toda a comunicação BLE do Sopro 100% via canais nativos.
@@ -99,6 +100,8 @@ class BleService {
   Future<void> startScan() async {
     if (_scanSub != null) return;
 
+    final correlationId = CorrelationManager.beginOperation('ble_scan');
+
     _devices.clear();
     _macToStableId.clear();
     _emitDevices();
@@ -106,9 +109,12 @@ class BleService {
 
     _scanSub = _bleScanChannel.receiveBroadcastStream().listen(
       _onScanResult,
-      onError: (Object e) {
+      onError: (Object e, StackTrace st) {
         debugPrint('[BleService] Scan error: $e');
-        AppLogger.log('ble_error', {'type': 'scan_error', 'error': e.toString()});
+        Logger.error('ble_scan_error', payload: {'error': e.toString()},
+            exception: e, stackTrace: st,
+            feature: 'ble', action: 'scan',
+            correlationId: correlationId);
       },
     );
   }
@@ -118,6 +124,7 @@ class BleService {
     _expiryTimer = null;
     await _scanSub?.cancel();
     _scanSub = null;
+    CorrelationManager.endOperation('ble_scan');
   }
 
   // Remove entradas não vistas há mais de _ttl a cada _expiryCheckInterval.
@@ -187,7 +194,14 @@ class BleService {
     _fetchingCards.add(stableId);
     fetchContextCard(dev)
         .then((_) => _fetchingCards.remove(stableId))
-        .onError((_, __) => _fetchingCards.remove(stableId));
+        .onError<Object>((e, st) {
+      Logger.warn('ble_card_refresh_failed',
+          payload: {'stable_id': stableId},
+          exception: e, stackTrace: st,
+          feature: 'ble', action: 'card_refresh',
+          correlationId: CorrelationManager.correlationIdFor('ble_scan'));
+      return _fetchingCards.remove(stableId);
+    });
   }
 
   // Emite lista atual com debounce de 500 ms para evitar rebuilds em burst de scan.
@@ -225,8 +239,12 @@ class BleService {
       return await _bleChannel.invokeMethod<bool>(
               'startAdvertising', {'cardJson': payload, 'txPower': txPower}) ??
           false;
-    } on PlatformException catch (e) {
+    } on PlatformException catch (e, st) {
       debugPrint('[BleService] startAdvertising falhou: ${e.message}');
+      Logger.warn('ble_advertising_start_failed',
+          payload: {'error': e.message},
+          exception: e, stackTrace: st,
+          feature: 'ble', action: 'advertising_start');
       return false;
     }
   }
@@ -234,8 +252,12 @@ class BleService {
   Future<void> stopAdvertising() async {
     try {
       await _bleChannel.invokeMethod<void>('stopAdvertising');
-    } on PlatformException catch (e) {
+    } on PlatformException catch (e, st) {
       debugPrint('[BleService] stopAdvertising falhou: ${e.message}');
+      Logger.warn('ble_advertising_stop_failed',
+          payload: {'error': e.message},
+          exception: e, stackTrace: st,
+          feature: 'ble', action: 'advertising_stop');
     }
   }
 
@@ -249,6 +271,7 @@ class BleService {
   Future<DiscoveredSoproUser> fetchContextCard(DiscoveredSoproUser user) async {
     const retryDelays = [Duration(milliseconds: 600), Duration(milliseconds: 1200)];
     PlatformException? lastError;
+    final sw = Stopwatch()..start();
 
     for (var attempt = 0; attempt <= retryDelays.length; attempt++) {
       if (attempt > 0) {
@@ -262,12 +285,17 @@ class BleService {
         );
         if (cardJson == null || cardJson.isEmpty) return user;
 
-        // Proteção contra payload JSON inválido — descarta silenciosamente
+        // Proteção contra payload JSON inválido — descarta e retorna usuário sem card
         final dynamic raw;
         try {
           raw = jsonDecode(cardJson);
-        } catch (_) {
+        } catch (e, st) {
           debugPrint('[BleService] fetchContextCard payload JSON inválido (${user.deviceId})');
+          Logger.warn('ble_card_json_invalid',
+              payload: {'device_id': user.deviceId},
+              exception: e, stackTrace: st,
+              feature: 'ble', action: 'gatt_parse',
+              correlationId: CorrelationManager.correlationIdFor('ble_scan'));
           return user;
         }
         if (raw is! Map) return user;
@@ -291,10 +319,12 @@ class BleService {
         );
 
         if (attempt > 0) {
-          AppLogger.log('ble_retry_success', {
+          Logger.info('ble_retry_success', payload: {
             'device_id': user.deviceId,
             'attempt':   attempt + 1,
-          });
+          }, feature: 'ble', action: 'gatt_retry',
+              correlationId: CorrelationManager.correlationIdFor('ble_scan'),
+              durationMs: sw.elapsedMilliseconds);
         }
 
         // Re-indexa de MAC → card.id e lida com MAC rotation
@@ -308,11 +338,13 @@ class BleService {
     }
 
     debugPrint('[BleService] fetchContextCard falhou após ${retryDelays.length + 1} tentativas (${user.deviceId}): ${lastError?.message}');
-    AppLogger.log('ble_error', {
-      'type':      'gatt_error',
+    Logger.error('ble_gatt_error', payload: {
       'device_id': user.deviceId,
       'message':   lastError?.message ?? 'unknown',
-    });
+      'attempts':  retryDelays.length + 1,
+    }, exception: lastError, feature: 'ble', action: 'gatt_read',
+        correlationId: CorrelationManager.correlationIdFor('ble_scan'),
+        durationMs: sw.elapsedMilliseconds);
     return user;
   }
 

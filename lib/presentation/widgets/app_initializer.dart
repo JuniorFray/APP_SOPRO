@@ -9,6 +9,7 @@ import '../../core/constants/app_constants.dart';
 import '../../core/navigation/app_router.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
+import '../../infrastructure/logging/core/logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
 import '../providers/database_provider.dart';
 import '../providers/location_providers.dart';
@@ -80,7 +81,9 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     try {
       final db = ref.read(databaseProvider);
       await db.select(db.environments).get();
-    } catch (_) {}
+    } catch (e, st) {
+      Logger.debug('db_warmup_failed', exception: e, stackTrace: st, feature: 'init', action: 'db_warmup');
+    }
 
     // 5. Detecção de SharedPreferences obsoletas (OEM Auto Backup).
     //
@@ -127,12 +130,12 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
         ref.read(notificationSoundProvider.notifier).state = true;
         ref.read(notificationCooldownMinutesProvider.notifier).state = 0;
 
-        AppLogger.log('stale_prefs_reset', {
+        Logger.warn('stale_prefs_reset', payload: {
           'reason': 'onboarding_done=true but database is empty and no first_use_date',
-        });
+        }, feature: 'init', action: 'stale_prefs_reset');
         // Não continua o _init() — HomeScreen detectará onboarding_done=false
         // e redirecionará para o OnboardingScreen normalmente.
-        AppLogger.log('app_start');
+        Logger.info('app_start', feature: 'init', action: 'startup');
         return;
       }
     }
@@ -209,13 +212,13 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
           // Permissão foi revogada → desativa nas prefs sem atualizar o toggle
           await prefs.setBool('floating_voice_enabled', false);
         }
-      } catch (_) {
-        // Canal ainda não disponível no startup — ignorar
+      } catch (e, st) {
+        Logger.debug('overlay_channel_unavailable', exception: e, stackTrace: st, feature: 'init', action: 'overlay_start');
       }
     }
 
     // 8. Loga a inicialização do app após tudo estar configurado
-    AppLogger.log('app_start');
+    Logger.info('app_start', feature: 'init', action: 'startup');
   }
 
   // Navega para a tela do ambiente identificado por [environmentId].

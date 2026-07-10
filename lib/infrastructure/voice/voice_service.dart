@@ -10,7 +10,8 @@ import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sopro/core/constants/app_constants.dart';
-import 'package:sopro/infrastructure/logging/app_logger.dart';
+import 'package:sopro/infrastructure/logging/core/correlation_manager.dart';
+import 'package:sopro/infrastructure/logging/core/logger.dart';
 
 // Intenções de voz que o app sabe executar.
 // Schemas Gemini correspondentes: ver AppConstants.geminiSystemPrompt.
@@ -179,7 +180,9 @@ class VoiceService {
       });
 
       return true;
-    } catch (e) {
+    } catch (e, st) {
+      Logger.error('voice_record_start_failed',
+          exception: e, stackTrace: st, feature: 'voice', action: 'record_start');
       debugPrint('[VoiceService] Erro ao iniciar gravação: $e');
       return false;
     }
@@ -209,7 +212,9 @@ class VoiceService {
     _cancelAutoStopTimers(); // cancela antes de parar (evita race condition)
     try {
       return await _recorder.stop();
-    } catch (e) {
+    } catch (e, st) {
+      Logger.warn('voice_record_stop_failed',
+          exception: e, stackTrace: st, feature: 'voice', action: 'record_stop');
       debugPrint('[VoiceService] Erro ao parar gravação: $e');
       return null;
     }
@@ -220,7 +225,9 @@ class VoiceService {
     _cancelAutoStopTimers();
     try {
       await _recorder.cancel();
-    } catch (e) {
+    } catch (e, st) {
+      Logger.warn('voice_record_cancel_failed',
+          exception: e, stackTrace: st, feature: 'voice', action: 'record_cancel');
       debugPrint('[VoiceService] Erro ao cancelar gravação: $e');
     }
   }
@@ -240,20 +247,24 @@ class VoiceService {
     List<String> existingEnvironments = const [],
   }) async {
     final file = File(filePath);
+    final correlationId = CorrelationManager.beginOperation('voice');
 
-    // Mapa de diagnóstico logado no Supabase ao final.
+    // Mapa de diagnóstico logado ao final.
     final debug = <String, dynamic>{
-      'audio_size_bytes': 0,
-      'model_used':       AppConstants.geminiModel,
-      'gemini_http':      null,
-      'gemini_raw':       null,
-      'gemini_error':     null,
-      'final_intent':     null,
+      'audio_size_bytes':   0,
+      'model_used':         AppConstants.geminiModel,
+      'gemini_http':        null,
+      'gemini_raw':         null,
+      'gemini_error':       null,
+      'gemini_duration_ms': null,
+      'final_intent':       null,
     };
 
     if (!await file.exists()) {
       debug['gemini_error'] = 'file_not_found';
-      AppLogger.log('voice_debug', debug);
+      Logger.warn('voice_debug', payload: debug,
+          feature: 'voice', action: 'process_audio', correlationId: correlationId);
+      CorrelationManager.endOperation('voice');
       return const VoiceResult(intent: VoiceIntent.fallback, transcript: '');
     }
 
@@ -263,8 +274,10 @@ class VoiceService {
 
     if (audioBytes.isEmpty) {
       debug['gemini_error'] = 'empty_audio_file';
-      AppLogger.log('voice_debug', debug);
+      Logger.warn('voice_debug', payload: debug,
+          feature: 'voice', action: 'process_audio', correlationId: correlationId);
       debugPrint('[VoiceService] Arquivo de áudio vazio — falha na gravação');
+      CorrelationManager.endOperation('voice');
       return const VoiceResult(intent: VoiceIntent.fallback, transcript: '');
     }
 
@@ -273,16 +286,24 @@ class VoiceService {
     VoiceResult? geminiResult;
 
     if (AppConstants.geminiApiKey.isNotEmpty) {
+      final geminiSw = Stopwatch()..start();
       try {
         final (result, raw, httpStatus) = await _sendAudioToGemini(
           audioBase64,
           existingEnvironments: existingEnvironments,
         );
-        geminiResult        = result;
-        debug['gemini_raw'] = raw;
-        debug['gemini_http']= httpStatus;
-      } catch (e) {
-        debug['gemini_error'] = e.toString();
+        geminiResult                   = result;
+        debug['gemini_raw']            = raw;
+        debug['gemini_http']           = httpStatus;
+        debug['gemini_duration_ms']    = geminiSw.elapsedMilliseconds;
+      } catch (e, st) {
+        debug['gemini_error']       = e.toString();
+        debug['gemini_duration_ms'] = geminiSw.elapsedMilliseconds;
+        Logger.error('voice_gemini_failed',
+            exception: e, stackTrace: st,
+            feature: 'voice', action: 'gemini_audio',
+            correlationId: correlationId,
+            durationMs: geminiSw.elapsedMilliseconds);
         debugPrint('[VoiceService] Gemini Audio erro: $e');
       }
     } else {
@@ -293,9 +314,12 @@ class VoiceService {
         const VoiceResult(intent: VoiceIntent.fallback, transcript: '');
 
     debug['final_intent'] = finalResult.intent.name;
-    AppLogger.log('voice_debug', debug);
+    Logger.info('voice_debug', payload: debug,
+        feature: 'voice', action: 'process_audio', correlationId: correlationId,
+        durationMs: debug['gemini_duration_ms'] as int?);
     debugPrint('[VoiceService] voice_debug: $debug');
 
+    CorrelationManager.endOperation('voice');
     return finalResult;
   }
 
@@ -476,7 +500,10 @@ class VoiceService {
     final Map<String, dynamic> parsed;
     try {
       parsed = jsonDecode(clean) as Map<String, dynamic>;
-    } catch (_) {
+    } catch (e, st) {
+      Logger.warn('gemini_json_invalid',
+          payload: {'preview': clean.length > 200 ? clean.substring(0, 200) : clean},
+          exception: e, stackTrace: st, feature: 'voice', action: 'gemini_parse');
       debugPrint('[VoiceService] JSON inválido: $clean');
       return (null, 'invalid_json: $clean', status);
     }

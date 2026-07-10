@@ -6,7 +6,8 @@ import 'package:latlong2/latlong.dart';
 import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/usecases/fire_triggers_use_case.dart';
 import '../location/native_location_service.dart';
-import '../logging/app_logger.dart';
+import '../logging/core/correlation_manager.dart';
+import '../logging/core/logger.dart';
 import 'native_geofence_service.dart';
 
 // Monitora a posição do usuário e dispara triggers quando ele entra num ambiente.
@@ -54,10 +55,18 @@ class GeofenceManager {
 
   /// Verifica/solicita permissão, registra geofences nativos e assina o GPS stream.
   Future<void> start() async {
+    final correlationId = CorrelationManager.beginOperation('geofence');
+
     bool ok = await _locationService.checkPermission();
     if (!ok) ok = await _locationService.requestPermission();
 
     if (!ok) {
+      Logger.warn(
+        'geofence_permission_denied',
+        feature: 'geofence',
+        action: 'start',
+        correlationId: correlationId,
+      );
       debugPrint('[GeofenceManager] Permissão de localização não concedida — monitoramento não iniciado.');
       return;
     }
@@ -73,6 +82,7 @@ class GeofenceManager {
     final envs = await _envRepo.getAll();
     var registeredCount = 0;
     for (final env in envs) {
+      final sw = Stopwatch()..start();
       try {
         await _nativeGeofence.addGeofence(
           id:           env.id,
@@ -82,25 +92,52 @@ class GeofenceManager {
           name:         env.name,
         );
         registeredCount++;
-      } catch (e) {
-        // Falha silenciosa: o GPS stream continua monitorando mesmo sem o geofence nativo
+      } catch (e, st) {
+        Logger.warn(
+          'native_geofence_register_failed',
+          payload: {
+            'env_id':     env.id,
+            'env_name':   env.name,
+            'error':      e.toString(),
+          },
+          exception:     e,
+          stackTrace:    st,
+          feature:       'geofence',
+          action:        'register',
+          correlationId: correlationId,
+          durationMs:    sw.elapsedMilliseconds,
+        );
         debugPrint('[GeofenceManager] Falha ao registrar geofence nativo ${env.id}: $e');
       }
     }
 
-    // Log de diagnóstico: confirma quantos geofences foram registrados no Android.
-    // Se count < total, significa que alguns ambientes não serão detectados com o app morto.
-    AppLogger.log('native_geofence_registered', {
-      'count': registeredCount,
-      'total': envs.length,
-    });
+    // Se count < total, alguns ambientes não serão detectados com o app morto.
+    Logger.info(
+      'native_geofence_registered',
+      payload: {
+        'count': registeredCount,
+        'total': envs.length,
+      },
+      feature:       'geofence',
+      action:        'register',
+      correlationId: correlationId,
+    );
     debugPrint('[GeofenceManager] $registeredCount/${envs.length} geofence(s) nativo(s) registrado(s).');
 
     // ── GPS stream (triggers completos quando app está vivo) ───────────────
     _sub = _locationService.getPositionStream().listen(
       _onPosition,
-      onError: (Object e) =>
-          debugPrint('[GeofenceManager] Erro no stream: $e'),
+      onError: (Object e, StackTrace st) {
+        Logger.error(
+          'geofence_stream_error',
+          exception:     e,
+          stackTrace:    st,
+          feature:       'geofence',
+          action:        'gps_stream',
+          correlationId: CorrelationManager.correlationIdFor('geofence'),
+        );
+        debugPrint('[GeofenceManager] Erro no stream: $e');
+      },
     );
 
     _running = true;
@@ -113,6 +150,7 @@ class GeofenceManager {
     _sub = null;
     _inside.clear();
     _running = false;
+    CorrelationManager.endOperation('geofence');
     debugPrint('[GeofenceManager] Monitoramento parado.');
   }
 
@@ -141,20 +179,32 @@ class GeofenceManager {
 
       if (isNowInside && !wasInside) {
         _inside.add(env.id);
-        AppLogger.log('geofence_enter', {
-          'environment_id':   env.id,
-          'environment_name': env.name,
-          'distance_m':       meters.toStringAsFixed(1),
-          'accuracy_m':       pos.accuracy.toStringAsFixed(1),
-        });
+        Logger.info(
+          'geofence_enter',
+          payload: {
+            'environment_id':   env.id,
+            'environment_name': env.name,
+            'distance_m':       meters.toStringAsFixed(1),
+            'accuracy_m':       pos.accuracy.toStringAsFixed(1),
+          },
+          feature:       'geofence',
+          action:        'enter',
+          correlationId: CorrelationManager.correlationIdFor('geofence'),
+        );
         // Dispara as notificações dos triggers ativos do ambiente
         await _fireTriggers(env.id, env.name);
       } else if (!isNowInside && wasInside) {
         _inside.remove(env.id);
-        AppLogger.log('geofence_exit', {
-          'environment_id':   env.id,
-          'environment_name': env.name,
-        });
+        Logger.info(
+          'geofence_exit',
+          payload: {
+            'environment_id':   env.id,
+            'environment_name': env.name,
+          },
+          feature:       'geofence',
+          action:        'exit',
+          correlationId: CorrelationManager.correlationIdFor('geofence'),
+        );
       }
     }
   }

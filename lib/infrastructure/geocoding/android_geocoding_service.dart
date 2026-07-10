@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 
-import '../logging/app_logger.dart';
+import '../logging/core/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -94,8 +94,10 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
           return qualityResults;
         }
       }
-    } catch (_) {
+    } catch (e, st) {
       // Geocoder indisponível (emulador sem Google Play) — cai para Photon
+      Logger.debug('geocoder_native_failed', payload: {'query': query},
+          exception: e, stackTrace: st, feature: 'geocoding', action: 'native');
     }
 
     // Camada 3: Photon fallback
@@ -142,7 +144,10 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
           return result;
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      Logger.debug('geocoder_reverse_failed',
+          exception: e, stackTrace: st, feature: 'geocoding', action: 'reverse');
+    }
 
     return null;
   }
@@ -200,11 +205,9 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // Chama a API Photon (OSM) com bounding box do Brasil
   Future<List<GeocodingResult>> _searchPhoton(String query, String key,
       {double userLat = 0.0, double userLon = 0.0}) async {
-    AppLogger.log('photon_called', {
-      'query':   query,
-      'userLat': userLat,
-      'userLon': userLon,
-    });
+    Logger.debug('photon_called', payload: {'query': query},
+        feature: 'geocoding', action: 'photon_start');
+    final sw = Stopwatch()..start();
     try {
       // Remove sufixos numéricos do debounce (ex: ", 52") e monta URL com encoding correto
       final cleanQuery = query.replaceAll(RegExp(r'\s*,\s*\d+\s*$'), '').trim();
@@ -228,11 +231,10 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       final response = await request.close();
 
       if (response.statusCode != 200) {
-        AppLogger.log('photon_http_error', {
+        Logger.warn('photon_http_error', payload: {
           'query':  query,
           'status': response.statusCode,
-          'uri':    uri.toString(),
-        });
+        }, feature: 'geocoding', action: 'photon_http', durationMs: sw.elapsedMilliseconds);
         return [];
       }
 
@@ -247,27 +249,23 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
           .whereType<GeocodingResult>()
           .toList();
 
-      AppLogger.log('photon_result', {
+      Logger.debug('photon_result', payload: {
         'query':          query,
-        'status':         response.statusCode,
         'features_raw':   features.length,
         'results_parsed': results.length,
-        'first_raw':      features.isNotEmpty
-            ? ((features[0] as Map?)?['properties']?['name'] ?? 'sem nome')
-            : 'nenhum',
         'first_parsed':   results.isNotEmpty ? results.first.displayName : 'nenhum',
-      });
+      }, feature: 'geocoding', action: 'photon_parse', durationMs: sw.elapsedMilliseconds);
 
       if (results.isNotEmpty) {
         await _saveToCache(results, key);
       }
 
       return results;
-    } catch (e) {
-      AppLogger.log('photon_error', {
-        'query': query,
-        'error': e.toString(),
-      });
+    } catch (e, st) {
+      Logger.error('photon_error', payload: {'query': query},
+          exception: e, stackTrace: st,
+          feature: 'geocoding', action: 'photon_call',
+          durationMs: sw.elapsedMilliseconds);
       return [];
     }
   }
@@ -309,7 +307,9 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
         source: 'photon',
         hasNumber: housen.isNotEmpty,
       );
-    } catch (_) {
+    } catch (e, st) {
+      Logger.debug('photon_feature_parse_failed',
+          exception: e, stackTrace: st, feature: 'geocoding', action: 'photon_parse');
       return null;
     }
   }
