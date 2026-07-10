@@ -7,11 +7,14 @@ import android.content.Context
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.os.Build
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingEvent
+import com.sopro.sopro.logging.CorrelationManager
+import com.sopro.sopro.logging.Logger
+import com.sopro.sopro.logging.LoggerConfiguration
+import com.sopro.sopro.logging.SessionManager
 import java.io.File
 
 // BroadcastReceiver ativado pelo sistema Android quando o dispositivo entra
@@ -43,14 +46,67 @@ class GeofenceReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        SessionManager.init(context)
+        val receiverStart = System.currentTimeMillis()
+        val corrId = CorrelationManager.beginOperation("geofence_event")
+
+        Logger.debug("broadcast_received", feature = "geofence", action = "onReceive",
+            correlationId = corrId)
+
         // ── 1. Valida o evento ──────────────────────────────────────────────────
-        val event = GeofencingEvent.fromIntent(intent) ?: return
-        if (event.hasError()) {
-            Log.e(TAG, "GeofencingEvent com erro: ${event.errorCode}")
+        val event = GeofencingEvent.fromIntent(intent)
+        if (event == null) {
+            Logger.warn("geofencing_event_null", feature = "geofence", action = "onReceive",
+                correlationId = corrId,
+                durationMs = System.currentTimeMillis() - receiverStart)
+            CorrelationManager.endOperation("geofence_event")
             return
         }
+
+        if (event.hasError()) {
+            Logger.error("geofencing_event_error", feature = "geofence", action = "onReceive",
+                correlationId = corrId,
+                payload = mapOf("error_code" to event.errorCode.toString()),
+                durationMs = System.currentTimeMillis() - receiverStart)
+            CorrelationManager.endOperation("geofence_event")
+            return
+        }
+
+        Logger.debug("geofencing_event_created", feature = "geofence", action = "onReceive",
+            correlationId = corrId)
+
         // Só processa ENTER — saída não gera notificação
-        if (event.geofenceTransition != Geofence.GEOFENCE_TRANSITION_ENTER) return
+        val transition = event.geofenceTransition
+        if (transition != Geofence.GEOFENCE_TRANSITION_ENTER) {
+            val transitionName = when (transition) {
+                Geofence.GEOFENCE_TRANSITION_EXIT  -> "EXIT"
+                Geofence.GEOFENCE_TRANSITION_DWELL -> "DWELL"
+                else -> "UNKNOWN($transition)"
+            }
+            Logger.debug("geofence_transition_skipped", feature = "geofence", action = "onReceive",
+                correlationId = corrId,
+                payload = mapOf("transition" to transitionName),
+                durationMs = System.currentTimeMillis() - receiverStart)
+            CorrelationManager.endOperation("geofence_event")
+            return
+        }
+
+        val geofences = event.triggeringGeofences
+        val geofenceCount = geofences?.size ?: 0
+        Logger.info("geofence_transition_enter", feature = "geofence", action = "onReceive",
+            correlationId = corrId,
+            payload = if (LoggerConfiguration.debugLogging)
+                mapOf("geofence_count" to geofenceCount.toString(),
+                    "request_ids" to (geofences?.map { it.requestId }?.toString() ?: "[]"))
+            else mapOf("geofence_count" to geofenceCount.toString()))
+
+        if (geofences.isNullOrEmpty()) {
+            Logger.warn("geofencing_no_triggers", feature = "geofence", action = "onReceive",
+                correlationId = corrId,
+                durationMs = System.currentTimeMillis() - receiverStart)
+            CorrelationManager.endOperation("geofence_event")
+            return
+        }
 
         // ── 2. Verifica permissão de notificação ────────────────────────────────
         // NotificationManagerCompat.areNotificationsEnabled() cobre:
@@ -59,7 +115,10 @@ class GeofenceReceiver : BroadcastReceiver() {
         // Se retornar false, notify() seria descartado silenciosamente — melhor sair.
         val nmCompat = NotificationManagerCompat.from(context)
         if (!nmCompat.areNotificationsEnabled()) {
-            Log.w(TAG, "Notificações desabilitadas para o app — geofence enter ignorado")
+            Logger.warn("notification_permission_denied", feature = "geofence", action = "onReceive",
+                correlationId = corrId,
+                durationMs = System.currentTimeMillis() - receiverStart)
+            CorrelationManager.endOperation("geofence_event")
             return
         }
 
@@ -88,45 +147,85 @@ class GeofenceReceiver : BroadcastReceiver() {
                     lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
                 }
                 nm.createNotificationChannel(channel)
-                Log.d(TAG, "Canal '$CHANNEL_ID' criado pelo GeofenceReceiver (IMPORTANCE_MAX)")
+                Logger.debug("notification_channel_created", feature = "geofence",
+                    action = "onReceive", correlationId = corrId,
+                    payload = mapOf("channel_id" to CHANNEL_ID, "importance" to "MAX"))
             }
         }
 
         // ── 4. Dispara notificação para cada geofence trigado ───────────────────
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-        event.triggeringGeofences?.forEach { geofence ->
+        geofences.forEach { geofence ->
             // Nome salvo pelo MainActivity.addNativeGeofence() — fallback se ausente.
-            val envName = prefs.getString(geofence.requestId, null) ?: "um local Sopro"
+            val envName = prefs.getString(geofence.requestId, null)
+            if (envName == null) {
+                Logger.warn("environment_not_found", feature = "geofence", action = "onReceive",
+                    correlationId = corrId,
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("request_id" to geofence.requestId) else null)
+            } else {
+                Logger.debug("environment_found", feature = "geofence", action = "onReceive",
+                    correlationId = corrId,
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("environment_name" to envName,
+                            "request_id" to geofence.requestId)
+                    else null)
+            }
+            val resolvedEnvName = envName ?: "um local Sopro"
 
             // Lê o primeiro gatilho ativo do ambiente diretamente do SQLite
             // (sem Flutter Engine) para construir a mensagem contextual.
-            val triggerTitle = readFirstTriggerTitle(context, geofence.requestId)
-            val notifBody    = buildNotificationBody(triggerTitle, envName)
+            val triggerTitle = readFirstTriggerTitle(context, geofence.requestId, corrId)
+            val notifBody    = buildNotificationBody(triggerTitle, resolvedEnvName)
 
             // Título: título do gatilho (se encontrado) ou "Sopro — envName"
             val notifTitle = if (!triggerTitle.isNullOrEmpty()) triggerTitle
-                             else "Sopro — $envName"
+                             else "Sopro — $resolvedEnvName"
 
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.notification_icon)
                 .setContentTitle(notifTitle)
                 .setContentText(notifBody)
                 // ticker força heads-up em OEMs restritivos (Motorola My UX, etc.)
-                .setTicker("Sopro — $envName")
+                .setTicker("Sopro — $resolvedEnvName")
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setAutoCancel(true)
                 .build()
 
+            Logger.debug("notification_sending", feature = "geofence", action = "onReceive",
+                correlationId = corrId,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("environment_name" to resolvedEnvName,
+                        "trigger_name" to (triggerTitle ?: ""),
+                        "notification_id" to geofence.requestId.hashCode().toString())
+                else null)
+
+            val notifStart = System.currentTimeMillis()
             try {
                 nmCompat.notify(geofence.requestId.hashCode(), notification)
-                Log.d(TAG, "Notificação disparada: '$envName' trigger='$triggerTitle' " +
-                      "(id=${geofence.requestId.hashCode()})")
+                Logger.info("notification_sent", feature = "geofence", action = "onReceive",
+                    correlationId = corrId,
+                    durationMs = System.currentTimeMillis() - notifStart,
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("environment_name" to resolvedEnvName,
+                            "trigger_name" to (triggerTitle ?: ""),
+                            "notification_id" to geofence.requestId.hashCode().toString())
+                    else mapOf("notification_id" to geofence.requestId.hashCode().toString()))
             } catch (e: SecurityException) {
-                Log.e(TAG, "SecurityException ao disparar notificação: ${e.message}")
+                Logger.error("notification_send_failed", feature = "geofence",
+                    action = "onReceive", correlationId = corrId, exception = e,
+                    durationMs = System.currentTimeMillis() - notifStart,
+                    payload = mapOf("notification_id" to geofence.requestId.hashCode().toString()))
             }
         }
+
+        Logger.info("receiver_finished", feature = "geofence", action = "onReceive",
+            correlationId = corrId,
+            durationMs = System.currentTimeMillis() - receiverStart,
+            payload = mapOf("geofence_count" to geofenceCount.toString()))
+        CorrelationManager.endOperation("geofence_event")
     }
 
     // ── Helpers privados ───────────────────────────────────────────────────────
@@ -134,17 +233,29 @@ class GeofenceReceiver : BroadcastReceiver() {
     // Lê o título do primeiro gatilho ativo do ambiente a partir do SQLite.
     // Tenta os mesmos caminhos que o BootReceiver — sem Flutter Engine.
     // Retorna null se o banco não for encontrado ou não houver gatilhos.
-    private fun readFirstTriggerTitle(context: Context, environmentId: String): String? {
+    //
+    // Segue o padrão obrigatório do projeto: var db fora do try + finally db?.close().
+    private fun readFirstTriggerTitle(
+        context: Context,
+        environmentId: String,
+        corrId: String,
+    ): String? {
         val dbPaths = listOf(
             File(context.filesDir.parentFile, "app_flutter/sopro.db"),
             context.getDatabasePath("sopro.db"),
         )
         for (dbFile in dbPaths) {
             if (!dbFile.exists()) continue
+            val queryStart = System.currentTimeMillis()
+            var db: SQLiteDatabase? = null
             try {
-                val db = SQLiteDatabase.openDatabase(
+                db = SQLiteDatabase.openDatabase(
                     dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY
                 )
+                Logger.debug("sqlite_opened", feature = "geofence",
+                    action = "readFirstTriggerTitle", correlationId = corrId,
+                    payload = mapOf("path" to dbFile.name))
+
                 val cursor = db.rawQuery(
                     "SELECT title FROM triggers WHERE environment_id = ? " +
                     "AND is_active = 1 ORDER BY created_at ASC LIMIT 1",
@@ -152,10 +263,32 @@ class GeofenceReceiver : BroadcastReceiver() {
                 )
                 val title = if (cursor.moveToFirst()) cursor.getString(0) else null
                 cursor.close()
-                db.close()
+
+                val duration = System.currentTimeMillis() - queryStart
+                if (!title.isNullOrEmpty()) {
+                    Logger.debug("sqlite_trigger_found", feature = "geofence",
+                        action = "readFirstTriggerTitle", correlationId = corrId,
+                        durationMs = duration,
+                        payload = if (LoggerConfiguration.debugLogging)
+                            mapOf("trigger_name" to title) else null)
+                } else {
+                    Logger.debug("sqlite_trigger_not_found", feature = "geofence",
+                        action = "readFirstTriggerTitle", correlationId = corrId,
+                        durationMs = duration,
+                        payload = if (LoggerConfiguration.debugLogging)
+                            mapOf("environment_id" to environmentId) else null)
+                }
                 return title?.takeIf { it.isNotEmpty() }
             } catch (e: Exception) {
-                Log.w(TAG, "Erro ao ler trigger (path=${dbFile.name}): ${e.message}")
+                Logger.warn("sqlite_read_trigger_failed", feature = "geofence",
+                    action = "readFirstTriggerTitle", correlationId = corrId, exception = e,
+                    durationMs = System.currentTimeMillis() - queryStart,
+                    payload = mapOf("path" to dbFile.name))
+            } finally {
+                try { db?.close() } catch (e: Exception) {
+                    Logger.warn("sqlite_close_failed", feature = "geofence",
+                        action = "readFirstTriggerTitle", correlationId = corrId, exception = e)
+                }
             }
         }
         return null

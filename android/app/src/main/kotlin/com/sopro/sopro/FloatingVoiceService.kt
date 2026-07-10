@@ -18,7 +18,6 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.Voice
-import android.util.Log
 import android.view.*
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
@@ -26,13 +25,17 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.*
-import org.json.JSONArray
-import org.json.JSONObject
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.tasks.Tasks
+import com.sopro.sopro.logging.CorrelationManager
+import com.sopro.sopro.logging.Logger
+import com.sopro.sopro.logging.LoggerConfiguration
+import com.sopro.sopro.logging.SessionManager
+import kotlinx.coroutines.*
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -147,6 +150,9 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     // ── Handler principal (UI) ────────────────────────────────────────────────
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // ── Correlation ID do ciclo de voz ativo (main thread only) ──────────────
+    private var voiceCorrelationId: String? = null
+
     // ── ActivityLifecycleCallbacks — oculta botão quando Sopro está em foco ──
     private var soperoActivitiesVisible = 0
     private val lifecycleCallbacks = object : Application.ActivityLifecycleCallbacks {
@@ -175,8 +181,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
     override fun onCreate() {
         super.onCreate()
+        SessionManager.init(this)
         if (!Settings.canDrawOverlays(this)) {
-            Log.w(TAG, "SYSTEM_ALERT_WINDOW não concedido — serviço encerrado")
+            Logger.warn("overlay_permission_denied", feature = "floating_voice", action = "onCreate",
+                payload = mapOf("permission" to "SYSTEM_ALERT_WINDOW"))
             stopSelf(); return
         }
         // TTS nativo — onInit() é chamado assincronamente após init
@@ -186,15 +194,21 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         initSpeechRecognizer()
 
         startForeground(NOTIF_ID, buildSilentNotification())
+        Logger.info("foreground_started", feature = "floating_voice", action = "startForeground",
+            payload = mapOf("notif_id" to NOTIF_ID.toString()))
+
         createOverlayButton()
+        Logger.debug("overlay_created", feature = "floating_voice", action = "onCreate")
+
         (applicationContext as Application).registerActivityLifecycleCallbacks(lifecycleCallbacks)
-        Log.d(TAG, "FloatingVoiceService iniciado")
+        Logger.info("service_created", feature = "floating_voice", action = "onCreate")
     }
 
     // FIX 4: seleciona melhor voz pt-BR offline e ajusta velocidade/tom após init assíncrono
     override fun onInit(status: Int) {
         if (status != TextToSpeech.SUCCESS) {
-            Log.w(TAG, "TTS falhou ao inicializar (status=$status)")
+            Logger.warn("tts_init_failed", feature = "floating_voice", action = "tts_init",
+                payload = mapOf("status" to status.toString()))
             return
         }
         tts?.language = Locale("pt", "BR")
@@ -211,9 +225,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
         if (bestVoice != null) {
             tts?.voice = bestVoice
-            Log.d(TAG, "TTS — voz selecionada: ${bestVoice.name} (quality=${bestVoice.quality})")
+            Logger.debug("tts_voice_selected", feature = "floating_voice", action = "tts_init",
+                payload = mapOf("voice_name" to bestVoice.name, "quality" to bestVoice.quality.toString()))
         } else {
-            Log.d(TAG, "TTS — usando voz padrão pt-BR")
+            Logger.debug("tts_voice_default", feature = "floating_voice", action = "tts_init")
         }
 
         // FIX 4b: velocidade levemente reduzida + tom ligeiramente mais alto = mais claro
@@ -231,7 +246,9 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         mainHandler.removeCallbacksAndMessages(null)
         tts?.stop(); tts?.shutdown(); tts = null
         removeOverlayButton()
-        Log.d(TAG, "FloatingVoiceService encerrado")
+        Logger.debug("overlay_removed", feature = "floating_voice", action = "onDestroy")
+        Logger.info("foreground_stopped", feature = "floating_voice", action = "onDestroy")
+        Logger.info("service_destroyed", feature = "floating_voice", action = "onDestroy")
         super.onDestroy()
     }
 
@@ -241,22 +258,33 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
     private fun initSpeechRecognizer() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            Log.w(TAG, "SpeechRecognizer não disponível neste dispositivo")
+            Logger.warn("speech_recognizer_unavailable", feature = "floating_voice",
+                action = "init_speech_recognizer")
             return
         }
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        Logger.debug("speech_recognizer_created", feature = "floating_voice",
+            action = "init_speech_recognizer")
+
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
 
             // Reconhecedor pronto — inicia animação de escuta
             override fun onReadyForSpeech(params: Bundle?) {
+                Logger.debug("speech_ready", feature = "floating_voice", action = "stt",
+                    correlationId = voiceCorrelationId)
                 startRippleAnimations()
             }
 
             // Usuário começou a falar
-            override fun onBeginningOfSpeech() {}
+            override fun onBeginningOfSpeech() {
+                Logger.trace("speech_began", feature = "floating_voice", action = "stt",
+                    correlationId = voiceCorrelationId)
+            }
 
             // Usuário parou de falar — muda visual para "processando"
             override fun onEndOfSpeech() {
+                Logger.debug("speech_end_of_speech", feature = "floating_voice", action = "stt",
+                    correlationId = voiceCorrelationId)
                 showProcessingState()
             }
 
@@ -267,12 +295,19 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
                 if (text.isNullOrBlank()) {
+                    Logger.warn("speech_no_result", feature = "floating_voice", action = "stt",
+                        correlationId = voiceCorrelationId)
+                    CorrelationManager.endOperation("voice")
+                    voiceCorrelationId = null
                     revertButtonAppearance()
                     speak("Não ouvi nada. Segure e tente novamente.")
                     return
                 }
 
-                Log.d(TAG, "STT resultado: $text")
+                Logger.info("speech_final_result", feature = "floating_voice", action = "stt",
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("speech_result" to text) else null,
+                    correlationId = voiceCorrelationId)
 
                 // Se estava aguardando nome de ambiente, usa transcript diretamente
                 // (sem Gemini) — evita chamada de rede desnecessária e latência
@@ -332,15 +367,31 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     SpeechRecognizer.ERROR_RECOGNIZER_BUSY  -> "Reconhecedor ocupado. Tente novamente."
                     else                                    -> "Erro ao reconhecer voz (código $error)."
                 }
-                Log.w(TAG, "SpeechRecognizer error=$error: $msg")
+                Logger.warn("speech_error", feature = "floating_voice", action = "stt",
+                    payload = mapOf("code" to error.toString(), "message" to msg),
+                    correlationId = voiceCorrelationId)
+                CorrelationManager.endOperation("voice")
+                voiceCorrelationId = null
                 revertButtonAppearance()
                 speak(msg)
+            }
+
+            // Resultado parcial — registrado em trace para diagnóstico de STT
+            override fun onPartialResults(partial: Bundle?) {
+                val text = partial
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull()
+                if (!text.isNullOrBlank()) {
+                    Logger.trace("speech_partial", feature = "floating_voice", action = "stt",
+                        payload = if (LoggerConfiguration.debugLogging)
+                            mapOf("transcript" to text) else null,
+                        correlationId = voiceCorrelationId)
+                }
             }
 
             // Callbacks de sinal — não utilizados
             override fun onRmsChanged(rmsdB: Float)           {}
             override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onPartialResults(partial: Bundle?)   {}
             override fun onEvent(type: Int, params: Bundle?)  {}
         })
     }
@@ -359,7 +410,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 )
             }
         }
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.notification_icon)
             .setContentTitle("Sopro")
             .setContentText("Botão de voz ativo")
@@ -367,6 +418,9 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             .setOngoing(true)
             .setSilent(true)
             .build()
+        Logger.debug("notification_created", feature = "floating_voice", action = "foreground_notification",
+            payload = mapOf("channel_id" to CHANNEL_ID, "notif_id" to NOTIF_ID.toString()))
+        return notification
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -447,7 +501,9 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
     private fun removeOverlayButton() {
         containerView?.let {
-            try { windowManager?.removeView(it) } catch (_: Exception) {}
+            try { windowManager?.removeView(it) } catch (e: Exception) {
+                Logger.warn("overlay_remove_failed", feature = "floating_voice", exception = e)
+            }
         }
         containerView = null; windowManager = null
     }
@@ -484,8 +540,9 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 layoutParams?.let { p ->
                     p.x = initParamX + dx
                     p.y = initParamY + dy
-                    try { windowManager?.updateViewLayout(containerView, p) }
-                    catch (_: Exception) {}
+                    try { windowManager?.updateViewLayout(containerView, p) } catch (e: Exception) {
+                        Logger.trace("overlay_update_failed", feature = "floating_voice", exception = e)
+                    }
                 }
             }
 
@@ -515,6 +572,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 if (isListening) {
                     isListening = false
                     speechRecognizer?.cancel()
+                    Logger.debug("speech_cancelled", feature = "floating_voice", action = "stt",
+                        correlationId = voiceCorrelationId)
+                    CorrelationManager.endOperation("voice")
+                    voiceCorrelationId = null
                     revertButtonAppearance()
                 }
             }
@@ -531,7 +592,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             showToast("Permissão de microfone necessária")
-            Log.w(TAG, "RECORD_AUDIO não concedido — escuta cancelada")
+            Logger.warn("microphone_permission_denied", feature = "floating_voice",
+                action = "start_listen", payload = mapOf("permission" to "RECORD_AUDIO"))
             return
         }
 
@@ -539,6 +601,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             showToast("Reconhecedor de voz não disponível")
             return
         }
+
+        voiceCorrelationId = CorrelationManager.beginOperation("voice")
 
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -557,16 +621,21 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
                 mainHandler.postDelayed({ toneGen.release() }, 200L)
             } catch (e: Exception) {
-                Log.w(TAG, "ToneGenerator indisponível: ${e.message}")
+                Logger.warn("tone_generator_failed", feature = "floating_voice",
+                    action = "start_listen", exception = e, correlationId = voiceCorrelationId)
             }
 
             animateButtonScale(from = 1.0f, to = 1.3f)
             btnView?.background = circleDrawable(0xFFFF2244.toInt())
-            Log.d(TAG, "SpeechRecognizer: escuta iniciada")
+            Logger.info("speech_started", feature = "floating_voice", action = "start_listen",
+                correlationId = voiceCorrelationId)
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao iniciar SpeechRecognizer: ${e.message}")
+            Logger.error("speech_start_failed", feature = "floating_voice", action = "start_listen",
+                exception = e, correlationId = voiceCorrelationId)
             showToast("Erro ao acessar microfone")
             isListening = false
+            CorrelationManager.endOperation("voice")
+            voiceCorrelationId = null
             revertButtonAppearance()
         }
     }
@@ -576,7 +645,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         if (!isListening) return
         speechRecognizer?.stopListening()
         // isListening será false quando onResults ou onError disparar
-        Log.d(TAG, "SpeechRecognizer: stopListening chamado")
+        Logger.debug("speech_stop_requested", feature = "floating_voice", action = "stt",
+            correlationId = voiceCorrelationId)
     }
 
     // Estado visual "processando" — acionado em onEndOfSpeech (entre escuta e resultado)
@@ -598,15 +668,19 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     // ─────────────────────────────────────────────────────────────────────────
 
     private suspend fun processTextWithGemini(transcript: String) {
-        logToSupabase("floating_voice_debug", mapOf(
-            "step" to "stt_result", "transcript" to transcript
-        ))
+        val corrId = CorrelationManager.correlationIdFor("voice")
+
+        Logger.info("gemini_request_preparing", feature = "floating_voice", action = "gemini",
+            payload = if (LoggerConfiguration.debugLogging)
+                mapOf("transcript" to transcript) else null,
+            correlationId = corrId)
 
         val apiKey = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
             .getString(KEY_GEMINI_API, "") ?: ""
 
         if (apiKey.isEmpty()) {
-            Log.w(TAG, "Gemini API key ausente")
+            Logger.warn("gemini_api_key_missing", feature = "floating_voice", action = "gemini",
+                correlationId = corrId)
             withContext(Dispatchers.Main) {
                 revertButtonAppearance()
                 speak("Chave da API não configurada. Abra o Sopro uma vez.")
@@ -643,6 +717,7 @@ Texto: $transcript""".trimIndent()
         }.toString()
 
         var responseBody = ""
+        val geminiStart = System.currentTimeMillis()
         val result = try {
             val url  = URL("$GEMINI_ENDPOINT?key=$apiKey")
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -661,39 +736,44 @@ Texto: $transcript""".trimIndent()
             }
             conn.disconnect()
 
-            logToSupabase("floating_voice_debug", mapOf(
-                "step"            to "after_gemini",
-                "http"            to code.toString(),
-                "response_length" to responseBody.length.toString(),
-                "transcript"      to transcript,
-            ))
-
+            val geminiDuration = System.currentTimeMillis() - geminiStart
             if (code != 200) {
-                Log.d(TAG, "Gemini HTTP $code: ${responseBody.take(200)}")
+                Logger.warn("gemini_http_error", feature = "floating_voice", action = "gemini",
+                    durationMs = geminiDuration,
+                    payload = mapOf("http_code" to code.toString(),
+                        "response_preview" to responseBody.take(200)),
+                    correlationId = corrId)
                 FloatVoiceResult(null, null, null, null, transcript, error = "http_$code")
             } else {
+                Logger.info("gemini_response_received", feature = "floating_voice", action = "gemini",
+                    durationMs = geminiDuration,
+                    payload = mapOf("http_code" to code.toString(),
+                        "response_length" to responseBody.length.toString()),
+                    correlationId = corrId)
                 parseGeminiResponse(responseBody, transcript)
             }
         } catch (e: Exception) {
-            logToSupabase("floating_parse_error", mapOf(
-                "error" to (e.message ?: "unknown"),
-                "response_preview" to responseBody.take(200)
-            ))
-            Log.e(TAG, "Gemini request error: $e")
+            val geminiDuration = System.currentTimeMillis() - geminiStart
+            Logger.error("gemini_request_failed", feature = "floating_voice", action = "gemini",
+                durationMs = geminiDuration,
+                exception = e,
+                payload = mapOf("response_preview" to responseBody.take(200)),
+                correlationId = corrId)
             FloatVoiceResult(null, null, null, null, transcript, error = e.message)
         }
 
         withContext(Dispatchers.Main) {
-            logToSupabase("floating_main_thread", mapOf(
-                "intent" to (result.intent ?: "null"),
-                "error" to (result.error ?: "none")
-            ))
+            Logger.debug("gemini_result_dispatching", feature = "floating_voice", action = "gemini",
+                payload = mapOf("intent" to (result.intent ?: "null"),
+                    "has_error" to (result.error != null).toString()),
+                correlationId = corrId)
             revertButtonAppearance()
             executeVoiceResult(result)
         }
     }
 
     private fun parseGeminiResponse(raw: String, transcript: String): FloatVoiceResult {
+        val corrId = CorrelationManager.correlationIdFor("voice")
         return try {
             val text = JSONObject(raw)
                 .getJSONArray("candidates").getJSONObject(0)
@@ -708,6 +788,19 @@ Texto: $transcript""".trimIndent()
             else text
             val parsed = JSONObject(cleanJson)
             val intent = parsed.optString("intent", "unknown")
+
+            if (intent == "unknown") {
+                Logger.warn("intent_unknown", feature = "floating_voice", action = "parse",
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("gemini_response" to cleanJson) else null,
+                    correlationId = corrId)
+            } else {
+                Logger.info("intent_detected", feature = "floating_voice", action = "parse",
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("intent" to intent, "gemini_response" to cleanJson)
+                    else mapOf("intent" to intent),
+                    correlationId = corrId)
+            }
 
             when (intent) {
                 "create_trigger" -> {
@@ -752,7 +845,8 @@ Texto: $transcript""".trimIndent()
                 )
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao parsear Gemini: $e")
+            Logger.error("gemini_parse_failed", feature = "floating_voice", action = "parse",
+                exception = e, correlationId = corrId)
             FloatVoiceResult(null, null, null, null, transcript, error = "parse_error: ${e.message}")
         }
     }
@@ -763,6 +857,10 @@ Texto: $transcript""".trimIndent()
 
     private fun executeVoiceResult(result: FloatVoiceResult) {
         if (result.error != null) {
+            Logger.warn("voice_result_error", feature = "floating_voice", action = "execute",
+                payload = mapOf("error" to result.error), correlationId = voiceCorrelationId)
+            CorrelationManager.endOperation("voice")
+            voiceCorrelationId = null
             showToast("Erro: ${result.error.take(60)}")
             speak("Não entendi. Pressione novamente para tentar.")
             return
@@ -796,6 +894,8 @@ Texto: $transcript""".trimIndent()
                     withContext(Dispatchers.Main) {
                         if (ok) speak("Pronto! Ambiente $envName criado.")
                         else speak("Não consegui criar o ambiente.")
+                        CorrelationManager.endOperation("voice")
+                        voiceCorrelationId = null
                     }
                 }
             } else {
@@ -836,16 +936,28 @@ Texto: $transcript""".trimIndent()
                             withContext(Dispatchers.Main) {
                                 if (triggerOk) speak("Pronto! Ambiente $pendingEnv criado e lembrete '$pendingTitle' registrado.")
                                 else           speak("Ambiente criado, mas não consegui salvar o lembrete.")
+                                CorrelationManager.endOperation("voice")
+                                voiceCorrelationId = null
                             }
                         } else {
                             withContext(Dispatchers.Main) {
                                 speak("Não foi possível obter sua localização.")
+                                CorrelationManager.endOperation("voice")
+                                voiceCorrelationId = null
                             }
                         }
                     }
                 }
-                denied -> speak("Tudo bem, lembrete cancelado.")
-                else   -> speak("Não entendi. Diga 'sim' para criar o ambiente ou 'não' para cancelar.")
+                denied -> {
+                    speak("Tudo bem, lembrete cancelado.")
+                    CorrelationManager.endOperation("voice")
+                    voiceCorrelationId = null
+                }
+                else -> {
+                    speak("Não entendi. Diga 'sim' para criar o ambiente ou 'não' para cancelar.")
+                    CorrelationManager.endOperation("voice")
+                    voiceCorrelationId = null
+                }
             }
             return
         }
@@ -863,13 +975,21 @@ Texto: $transcript""".trimIndent()
                     withContext(Dispatchers.Main) {
                         if (ok) speak("Anotado! Vou te lembrar de $pendingTitle quando chegar em $envName.")
                         else    speak("Não encontrei o ambiente $envName. Quer que eu crie agora?")
+                        CorrelationManager.endOperation("voice")
+                        voiceCorrelationId = null
                     }
                 }
             } else {
                 speak("Não entendi. Tente: 'lembra de X quando chegar em Y'.")
+                CorrelationManager.endOperation("voice")
+                voiceCorrelationId = null
             }
             return
         }
+
+        Logger.info("intent_dispatched", feature = "floating_voice", action = "execute",
+            payload = mapOf("intent" to (result.intent ?: "null")),
+            correlationId = voiceCorrelationId)
 
         when (result.intent) {
             "create_trigger" -> {
@@ -903,6 +1023,7 @@ Texto: $transcript""".trimIndent()
                     }
                 if (title.isNotEmpty()) {
                     serviceScope.launch(Dispatchers.IO) {
+                        val start = System.currentTimeMillis()
                         val ok = writeTriggerToDb(title, result.triggerContent ?: "", resolvedEnvCapitalized)
                         withContext(Dispatchers.Main) {
                             if (ok) {
@@ -918,11 +1039,15 @@ Texto: $transcript""".trimIndent()
                                     .apply()
                                 speak("Não encontrei o ambiente $resolvedEnvCapitalized. Quer que eu crie agora?")
                             }
+                            CorrelationManager.endOperation("voice")
+                            voiceCorrelationId = null
                         }
                     }
                 } else {
                     showToast("Diga: 'lembra de X quando chegar em Y'")
                     speak("Não entendi. Diga: lembra de X quando chegar em Y.")
+                    CorrelationManager.endOperation("voice")
+                    voiceCorrelationId = null
                 }
             }
             "create_environment" -> {
@@ -946,7 +1071,11 @@ Texto: $transcript""".trimIndent()
                         showToast("Segure o botão para gravar o nome.")
                     }, 2000L)
                 } else {
-                    Log.d("FloatingVoice", "=== CREATE_ENV INICIADO nome=$envName ===")
+                    Logger.debug("create_environment_start", feature = "floating_voice",
+                        action = "execute",
+                        payload = if (LoggerConfiguration.debugLogging)
+                            mapOf("environment_name" to envName) else null,
+                        correlationId = voiceCorrelationId)
                     // Nome válido → cria ambiente diretamente no SQLite + registra geofence
                     showToast("Criando '$envName'...")
                     serviceScope.launch(Dispatchers.IO) {
@@ -960,8 +1089,11 @@ Texto: $transcript""".trimIndent()
                         val ok = if (lat != 0.0 && lon != 0.0) {
                             writeEnvironmentToDb(envName, lat, lon, 100)
                         } else {
-                            logToSupabase("floating_env_error",
-                                mapOf("error" to "no_gps_no_fallback", "name" to envName))
+                            Logger.warn("gps_unavailable", feature = "floating_voice",
+                                action = "location",
+                                payload = if (LoggerConfiguration.debugLogging)
+                                    mapOf("environment_name" to envName) else null,
+                                correlationId = CorrelationManager.correlationIdFor("voice"))
                             withContext(Dispatchers.Main) {
                                 speak("Não foi possível obter sua localização. Abra o app e defina manualmente.")
                             }
@@ -970,6 +1102,8 @@ Texto: $transcript""".trimIndent()
                         withContext(Dispatchers.Main) {
                             if (ok) speak("Pronto! Ambiente $envName criado.")
                             else if (lat != 0.0 || lon != 0.0) speak("Não consegui criar o ambiente. Tente novamente.")
+                            CorrelationManager.endOperation("voice")
+                            voiceCorrelationId = null
                         }
                     }
                 }
@@ -982,10 +1116,14 @@ Texto: $transcript""".trimIndent()
                         withContext(Dispatchers.Main) {
                             if (ok) speak("Ambiente $envName removido.")
                             else speak("Não encontrei o ambiente $envName.")
+                            CorrelationManager.endOperation("voice")
+                            voiceCorrelationId = null
                         }
                     }
                 } else {
                     speak("Qual ambiente você quer remover?")
+                    CorrelationManager.endOperation("voice")
+                    voiceCorrelationId = null
                 }
             }
             "delete_trigger" -> {
@@ -995,12 +1133,16 @@ Texto: $transcript""".trimIndent()
                     val ok = deleteTriggerFromDb(envName, title)
                     withContext(Dispatchers.Main) {
                         if (ok) speak("Lembrete removido.")
+                        CorrelationManager.endOperation("voice")
+                        voiceCorrelationId = null
                     }
                 }
             }
             else -> {
                 showToast("Não entendi. Abra o Sopro para comandos avançados.")
                 speak("Não entendi. Pressione novamente para tentar.")
+                CorrelationManager.endOperation("voice")
+                voiceCorrelationId = null
             }
         }
     }
@@ -1010,22 +1152,36 @@ Texto: $transcript""".trimIndent()
     private fun readEnvironmentNamesFromDb(): List<String> {
         val dbFile = findDbFile() ?: return emptyList()
         var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
             // Tenta com deleted_at; se coluna não existir cai no catch e tenta sem WHERE
             val cursor = try {
                 db.rawQuery("SELECT name FROM environments WHERE deleted_at IS NULL", null)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Logger.debug("sqlite_read_fallback", feature = "floating_voice", action = "db_read",
+                    payload = mapOf("reason" to "deleted_at_column_missing"),
+                    exception = e,
+                    correlationId = CorrelationManager.correlationIdFor("voice"))
                 db.rawQuery("SELECT name FROM environments", null)
             }
             val names = mutableListOf<String>()
             cursor.use { while (it.moveToNext()) names.add(it.getString(0)) }
+            Logger.debug("sqlite_read_environments", feature = "floating_voice", action = "db_read",
+                durationMs = System.currentTimeMillis() - start,
+                payload = mapOf("count" to names.size.toString()),
+                correlationId = CorrelationManager.correlationIdFor("voice"))
             names
         } catch (e: Exception) {
-            Log.w(TAG, "readEnvironmentNamesFromDb falhou: ${e.message}")
+            Logger.warn("sqlite_read_failed", feature = "floating_voice", action = "db_read",
+                durationMs = System.currentTimeMillis() - start,
+                exception = e,
+                correlationId = CorrelationManager.correlationIdFor("voice"))
             emptyList()
         } finally {
-            try { db?.close() } catch (_: Exception) {}
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
         }
     }
 
@@ -1046,21 +1202,28 @@ Texto: $transcript""".trimIndent()
     // Cria ambiente no banco usando o caminho gravado pelo Flutter em SharedPreferences.
     // Chamado de Dispatchers.IO; registerGeofence() é postado na main thread.
     private fun writeEnvironmentToDb(name: String, lat: Double, lon: Double, radius: Int): Boolean {
+        val corrId = CorrelationManager.correlationIdFor("voice")
         val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
             .getString("flutter.sopro_db_path", null)
-        Log.d("FloatingVoice", "=== WRITE_ENV CHAMADO nome=$name dbPath=$dbPath ===")
+        Logger.debug("sqlite_write_environment_start", feature = "floating_voice", action = "db_write",
+            payload = if (LoggerConfiguration.debugLogging)
+                mapOf("name" to name) else null,
+            correlationId = corrId)
         val resolvedPath = dbPath ?: run {
-                logToSupabase("floating_env_error",
-                    mapOf("error" to "db_path_not_in_prefs_open_app_first"))
-                return false
-            }
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs"),
+                correlationId = corrId)
+            return false
+        }
         val dbFile = File(resolvedPath)
         if (!dbFile.exists()) {
-            logToSupabase("floating_env_error",
-                mapOf("error" to "db_file_not_found", "path" to resolvedPath))
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to resolvedPath),
+                correlationId = corrId)
             return false
         }
         var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val envNameCapitalized = name.trim()
@@ -1077,36 +1240,48 @@ Texto: $transcript""".trimIndent()
             )
             // GMS addGeofences exige main thread
             mainHandler.post { registerGeofence(id, envNameCapitalized, lat, lon, radius.toDouble()) }
-            logToSupabase("floating_env_created",
-                mapOf("env_name" to envNameCapitalized, "lat" to lat.toString(),
-                      "lon" to lon.toString(), "id" to id))
+            Logger.info("environment_created", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("environment_name" to envNameCapitalized, "id" to id)
+                else mapOf("id" to id),
+                correlationId = corrId)
             true
         } catch (e: Exception) {
-            Log.e(TAG, "writeEnvironmentToDb error: ${e.message}")
-            logToSupabase("floating_env_error",
-                mapOf("error" to (e.message ?: "unknown"), "name" to name))
+            Logger.error("sqlite_write_environment_failed", feature = "floating_voice",
+                action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                exception = e,
+                payload = if (LoggerConfiguration.debugLogging) mapOf("name" to name) else null,
+                correlationId = corrId)
             false
         } finally {
-            try { db?.close() } catch (_: Exception) {}
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
         }
     }
 
     // Cria trigger no banco buscando ambiente pelo nome (case-insensitive).
     // Retorna true se salvo, false se ambiente não encontrado ou erro.
     private fun writeTriggerToDb(title: String, content: String, envName: String): Boolean {
+        val corrId = CorrelationManager.correlationIdFor("voice")
         val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
             .getString("flutter.sopro_db_path", null) ?: run {
-                logToSupabase("floating_trigger_error",
-                    mapOf("error" to "db_path_not_in_prefs_open_app_first"))
-                return false
-            }
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs", "op" to "write_trigger"),
+                correlationId = corrId)
+            return false
+        }
         val dbFile = File(dbPath)
         if (!dbFile.exists()) {
-            logToSupabase("floating_trigger_error",
-                mapOf("error" to "db_file_not_found", "path" to dbPath))
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to dbPath, "op" to "write_trigger"),
+                correlationId = corrId)
             return false
         }
         var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val cursor = db.rawQuery(
@@ -1116,9 +1291,10 @@ Texto: $transcript""".trimIndent()
             val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
             cursor.close()
             if (envId == null) {
-                Log.w(TAG, "Ambiente '$envName' não encontrado — salva awaiting_env_confirm")
-                logToSupabase("floating_trigger_error",
-                    mapOf("error" to "ambiente_nao_encontrado", "env_name" to envName))
+                Logger.warn("environment_not_found", feature = "floating_voice", action = "db_read",
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("environment_name" to envName) else null,
+                    correlationId = corrId)
                 getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
                     .putString("pending_trigger_title", title)
                     .putString("pending_trigger_content", content)
@@ -1134,35 +1310,48 @@ Texto: $transcript""".trimIndent()
                 "INSERT INTO triggers (id, environment_id, title, content, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
                 arrayOf(id, envId, title, content, now)
             )
-            logToSupabase("floating_trigger_created",
-                mapOf("title" to title, "env_name" to envName, "id" to id))
+            Logger.info("trigger_created", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("title" to title, "environment_name" to envName, "id" to id)
+                else mapOf("id" to id),
+                correlationId = corrId)
             true
         } catch (e: Exception) {
-            Log.e(TAG, "writeTriggerToDb error: ${e.message}")
-            logToSupabase("floating_trigger_error",
-                mapOf("error" to (e.message ?: "unknown"), "env_name" to envName))
+            Logger.error("sqlite_write_trigger_failed", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                exception = e,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("title" to title, "environment_name" to envName) else null,
+                correlationId = corrId)
             false
         } finally {
-            try { db?.close() } catch (_: Exception) {}
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
         }
     }
 
     // Remove ambiente e todos os seus triggers do banco (case-insensitive por nome).
     // Retorna true se removido, false se não encontrado ou erro.
     private fun deleteEnvironmentFromDb(envName: String): Boolean {
+        val corrId = CorrelationManager.correlationIdFor("voice")
         val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
             .getString("flutter.sopro_db_path", null) ?: run {
-                logToSupabase("floating_delete_error",
-                    mapOf("error" to "db_path_not_in_prefs", "method" to "deleteEnv"))
-                return false
-            }
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs", "op" to "delete_env"),
+                correlationId = corrId)
+            return false
+        }
         val dbFile = File(dbPath)
         if (!dbFile.exists()) {
-            logToSupabase("floating_delete_error",
-                mapOf("error" to "db_file_not_found", "method" to "deleteEnv"))
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to dbPath, "op" to "delete_env"),
+                correlationId = corrId)
             return false
         }
         var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val envNameCapitalized = envName.trim()
@@ -1178,26 +1367,40 @@ Texto: $transcript""".trimIndent()
             val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
             cursor.close()
             if (envId == null) {
-                logToSupabase("floating_delete_not_found", mapOf("name" to envNameCapitalized))
+                Logger.warn("environment_not_found", feature = "floating_voice", action = "db_read",
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("environment_name" to envNameCapitalized) else null,
+                    correlationId = corrId)
                 mainHandler.post { speak("Não encontrei o ambiente $envNameCapitalized. Verifique o nome e tente novamente.") }
                 return false
             }
             // Remove triggers primeiro (FK), depois o ambiente
             db.execSQL("DELETE FROM triggers WHERE environment_id = ?", arrayOf(envId))
             db.execSQL("DELETE FROM environments WHERE id = ?", arrayOf(envId))
-            logToSupabase("floating_env_deleted", mapOf("env_name" to envNameCapitalized))
+            Logger.info("environment_deleted", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("environment_name" to envNameCapitalized, "id" to envId)
+                else mapOf("id" to envId),
+                correlationId = corrId)
             getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
                 .putBoolean("flutter.needs_refresh", true)
                 .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
                 .apply()
             true
         } catch (e: Exception) {
-            Log.e(TAG, "deleteEnvironmentFromDb error: ${e.message}")
-            logToSupabase("floating_delete_error",
-                mapOf("error" to (e.message ?: "unknown"), "name" to envName))
+            Logger.error("sqlite_delete_environment_failed", feature = "floating_voice",
+                action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                exception = e,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("environment_name" to envName) else null,
+                correlationId = corrId)
             false
         } finally {
-            try { db?.close() } catch (_: Exception) {}
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
         }
     }
 
@@ -1205,19 +1408,23 @@ Texto: $transcript""".trimIndent()
     // triggerTitle não nulo → remove por título parcial (LIKE) no ambiente.
     // triggerTitle nulo    → remove TODOS os triggers do ambiente.
     private fun deleteTriggerFromDb(envName: String, triggerTitle: String?): Boolean {
+        val corrId = CorrelationManager.correlationIdFor("voice")
         val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
             .getString("flutter.sopro_db_path", null) ?: run {
-                logToSupabase("floating_delete_error",
-                    mapOf("error" to "db_path_not_in_prefs", "method" to "deleteTrigger"))
-                return false
-            }
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs", "op" to "delete_trigger"),
+                correlationId = corrId)
+            return false
+        }
         val dbFile = File(dbPath)
         if (!dbFile.exists()) {
-            logToSupabase("floating_delete_error",
-                mapOf("error" to "db_file_not_found", "method" to "deleteTrigger"))
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to dbPath, "op" to "delete_trigger"),
+                correlationId = corrId)
             return false
         }
         var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val envNameCapitalized = envName.trim()
@@ -1235,6 +1442,11 @@ Texto: $transcript""".trimIndent()
                 stmt.bindString(2, envNameCapitalized)
                 val rowsAffected = stmt.executeUpdateDelete()
                 if (rowsAffected == 0) {
+                    Logger.warn("trigger_not_found", feature = "floating_voice", action = "db_write",
+                        payload = if (LoggerConfiguration.debugLogging)
+                            mapOf("title" to triggerTitle, "environment_name" to envNameCapitalized)
+                        else null,
+                        correlationId = corrId)
                     mainHandler.post { speak("Não encontrei esse lembrete em $envNameCapitalized.") }
                 }
             } else {
@@ -1244,16 +1456,27 @@ Texto: $transcript""".trimIndent()
                     arrayOf(envNameCapitalized)
                 )
             }
-            logToSupabase("floating_trigger_deleted",
-                mapOf("env_name" to envNameCapitalized, "title" to (triggerTitle ?: "all")))
+            Logger.info("trigger_deleted", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("environment_name" to envNameCapitalized,
+                        "title" to (triggerTitle ?: "all"))
+                else null,
+                correlationId = corrId)
             true
         } catch (e: Exception) {
-            Log.e(TAG, "deleteTriggerFromDb error: ${e.message}")
-            logToSupabase("floating_delete_error",
-                mapOf("error" to (e.message ?: "unknown"), "env_name" to envName))
+            Logger.error("sqlite_delete_trigger_failed", feature = "floating_voice",
+                action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                exception = e,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("environment_name" to envName) else null,
+                correlationId = corrId)
             false
         } finally {
-            try { db?.close() } catch (_: Exception) {}
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
         }
     }
 
@@ -1309,8 +1532,18 @@ Texto: $transcript""".trimIndent()
 
         LocationServices.getGeofencingClient(this)
             .addGeofences(request, pendingIntent)
-            .addOnSuccessListener { Log.d(TAG, "Geofence '$name' registrado ✓") }
-            .addOnFailureListener { e -> Log.e(TAG, "Falha ao registrar geofence '$name': ${e.message}") }
+            .addOnSuccessListener {
+                Logger.info("geofence_registered", feature = "floating_voice", action = "geofence",
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("name" to name, "id" to id) else mapOf("id" to id))
+            }
+            .addOnFailureListener { e ->
+                Logger.error("geofence_registration_failed", feature = "floating_voice",
+                    action = "geofence",
+                    exception = e,
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("name" to name, "id" to id) else mapOf("id" to id))
+            }
     }
 
     // Obtém última localização GPS em modo bloqueante — chamado de Dispatchers.IO.
@@ -1320,9 +1553,11 @@ Texto: $transcript""".trimIndent()
         if (ContextCompat.checkSelfPermission(
                 this, android.Manifest.permission.ACCESS_FINE_LOCATION)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            Log.w(TAG, "ACCESS_FINE_LOCATION não concedido")
+            Logger.warn("location_permission_denied", feature = "floating_voice", action = "location",
+                payload = mapOf("permission" to "ACCESS_FINE_LOCATION"))
             return null
         }
+        val start = System.currentTimeMillis()
         return try {
             val location = Tasks.await(
                 LocationServices.getFusedLocationProviderClient(this).lastLocation,
@@ -1335,9 +1570,14 @@ Texto: $transcript""".trimIndent()
                     .putLong("flutter.last_known_lon", java.lang.Double.doubleToRawLongBits(location.longitude))
                     .apply()
             }
+            Logger.debug("location_obtained", feature = "floating_voice", action = "location",
+                durationMs = System.currentTimeMillis() - start,
+                payload = mapOf("has_location" to (location != null).toString()))
             location
         } catch (e: Exception) {
-            Log.w(TAG, "getLastLocationBlocking falhou: ${e.message}")
+            Logger.warn("location_fetch_failed", feature = "floating_voice", action = "location",
+                durationMs = System.currentTimeMillis() - start,
+                exception = e)
             null
         }
     }
@@ -1385,7 +1625,7 @@ Texto: $transcript""".trimIndent()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Supabase logging — fire-and-forget, chamado de Dispatchers.IO
+    // Supabase logging — fire-and-forget, mantido para integração futura com AppLogger Kotlin
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun logToSupabase(eventType: String, payload: Map<String, String>) {
@@ -1412,7 +1652,7 @@ Texto: $transcript""".trimIndent()
             conn.inputStream.close()
             conn.disconnect()
         } catch (e: Exception) {
-            Log.d(TAG, "logToSupabase falhou (ignorado): ${e.message}")
+            Logger.trace("supabase_send_failed", feature = "floating_voice", exception = e)
         }
     }
 

@@ -9,11 +9,14 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
 import android.os.Build
-import android.util.Log
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
+import com.sopro.sopro.logging.CorrelationManager
+import com.sopro.sopro.logging.Logger
+import com.sopro.sopro.logging.LoggerConfiguration
+import com.sopro.sopro.logging.SessionManager
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -47,8 +50,36 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-        Log.d(TAG, "BOOT_COMPLETED recebido — re-registrando geofences")
+        SessionManager.init(context)
+        val receiverStart = System.currentTimeMillis()
+        val corrId = CorrelationManager.beginOperation("boot_receiver")
+
+        val action = intent.action
+        Logger.debug("broadcast_received", feature = "boot", action = action ?: "null_action",
+            correlationId = corrId,
+            payload = if (LoggerConfiguration.debugLogging)
+                mapOf("action" to (action ?: "null")) else null)
+
+        // Reconhece as actions possíveis para logar antes de filtrar.
+        // Só processa BOOT_COMPLETED — demais são ignoradas.
+        if (action != Intent.ACTION_BOOT_COMPLETED) {
+            val actionLabel = when (action) {
+                "android.intent.action.LOCKED_BOOT_COMPLETED" -> "LOCKED_BOOT_COMPLETED"
+                Intent.ACTION_MY_PACKAGE_REPLACED              -> "MY_PACKAGE_REPLACED"
+                Intent.ACTION_PACKAGE_REPLACED                 -> "PACKAGE_REPLACED"
+                "android.intent.action.QUICKBOOT_POWERON"      -> "QUICKBOOT_POWERON"
+                else                                            -> action ?: "null"
+            }
+            Logger.debug("action_ignored", feature = "boot",
+                correlationId = corrId,
+                payload = mapOf("action" to actionLabel),
+                durationMs = System.currentTimeMillis() - receiverStart)
+            CorrelationManager.endOperation("boot_receiver")
+            return
+        }
+
+        Logger.info("boot_completed_received", feature = "boot", action = "onReceive",
+            correlationId = corrId)
 
         // goAsync() permite tarefas longas dentro do BroadcastReceiver.
         // Sem ele o sistema pode matar o processo antes do trabalho terminar (~10s limit).
@@ -57,15 +88,29 @@ class BootReceiver : BroadcastReceiver() {
         // Thread dedicada para operações de I/O (banco + rede) fora do main thread
         Executors.newSingleThreadExecutor().execute {
             try {
-                val environments = readEnvironmentsFromDb(context)
-                Log.d(TAG, "${environments.size} ambiente(s) encontrado(s) no banco")
+                val environments = readEnvironmentsFromDb(context, corrId)
                 if (environments.isNotEmpty()) {
-                    registerGeofences(context, environments)
+                    registerGeofences(context, environments, corrId)
+                    Logger.info("geofence_boot_reregistered", feature = "boot",
+                        action = "onReceive", correlationId = corrId,
+                        payload = mapOf("count" to environments.size.toString()))
                     logToSupabase(context, environments.size)
+                } else {
+                    Logger.debug("no_environments_to_register", feature = "boot",
+                        action = "onReceive", correlationId = corrId)
                 }
+                Logger.info("receiver_finished", feature = "boot", action = "onReceive",
+                    correlationId = corrId,
+                    durationMs = System.currentTimeMillis() - receiverStart,
+                    payload = mapOf("environments_count" to environments.size.toString()))
             } catch (e: Exception) {
-                Log.e(TAG, "Erro ao re-registrar geofences pós-boot: ${e.message}", e)
+                Logger.error("boot_reregister_failed", feature = "boot", action = "onReceive",
+                    correlationId = corrId, exception = e,
+                    durationMs = System.currentTimeMillis() - receiverStart)
             } finally {
+                // Sempre finaliza a operação, independente de sucesso ou falha.
+                // pendingResult.finish() libera o BroadcastReceiver após o I/O.
+                CorrelationManager.endOperation("boot_receiver")
                 pendingResult.finish()
             }
         }
@@ -75,7 +120,8 @@ class BootReceiver : BroadcastReceiver() {
     // Drift (drift_flutter) armazena o banco em getApplicationDocumentsDirectory(),
     // que no Android mapeia para filesDir.parent/app_flutter/sopro.db.
     // Tenta múltiplos caminhos para cobrir variações entre versões do package.
-    private fun readEnvironmentsFromDb(context: Context): List<EnvironmentRow> {
+    private fun readEnvironmentsFromDb(context: Context, corrId: String): List<EnvironmentRow> {
+        val dbStart = System.currentTimeMillis()
         val candidates = listOf(
             File(context.filesDir.parentFile, "app_flutter/sopro.db"),
             File(context.filesDir, "sopro.db"),
@@ -83,17 +129,26 @@ class BootReceiver : BroadcastReceiver() {
         )
 
         val dbFile = candidates.firstOrNull { it.exists() } ?: run {
-            Log.w(TAG, "sopro.db não encontrado. Caminhos tentados:")
-            candidates.forEach { Log.w(TAG, "  → ${it.absolutePath}") }
+            Logger.warn("sqlite_db_not_found", feature = "boot",
+                action = "readEnvironmentsFromDb", correlationId = corrId,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("paths_tried" to candidates.map { it.absolutePath }.toString())
+                else mapOf("paths_count" to candidates.size.toString()))
             return emptyList()
         }
-        Log.d(TAG, "Banco encontrado: ${dbFile.absolutePath}")
+
+        Logger.debug("sqlite_db_found", feature = "boot", action = "readEnvironmentsFromDb",
+            correlationId = corrId,
+            payload = if (LoggerConfiguration.debugLogging)
+                mapOf("path" to dbFile.absolutePath) else null)
 
         val rows = mutableListOf<EnvironmentRow>()
         try {
             SQLiteDatabase.openDatabase(
                 dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY
             ).use { db ->
+                Logger.debug("sqlite_opened", feature = "boot",
+                    action = "readEnvironmentsFromDb", correlationId = corrId)
                 db.rawQuery(
                     "SELECT id, name, latitude, longitude, radius_meters FROM environments",
                     null
@@ -111,8 +166,14 @@ class BootReceiver : BroadcastReceiver() {
                     }
                 }
             }
+            Logger.debug("sqlite_environments_loaded", feature = "boot",
+                action = "readEnvironmentsFromDb", correlationId = corrId,
+                durationMs = System.currentTimeMillis() - dbStart,
+                payload = mapOf("count" to rows.size.toString()))
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao ler environments: ${e.message}", e)
+            Logger.error("sqlite_read_environments_failed", feature = "boot",
+                action = "readEnvironmentsFromDb", correlationId = corrId, exception = e,
+                durationMs = System.currentTimeMillis() - dbStart)
         }
         return rows
     }
@@ -121,14 +182,22 @@ class BootReceiver : BroadcastReceiver() {
     // Idêntico ao fluxo de addNativeGeofence() na MainActivity, mas sem
     // retorno de MethodChannel — opera completamente sem o Flutter Engine.
     @SuppressLint("MissingPermission")
-    private fun registerGeofences(context: Context, environments: List<EnvironmentRow>) {
+    private fun registerGeofences(
+        context: Context,
+        environments: List<EnvironmentRow>,
+        corrId: String,
+    ) {
         if (ContextCompat.checkSelfPermission(
                 context, Manifest.permission.ACCESS_FINE_LOCATION
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.w(TAG, "ACCESS_FINE_LOCATION não concedido — abortando re-registro")
+            Logger.warn("geofence_permission_denied", feature = "boot",
+                action = "registerGeofences", correlationId = corrId,
+                payload = mapOf("permission" to "ACCESS_FINE_LOCATION"))
             return
         }
+
+        val geofenceStart = System.currentTimeMillis()
 
         val geofences = environments.map { env ->
             Geofence.Builder()
@@ -165,18 +234,32 @@ class BootReceiver : BroadcastReceiver() {
         environments.forEach { env -> editor.putString(env.id, env.name) }
         editor.apply()
 
+        Logger.debug("geofence_register_start", feature = "boot",
+            action = "registerGeofences", correlationId = corrId,
+            payload = if (LoggerConfiguration.debugLogging)
+                mapOf("count" to environments.size.toString(),
+                    "env_ids" to environments.map { it.id }.toString())
+            else mapOf("count" to environments.size.toString()))
+
         LocationServices.getGeofencingClient(context)
             .addGeofences(request, pendingIntent)
             .addOnSuccessListener {
-                Log.d(TAG, "${environments.size} geofence(s) re-registrado(s) com sucesso")
+                Logger.info("geofences_registered", feature = "boot",
+                    action = "registerGeofences", correlationId = corrId,
+                    durationMs = System.currentTimeMillis() - geofenceStart,
+                    payload = mapOf("count" to environments.size.toString()))
             }
             .addOnFailureListener { e ->
-                Log.e(TAG, "Falha ao re-registrar geofences: ${e.message}", e)
+                Logger.error("geofences_register_failed", feature = "boot",
+                    action = "registerGeofences", correlationId = corrId, exception = e,
+                    durationMs = System.currentTimeMillis() - geofenceStart,
+                    payload = mapOf("count" to environments.size.toString()))
             }
     }
 
     // Loga no Supabase que o boot receiver funcionou — fire-and-forget, falhas silenciosas.
     // Lê o device_id das SharedPreferences do Flutter (prefixo "flutter.").
+    // Mantido como transporte legado até o Logger Kotlin receber sink Supabase.
     private fun logToSupabase(context: Context, count: Int) {
         try {
             val prefs    = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
@@ -201,10 +284,12 @@ class BootReceiver : BroadcastReceiver() {
             conn.outputStream.use { it.write(body.toByteArray()) }
             conn.inputStream.use { it.readBytes() } // consome a resposta para liberar conexão
             conn.disconnect()
-            Log.d(TAG, "geofence_boot_reregistered logado no Supabase (count=$count)")
+            Logger.trace("supabase_sent", feature = "boot", action = "logToSupabase",
+                payload = mapOf("event_type" to "geofence_boot_reregistered"))
         } catch (e: Exception) {
             // Logging nunca pode bloquear o re-registro de geofences
-            Log.w(TAG, "Falha ao logar no Supabase: ${e.message}")
+            Logger.trace("supabase_send_failed", feature = "boot", action = "logToSupabase",
+                exception = e)
         }
     }
 
