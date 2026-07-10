@@ -25,3 +25,14 @@ build/
 *.key
 google-services.json
 GoogleService-Info.plist
+
+# JVM crash dumps gerados pelo Android build
+android/hs_err_pid*.log
+android/replay_pid*.log
+
+# Dumps de debug locais
+geocoding_debug_dump.txt
+*_debug_dump.txt
+
+# RTK (ferramenta local de otimização de tokens)
+.rtk/

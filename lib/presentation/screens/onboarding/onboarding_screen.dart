@@ -150,6 +150,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('onboarding_done', true);
+      await prefs.setString(
+        'sopro_first_use_date',
+        DateTime.now().toIso8601String(),
+      );
     } finally {
       if (mounted) {
         // pushReplacement impede que o botão "voltar" retorne ao onboarding

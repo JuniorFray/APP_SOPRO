@@ -530,7 +530,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     return query;
   }
 
-  // Debounce de 400 ms: só dispara _searchAddress() após o usuário parar de digitar.
+  // Debounce de 800 ms: só dispara _searchAddress() após o usuário parar de digitar.
   // Limpa os resultados imediatamente ao esvaziar o campo.
   void _onSearchChanged(String value) {
     _searchDebounce?.cancel();
@@ -538,8 +538,8 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
       setState(() => _searchResults = []);
       return;
     }
-    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
-      if (value.length >= 3) _searchAddress();
+    _searchDebounce = Timer(const Duration(milliseconds: 800), () {
+      if (value.length >= 4) _searchAddress();
     });
   }
 

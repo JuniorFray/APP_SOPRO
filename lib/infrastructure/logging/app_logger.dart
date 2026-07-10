@@ -2,19 +2,32 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 
-// Registra eventos do app no Supabase de forma assíncrona.
-// Nunca bloqueia o app — falhas de rede são silenciosas.
+import 'core/logger.dart';
+import 'core/session_manager.dart';
+
+// Fachada (Facade) de compatibilidade retroativa sobre o novo Logger.
+//
+// Todas as chamadas AppLogger.log() e AppLogger.init() espalhadas pelo projeto
+// continuam funcionando sem alteração — AppLogger delega para o Logger
+// estruturado e mantém o upload Supabase inalterado nesta fase.
+//
+// Fluxo de uma chamada AppLogger.log(eventType, payload):
+//   1. Logger.info(eventType, payload: payload)
+//        → cria LogEvent estruturado
+//        → aplica LogSanitizer
+//        → emite no console (se habilitado)
+//   2. _send(eventType, payload)
+//        → upload fire-and-forget ao Supabase (inalterado)
 //
 // Tipos de eventos logados:
-//   app_start      — app iniciado (AppInitializer)
-//   geofence_enter — usuário entrou num ambiente (GeofenceManager)
-//   geofence_exit  — usuário saiu de um ambiente (GeofenceManager)
-//   trigger_fired  — notificação de trigger disparada (FireTriggersUseCase)
-//   ble_error      — falha em operação BLE (BleService)
-//   voice_debug    — diagnóstico de intenção de voz (VoiceService.resolveIntent)
+//   app_start            — app iniciado (AppInitializer)
+//   geofence_enter       — usuário entrou num ambiente (GeofenceManager)
+//   geofence_exit        — usuário saiu de um ambiente (GeofenceManager)
+//   trigger_fired        — notificação de trigger disparada (FireTriggersUseCase)
+//   ble_error            — falha em operação BLE (BleService)
+//   voice_debug          — diagnóstico de intenção de voz (VoiceService)
+//   stale_prefs_reset    — reset de prefs inconsistentes (AppInitializer)
 class AppLogger {
   AppLogger._();
 
@@ -35,30 +48,34 @@ class AppLogger {
   // sem coordenadas exatas, nomes, telefones ou identificadores de usuário.
   static const _apiKey =
       'sb_publishable_cw4YwcWkSNhGc-zkTjO7xw_lPS5NE09';
-  // Chave do SharedPreferences para persistir o device ID entre sessões
-  static const _deviceIdKey = 'logger_device_id';
 
-  // UUID único por instalação — gerado na primeira execução e persistido
+  // installation_id persistido — alimentado pelo SessionManager após init().
+  // Mantido aqui para uso exclusivo de _send() sem alterar a assinatura HTTP.
   static String? _deviceId;
 
-  // Inicializa o logger recuperando ou gerando o device ID único.
+  // Inicializa o logger:
+  //   1. Delega ao SessionManager (persiste installation_id, gera session_id).
+  //   2. Popula _deviceId para que _send() continue funcionando.
+  //
   // Deve ser chamado uma vez no AppInitializer._init() antes de qualquer log.
   static Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    _deviceId = prefs.getString(_deviceIdKey);
-    if (_deviceId == null) {
-      _deviceId = const Uuid().v4();
-      await prefs.setString(_deviceIdKey, _deviceId!);
-    }
+    await SessionManager.init();
+    _deviceId = SessionManager.installationId;
   }
 
   // Registra um evento sem bloquear o chamador (fire-and-forget).
+  //
+  // Encaminha para Logger.info() para logging estruturado, e em seguida
+  // para _send() para persistência no Supabase.
   // Se init() não foi chamado ainda, o log é descartado silenciosamente.
   static void log(String eventType, [Map<String, dynamic>? payload]) {
     if (_deviceId == null) return;
+    Logger.info(eventType, payload: payload);
     _send(eventType, payload ?? {}).ignore();
   }
 
+  // Upload HTTP fire-and-forget ao Supabase — inalterado em relação à
+  // implementação original. Falhas de rede são silenciosas em produção.
   static Future<void> _send(
     String eventType,
     Map<String, dynamic> payload,
@@ -75,9 +92,9 @@ class AppLogger {
         ..set('Prefer', 'return=minimal'); // não retorna o registro inserido
 
       final body = jsonEncode({
-        'device_id':  _deviceId,
+        'device_id': _deviceId,
         'event_type': eventType,
-        'payload':    payload,
+        'payload': payload,
       });
       request.contentLength = utf8.encode(body).length;
       request.write(body);
@@ -86,7 +103,8 @@ class AppLogger {
       // Em debug, avisa se o Supabase recusou o log (4xx/5xx).
       // Em produção, silencioso — logging nunca pode crashar o app.
       if (kDebugMode && response.statusCode != 201) {
-        debugPrint('[AppLogger] HTTP ${response.statusCode} ao logar "$eventType"');
+        debugPrint(
+            '[AppLogger] HTTP ${response.statusCode} ao logar "$eventType"');
       }
       await response.drain<void>(); // consome o body para liberar a conexão
       client.close();

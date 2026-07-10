@@ -85,21 +85,35 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     // 5. Detecção de SharedPreferences obsoletas (OEM Auto Backup).
     //
     //    Motorola G52 e outros OEMs com Android Auto Backup podem restaurar
-    //    SharedPreferences após reinstalação SEM restaurar o banco de dados.
-    //    Isso faz com que 'onboarding_done=true' e as permissões não sejam
-    //    re-solicitadas, mesmo que o banco esteja completamente vazio.
+    //    O Android Auto Backup pode restaurar SharedPreferences sem restaurar
+    //    o banco de dados local, deixando 'onboarding_done=true' mesmo numa
+    //    instalação virgem.
     //
-    //    Diagnóstico: onboarding_done=true + banco sem Environments E sem perfil.
-    //    Ação: remove todas as prefs que controlam o estado de primeiro acesso
-    //    e restaura os providers para os valores padrão antes de carregá-los
-    //    das prefs (evita duplo-set de estado).
-    if (prefs.getBool('onboarding_done') ?? false) {
+    //    Entretanto, banco vazio NÃO é mais evidência suficiente de
+    //    inconsistência: o usuário pode ter apagado todos os ambientes, apagado
+    //    seu perfil ou acabado de concluir o onboarding sem criar nada ainda.
+    //
+    //    A ausência de 'sopro_first_use_date' é usada como evidência de que
+    //    aquela instalação nunca concluiu um onboarding válido neste dispositivo.
+    //    Essa chave é gravada no momento exato em que o onboarding é concluído
+    //    e nunca é removida por fluxos normais do aplicativo.
+    //
+    //    Reset ocorre SOMENTE quando TODAS as condições são verdadeiras:
+    //      • onboarding_done == true
+    //      • banco sem Environments
+    //      • banco sem perfil ativo
+    //      • sopro_first_use_date ausente (nunca houve onboarding válido aqui)
+    //    Isso evita falsos positivos e protege usuários reais.
+    final onboardingDone = prefs.getBool('onboarding_done') ?? false;
+    final firstUseDate = prefs.getString('sopro_first_use_date');
+
+    if (onboardingDone) {
       final envs = await ref.read(environmentRepositoryProvider).getAll();
       final card = await ref.read(contextCardRepositoryProvider).getActive();
 
-      if (envs.isEmpty && card == null) {
-        // Banco vazio mas prefs dizem que onboarding foi concluído:
-        // Remove as prefs que podem estar em estado inconsistente.
+      if (onboardingDone && envs.isEmpty && card == null && firstUseDate == null) {
+        // Prefs restauradas pelo Auto Backup sem banco correspondente:
+        // Remove as prefs que controlam o estado de primeiro acesso.
         await Future.wait([
           prefs.remove('onboarding_done'),
           prefs.remove('notifications_enabled'),
@@ -114,7 +128,7 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
         ref.read(notificationCooldownMinutesProvider.notifier).state = 0;
 
         AppLogger.log('stale_prefs_reset', {
-          'reason': 'onboarding_done=true but database is empty',
+          'reason': 'onboarding_done=true but database is empty and no first_use_date',
         });
         // Não continua o _init() — HomeScreen detectará onboarding_done=false
         // e redirecionará para o OnboardingScreen normalmente.
