@@ -1,8 +1,16 @@
 import 'package:flutter/foundation.dart';
 
 // Contexto imutável anexado a cada LogEvent.
-// Carrega metadados de ambiente, sessão e localização no código — nunca dados
-// do usuário final (sem nome, e-mail, coordenadas exatas, etc.).
+// Carrega metadados de ambiente, sessão e localização no código.
+//
+// Regra: nunca armazenar dados do usuário final neste objeto —
+// sem nome, e-mail, coordenadas exatas ou identificadores pessoais.
+// Os IDs (deviceId, installationId) são UUIDs anônimos gerados localmente.
+//
+// Timestamps: o campo [timestamp] deve SEMPRE ser UTC.
+// Use DateTime.now().toUtc() ao construir LogContext.
+// A serialização em toMap() garante formato ISO8601 com precisão de
+// milissegundos e sufixo 'Z': "2026-07-10T15:42:31.552Z".
 @immutable
 class LogContext {
   const LogContext({
@@ -21,7 +29,7 @@ class LogContext {
     required this.timestamp,
   });
 
-  // Identificador do hardware (para uso futuro com ANDROID_ID).
+  // Identificador do hardware (reservado para uso futuro com ANDROID_ID).
   // Atualmente igual a installationId.
   final String deviceId;
 
@@ -31,7 +39,8 @@ class LogContext {
   // UUID efêmero por sessão (ver SessionManager).
   final String sessionId;
 
-  // UUID da operação em andamento (ver CorrelationManager). Pode ser null.
+  // UUID da operação rastreável em andamento (ver CorrelationManager).
+  // Null se nenhuma operação foi iniciada ou foi encerrada.
   final String? correlationId;
 
   // Sistema operacional: 'android', 'ios', etc.
@@ -43,7 +52,7 @@ class LogContext {
   // Build number (ex.: '1').
   final String buildNumber;
 
-  // Domínio funcional onde o evento ocorreu (ex.: 'voice', 'geofence', 'ble').
+  // Domínio funcional do evento (ex.: 'voice', 'geofence', 'ble').
   final String? feature;
 
   // Ação específica dentro da feature (ex.: 'record_start', 'geofence_enter').
@@ -55,10 +64,11 @@ class LogContext {
   // Método/função de origem do evento (ex.: 'resolveIntent').
   final String? method;
 
-  // Thread ou isolate de origem (ex.: 'main', 'background'). Pode ser null.
+  // Isolate ou thread de origem (ex.: 'main', 'background'). Pode ser null.
   final String? thread;
 
-  // Timestamp UTC do momento em que o evento foi criado.
+  // Momento UTC em que o evento foi criado.
+  // DEVE ser DateTime.now().toUtc() — nunca horário local.
   final DateTime timestamp;
 
   Map<String, dynamic> toMap() => {
@@ -74,6 +84,20 @@ class LogContext {
         if (screen != null) 'screen': screen,
         if (method != null) 'method': method,
         if (thread != null) 'thread': thread,
-        'timestamp': timestamp.toIso8601String(),
+        'timestamp': _isoMs(timestamp),
       };
+
+  // Formata DateTime como ISO8601 UTC com precisão de milissegundos.
+  // Saída garantida: "2026-07-10T15:42:31.552Z"
+  // Nunca usa DateTime.toString() que produz formato local não padronizado.
+  static String _isoMs(DateTime dt) {
+    final u = dt.toUtc();
+    return '${_p4(u.year)}-${_p2(u.month)}-${_p2(u.day)}'
+        'T${_p2(u.hour)}:${_p2(u.minute)}:${_p2(u.second)}'
+        '.${_p3(u.millisecond)}Z';
+  }
+
+  static String _p2(int n) => n.toString().padLeft(2, '0');
+  static String _p3(int n) => n.toString().padLeft(3, '0');
+  static String _p4(int n) => n.toString().padLeft(4, '0');
 }
