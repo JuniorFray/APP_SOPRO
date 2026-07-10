@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'core/log_event.dart';
 import 'core/logger.dart';
+import 'core/logger_configuration.dart';
 import 'core/session_manager.dart';
 
 // Fachada (Facade) de compatibilidade retroativa sobre o novo Logger.
@@ -50,8 +52,12 @@ class AppLogger {
       'sb_publishable_cw4YwcWkSNhGc-zkTjO7xw_lPS5NE09';
 
   // installation_id persistido — alimentado pelo SessionManager após init().
-  // Mantido aqui para uso exclusivo de _send() sem alterar a assinatura HTTP.
+  // Mantido aqui para uso exclusivo de _onLogEvent() sem alterar a assinatura HTTP.
   static String? _deviceId;
+
+  // Garante que o sink Supabase seja registrado no Logger apenas uma vez,
+  // mesmo que AppLogger.init() seja chamado em múltiplos isolates/locais.
+  static bool _sinkRegistered = false;
 
   // Inicializa o logger:
   //   1. Delega ao SessionManager (persiste installation_id, gera session_id).
@@ -61,6 +67,19 @@ class AppLogger {
   static Future<void> init() async {
     await SessionManager.init();
     _deviceId = SessionManager.installationId;
+    if (!_sinkRegistered) {
+      Logger.addSink(_onLogEvent);
+      _sinkRegistered = true;
+    }
+  }
+
+  // Sink registrado no Logger — converte LogEvent para o formato HTTP existente.
+  // Respeita LoggerConfiguration.enableSupabase para desativar em testes.
+  // Recebe o payload já sanitizado pelo LogSanitizer dentro do Logger._emit().
+  static Future<void> _onLogEvent(LogEvent event) async {
+    if (_deviceId == null) return;
+    if (!LoggerConfiguration.enableSupabase) return;
+    await _send(event.message, event.payload ?? {});
   }
 
   // Registra um evento sem bloquear o chamador (fire-and-forget).
@@ -71,7 +90,7 @@ class AppLogger {
   static void log(String eventType, [Map<String, dynamic>? payload]) {
     if (_deviceId == null) return;
     Logger.info(eventType, payload: payload);
-    _send(eventType, payload ?? {}).ignore();
+    // _send() removido — Logger._emit() despacha para _onLogEvent() via sink
   }
 
   // Upload HTTP fire-and-forget ao Supabase — inalterado em relação à

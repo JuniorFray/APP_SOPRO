@@ -9,6 +9,11 @@ import 'log_sanitizer.dart';
 import 'logger_configuration.dart';
 import 'session_manager.dart';
 
+// Contrato de sink de saída. Recebe o LogEvent completo — cada sink extrai
+// apenas os campos que precisa. Erros lançados dentro do sink são isolados:
+// nunca interrompem o pipeline nem afetam os demais sinks registrados.
+typedef LogSink = Future<void> Function(LogEvent event);
+
 // Logger principal do Sopro.
 //
 // ── Responsabilidades (fase atual) ───────────────────────────────────────
@@ -36,6 +41,14 @@ import 'session_manager.dart';
 //   Logger.info('voice_start', correlationId: id);
 class Logger {
   Logger._();
+
+  // Lista de sinks registrados. Populada pelo AppLogger.init() (Supabase)
+  // e por qualquer outro consumidor futuro (Crashlytics, Sentry, arquivo…).
+  static final List<LogSink> _sinks = [];
+
+  // Registra um sink adicional. Sem limite de sinks. Sem deduplicação automática —
+  // o chamador é responsável por não registrar o mesmo sink duas vezes.
+  static void addSink(LogSink sink) => _sinks.add(sink);
 
   // Rastreamento interno de fluxo. Suprimido em produção.
   static void trace(
@@ -190,6 +203,17 @@ class Logger {
 
     if (LoggerConfiguration.enableConsole) {
       _printToConsole(event);
+    }
+
+    // Despacha para todos os sinks registrados em paralelo (fire-and-forget).
+    // Snapshot da lista evita problemas se um sink chamar addSink() durante dispatch.
+    // Erros de cada sink são isolados: não interrompem os demais.
+    for (final sink in List<LogSink>.of(_sinks)) {
+      try {
+        sink(event).ignore();
+      } catch (_) {
+        // sink lançou exceção síncrona — ignora, continua próximo sink
+      }
     }
   }
 
