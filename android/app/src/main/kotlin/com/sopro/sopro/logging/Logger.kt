@@ -2,11 +2,25 @@ package com.sopro.sopro.logging
 
 import android.util.Log
 import java.time.Instant
+import java.util.concurrent.CopyOnWriteArrayList
+
+// Contrato de sink de saída. Recebe o LogEvent completo — cada sink extrai
+// apenas os campos que precisa. Exceções lançadas de onEvent() são capturadas
+// e logadas no Logcat; nunca interrompem o pipeline nem afetam os demais sinks.
+fun interface LogSink {
+    fun onEvent(event: LogEvent)
+}
 
 // Logger principal Kotlin — espelho do Logger Flutter.
 //
 // Todos os 6 métodos públicos (trace/debug/info/warn/error/fatal) delegam
 // ao pipeline único emit(). Nenhuma lógica especial por nível fora de shouldEmit().
+//
+// Pipeline por evento:
+//   1. shouldEmit() — filtra por nível
+//   2. LogEvent criado com LogSanitizer aplicado ao payload
+//   3. printToConsole() — LogCat (se enableConsole)
+//   4. Dispatch para _sinks — independente de enableConsole
 //
 // Diferença vs Flutter: thread captura Thread.currentThread().name
 // (Android é multi-thread; Dart é single-thread por isolate).
@@ -15,6 +29,14 @@ import java.time.Instant
 //   Logger.info("geofence_enter", feature = "geofence", payload = mapOf("id" to envId))
 //   Logger.error("ble_gatt_error", exception = e, feature = "ble")
 object Logger {
+
+    // Lista de sinks registrados. Thread-safe: CopyOnWriteArrayList permite
+    // iteração sem lock enquanto addSink() é raramente chamado.
+    private val _sinks = CopyOnWriteArrayList<LogSink>()
+
+    // Registra um sink adicional. Sem deduplicação automática — o chamador é
+    // responsável por não registrar o mesmo sink duas vezes (use guard próprio).
+    fun addSink(sink: LogSink) = _sinks.add(sink)
 
     private const val TAG = "Sopro"
 
@@ -136,6 +158,16 @@ object Logger {
 
         if (LoggerConfiguration.enableConsole) {
             printToConsole(event)
+        }
+
+        // Despacha para todos os sinks em sequência. Falha de um sink é isolada:
+        // não interrompe os demais. Console e sinks são independentes de enableConsole.
+        for (sink in _sinks) {
+            try {
+                sink.onEvent(event)
+            } catch (e: Exception) {
+                Log.e(TAG, "[Logger] sink falhou — ${sink::class.simpleName}: ${e.message}")
+            }
         }
     }
 

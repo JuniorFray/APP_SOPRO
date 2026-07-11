@@ -36,5 +36,9 @@ object SessionManager {
             prefs.edit().putString(INSTALLATION_ID_KEY, newId).apply()
             newId
         }
+        // Registra o sink Supabase após installationId estar disponível.
+        // Idempotente: chamadas subsequentes de SessionManager.init() retornam antes
+        // deste ponto (guard isInitialized acima), então register() roda exatamente uma vez.
+        SupabaseSink.register()
     }
 }
