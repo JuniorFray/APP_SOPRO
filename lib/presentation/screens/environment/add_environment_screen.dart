@@ -8,12 +8,17 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/strings.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../infrastructure/geocoding/geocoding_repository.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
+import '../../widgets/sopro_text_field.dart';
 
 // Tela de criação OU edição de Environment com mapa interativo.
 //
@@ -157,13 +162,13 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
         actions: [
           _isSaving
               ? const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  padding: EdgeInsets.symmetric(horizontal: AppSpacing.md),
                   child: SizedBox(
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: Colors.white,
+                      color: AppColors.textPrimary,
                     ),
                   ),
                 )
@@ -174,7 +179,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                     AppStrings.save,
                     style: TextStyle(
                       color: _selectedPoint != null
-                          ? Colors.white
+                          ? AppColors.textPrimary
                           : AppTheme.textDisabled,
                       fontWeight: FontWeight.bold,
                     ),
@@ -188,39 +193,35 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
           children: [
             // Campo nome do ambiente com botão de microfone para ditar o nome
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: TextFormField(
+              padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xs),
+              child: SoproTextField(
                 controller: _nameController,
-                style: const TextStyle(color: AppTheme.textPrimary),
+                label: AppStrings.environmentNameLabel,
+                hint: _recordingName
+                    ? AppStrings.voiceFillHint
+                    : AppStrings.environmentNameHint,
                 textCapitalization: TextCapitalization.words,
                 validator: (v) => (v == null || v.trim().isEmpty)
                     ? AppStrings.environmentNameRequired
                     : null,
-                decoration: _inputDecoration(
-                  label: AppStrings.environmentNameLabel,
-                  hint: _recordingName
-                      ? AppStrings.voiceFillHint
-                      : AppStrings.environmentNameHint,
-                ).copyWith(
-                  suffixIcon: _recordingName
-                      ? const Padding(
-                          padding: EdgeInsets.all(12),
-                          child: SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: AppTheme.accent,
-                            ),
+                suffixIcon: _recordingName
+                    ? const Padding(
+                        padding: EdgeInsets.all(AppSpacing.sm),
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppTheme.accent,
                           ),
-                        )
-                      : IconButton(
-                          icon: const Icon(Icons.mic_outlined,
-                              color: AppTheme.accent, size: 20),
-                          tooltip: AppStrings.voiceMicTooltip,
-                          onPressed: _recordForName,
                         ),
-                ),
+                      )
+                    : IconButton(
+                        icon: const Icon(Icons.mic_outlined,
+                            color: AppTheme.accent, size: 20),
+                        tooltip: AppStrings.voiceMicTooltip,
+                        onPressed: _recordForName,
+                      ),
               ),
             ),
 
@@ -232,11 +233,11 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                 children: [
                   Material(
                     elevation: 2,
-                    borderRadius: BorderRadius.circular(8),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
                     color: AppTheme.backgroundElevated,
                     child: Row(
                       children: [
-                        const SizedBox(width: 10),
+                        const SizedBox(width: AppSpacing.gap10),
                         _searching
                             ? const SizedBox(
                                 width: 16,
@@ -251,24 +252,18 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                                 color: AppTheme.textSecondary,
                                 size: 18,
                               ),
-                        const SizedBox(width: 6),
+                        const SizedBox(width: AppSpacing.gap6),
                         Expanded(
                           child: TextField(
                             controller: _searchCtrl,
                             focusNode: _searchFocusNode,
-                            style: const TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontSize: 13,
-                            ),
-                            decoration: const InputDecoration(
+                            style: AppTypography.bodyMedium.copyWith(color: AppTheme.textPrimary),
+                            decoration: InputDecoration(
                               hintText: AppStrings.searchAddressHint,
-                              hintStyle: TextStyle(
-                                color: AppTheme.textDisabled,
-                                fontSize: 13,
-                              ),
+                              hintStyle: AppTypography.bodyMedium.copyWith(color: AppTheme.textDisabled),
                               border: InputBorder.none,
                               contentPadding:
-                                  EdgeInsets.symmetric(vertical: 10),
+                                  const EdgeInsets.symmetric(vertical: AppSpacing.gap10),
                             ),
                             textInputAction: TextInputAction.search,
                             onSubmitted: (_) => _searchAddress(),
@@ -282,7 +277,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                               _searchResults = [];
                             }),
                             child: const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 8),
+                              padding: EdgeInsets.symmetric(horizontal: AppSpacing.xs),
                               child: Icon(
                                 Icons.clear,
                                 size: 16,
@@ -298,7 +293,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                       margin: const EdgeInsets.only(top: 2),
                       decoration: BoxDecoration(
                         color: AppTheme.backgroundSurface,
-                        borderRadius: BorderRadius.circular(8),
+                        borderRadius: BorderRadius.circular(AppRadius.md),
                         boxShadow: const [
                           BoxShadow(
                             color: Colors.black26,
@@ -323,10 +318,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                             ),
                             title: Text(
                               r.displayName,
-                              style: const TextStyle(
-                                color: AppTheme.textPrimary,
-                                fontSize: 12,
-                              ),
+                              style: AppTypography.bodySmall.copyWith(color: AppTheme.textPrimary),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -418,20 +410,17 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
 
             // Campo raio com sufixo "m"
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: TextFormField(
+              padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
+              child: SoproTextField(
                 controller: _radiusController,
+                label: AppStrings.radiusLabel,
+                suffixText: 'm',
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
-                style: const TextStyle(color: AppTheme.textPrimary),
                 validator: (v) {
                   final n = double.tryParse(v ?? '');
                   return (n == null || n <= 0) ? AppStrings.radiusInvalid : null;
                 },
-                decoration: _inputDecoration(
-                  label: AppStrings.radiusLabel,
-                  suffix: 'm',
-                ),
               ),
             ),
           ],
@@ -631,30 +620,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     if (mounted) Navigator.pop(context);
   }
 
-  InputDecoration _inputDecoration({
-    required String label,
-    String? hint,
-    String? suffix,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      suffixText: suffix,
-      labelStyle: const TextStyle(color: AppTheme.textSecondary),
-      hintStyle: const TextStyle(color: AppTheme.textDisabled),
-      suffixStyle: const TextStyle(color: AppTheme.textSecondary),
-      filled: true,
-      fillColor: AppTheme.backgroundSurface,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide.none,
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: AppTheme.accent, width: 1.5),
-      ),
-    );
-  }
 }
 
 // Chip flutuante sobre o mapa com texto informativo
@@ -667,17 +632,14 @@ class _MapChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.gap6),
         decoration: BoxDecoration(
           color: AppTheme.backgroundElevated.withOpacity(0.92),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(AppRadius.button),
         ),
         child: Text(
           label,
-          style: const TextStyle(
-            color: AppTheme.textSecondary,
-            fontSize: 12,
-          ),
+          style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
         ),
       ),
     );

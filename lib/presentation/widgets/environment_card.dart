@@ -3,7 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants/strings.dart';
 import '../../core/navigation/app_router.dart';
+import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/theme/app_typography.dart';
+import 'sopro_card.dart';
 import '../../core/utils/environment_icon_mapper.dart';
 import '../../domain/entities/environment_entity.dart';
 import '../providers/database_provider.dart';
@@ -32,17 +36,11 @@ class EnvironmentCard extends ConsumerWidget {
         ref.read(environmentRepositoryProvider).delete(environment.id);
       },
       background: _DeleteBackground(),
-      child: Card(
-        color: AppTheme.backgroundSurface,
-        elevation: 0,
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppTheme.radiusCard),
-          side: const BorderSide(color: AppTheme.borderColor, width: 0.5),
-        ),
+      child: SoproCard(
+        margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.gap6),
         child: ListTile(
           contentPadding:
-              const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),
           // Container ilustrativo com emoji e cor do mapper
           leading: Container(
             width: 44,
@@ -63,7 +61,7 @@ class EnvironmentCard extends ConsumerWidget {
           ),
           subtitle: Text(
             '${environment.radiusMeters.toStringAsFixed(0)}m de raio',
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+            style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
           ),
           onTap: () => pushScreen(
             context,
@@ -126,15 +124,11 @@ class _TriggerCountBadge extends StatelessWidget {
       children: [
         Text(
           '$count',
-          style: const TextStyle(
-            color: AppTheme.accent,
-            fontWeight: FontWeight.bold,
-            fontSize: 18,
-          ),
+          style: AppTypography.titleMedium.copyWith(color: AppTheme.accent),
         ),
         Text(
           count == 1 ? 'gatilho' : AppStrings.triggers,
-          style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10),
+          style: AppTypography.labelSmall.copyWith(color: AppTheme.textSecondary),
         ),
       ],
     );
@@ -146,14 +140,14 @@ class _DeleteBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.gap6),
       decoration: BoxDecoration(
         color: AppTheme.accent,
         borderRadius: BorderRadius.circular(AppTheme.radiusCard),
       ),
       alignment: Alignment.centerRight,
-      padding: const EdgeInsets.only(right: 20),
-      child: const Icon(Icons.delete_outline, color: Colors.white, size: 28),
+      padding: const EdgeInsets.only(right: AppSpacing.lg),
+      child: const Icon(Icons.delete_outline, color: AppColors.textPrimary, size: 28),
     );
   }
 }

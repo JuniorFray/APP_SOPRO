@@ -24,10 +24,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/settings_providers.dart';
+import '../../widgets/sopro_primary_button.dart';
 
 // Dados imutáveis de cada passo do onboarding
 class _Step {
@@ -55,19 +59,19 @@ const _steps = [
   ),
   _Step(
     icon: Icons.location_on_outlined,
-    iconColor: Color(0xFF4CAF50), // verde — segurança de localização
+    iconColor: AppColors.onboardingLocation, // verde — segurança de localização
     title: AppStrings.obLocationTitle,
     body: AppStrings.obLocationBody,
   ),
   _Step(
     icon: Icons.notifications_none_outlined,
-    iconColor: Color(0xFFFFA726), // laranja — notificações discretas
+    iconColor: AppColors.onboardingNotification, // laranja — notificações discretas
     title: AppStrings.obNotifTitle,
     body: AppStrings.obNotifBody,
   ),
   _Step(
     icon: Icons.bluetooth_outlined,
-    iconColor: Color(0xFF42A5F5), // azul — Bluetooth
+    iconColor: AppColors.onboardingBle, // azul — Bluetooth
     title: AppStrings.obBleTitle,
     body: AppStrings.obBleBody,
   ),
@@ -363,12 +367,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
                     child: _denialMessage != null
                         ? Container(
                             width: double.infinity,
-                            margin: const EdgeInsets.only(bottom: 16),
-                            padding: const EdgeInsets.all(12),
+                            margin: const EdgeInsets.only(bottom: AppSpacing.md),
+                            padding: const EdgeInsets.all(AppSpacing.sm),
                             decoration: BoxDecoration(
                               // ignore: deprecated_member_use
                               color: AppTheme.accent.withOpacity(0.10),
-                              borderRadius: BorderRadius.circular(10),
+                              borderRadius: BorderRadius.circular(AppRadius.lg),
                               border: Border.all(
                                 // ignore: deprecated_member_use
                                 color: AppTheme.accent.withOpacity(0.30),
@@ -382,7 +386,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
                                   color: AppTheme.accent,
                                   size: 16,
                                 ),
-                                const SizedBox(width: 8),
+                                const SizedBox(width: AppSpacing.xs),
                                 Expanded(
                                   child: Text(
                                     _denialMessage!,
@@ -406,43 +410,32 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
                       _steps.length,
                       (i) => AnimatedContainer(
                         duration: const Duration(milliseconds: 250),
-                        margin: const EdgeInsets.symmetric(horizontal: 4),
+                        margin: const EdgeInsets.symmetric(horizontal: AppSpacing.xxs),
                         width: _currentStep == i ? 24 : 8,
                         height: 8,
                         decoration: BoxDecoration(
                           color: _currentStep == i
                               ? AppTheme.accent
                               : AppTheme.textDisabled,
-                          borderRadius: BorderRadius.circular(4),
+                          borderRadius: BorderRadius.circular(AppRadius.sm),
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppSpacing.xl),
 
                   // Botão primário (ação específica do passo)
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: _primaryAction,
-                      child: (_actionInProgress || _finishing)
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : Text(_primaryLabel),
-                    ),
+                  SoproPrimaryButton(
+                    label: _primaryLabel,
+                    onPressed: _primaryAction,
+                    loading: _actionInProgress || _finishing,
                   ),
 
                   // Botão secundário: "Pular" / "Ir para o app".
                   // Oculto quando há mensagem de negação ativa — o botão primário
                   // já oferece "Continuar assim mesmo" como alternativa.
                   if (_currentStep > 0 && _denialMessage == null) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: AppSpacing.xxs),
                     TextButton(
                       // Nos passos 1-2: avança sem pedir permissão
                       // No passo 3: conclui o onboarding e vai para /home
@@ -471,7 +464,7 @@ class _StepPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -487,7 +480,7 @@ class _StepPage extends StatelessWidget {
             ),
             child: Icon(step.icon, size: 44, color: step.iconColor),
           ),
-          const SizedBox(height: 36),
+          const SizedBox(height: AppSpacing.gap36),
 
           // Título do passo
           Text(
@@ -498,7 +491,7 @@ class _StepPage extends StatelessWidget {
                   height: 1.2,
                 ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.md),
 
           // Corpo — lido ANTES do diálogo de permissão do SO aparecer
           Text(

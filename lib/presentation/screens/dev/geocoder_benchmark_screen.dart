@@ -12,6 +12,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_spacing.dart';
+
 // URL da tabela de benchmark no Supabase
 const _supabaseUrl =
     'https://zqgkfqenrljtncoecegv.supabase.co/rest/v1/geocoder_benchmark';
@@ -636,7 +640,7 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
 
   Widget _buildIdleView() {
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.md),
       children: [
         // ── Botão de início ────────────────────────────────────────────────
         ElevatedButton.icon(
@@ -646,42 +650,42 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.orange,
             foregroundColor: Colors.black,
-            padding: const EdgeInsets.symmetric(vertical: 14),
+            padding: const EdgeInsets.symmetric(vertical: AppSpacing.gap14),
           ),
         ),
 
-        const SizedBox(height: 24),
+        const SizedBox(height: AppSpacing.xl),
 
         // ── Teste manual ───────────────────────────────────────────────────
         const Text(
           'Teste manual',
           style: TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.xs),
         TextField(
           controller: _manualController,
-          style: const TextStyle(color: Colors.white),
+          style: const TextStyle(color: AppColors.textPrimary),
           decoration: InputDecoration(
             hintText: 'Ex: Av. Paulista, 1578, São Paulo, SP',
             hintStyle: const TextStyle(color: Colors.white38),
             filled: true,
             fillColor: const Color(0xFF1A1A2E),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
           ),
           onSubmitted: (_) => _testManual(),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: AppSpacing.xs),
         OutlinedButton(
           onPressed: _testManual,
           child: const Text('Testar endereço'),
         ),
         if (_manualResult != null) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
           Container(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(AppSpacing.sm),
             decoration: BoxDecoration(
               color: const Color(0xFF1A1A2E),
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(AppRadius.md),
             ),
             child: Text(
               _manualResult!,
@@ -692,7 +696,7 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
 
         // ── Card de resumo após benchmark completo ─────────────────────────
         if (_results.isNotEmpty) ...[
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xl),
           _buildSummaryCard(),
         ],
       ],
@@ -709,18 +713,18 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppSpacing.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 '$_current / $_total',
                 style: const TextStyle(
-                    color: Colors.white,
+                    color: AppColors.textPrimary,
                     fontSize: 16,
                     fontWeight: FontWeight.w700),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.xs),
               LinearProgressIndicator(
                 value: progress,
                 backgroundColor: const Color(0xFF1A1A2E),
@@ -731,7 +735,7 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
         ),
         Expanded(
           child: ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
             itemCount: recent.length,
             itemBuilder: (_, i) => _buildResultTile(recent[i]),
           ),
@@ -760,7 +764,7 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
             height: 8,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: AppSpacing.xs),
           Expanded(
             child: Text(
               r['query'] as String,
@@ -790,10 +794,10 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
     final numRate = found > 0 ? (withNum / found * 100).toStringAsFixed(1) : '0';
 
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: const Color(0xFF1A1A2E),
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppRadius.icon),
         border: Border.all(color: Colors.orange.withAlpha(80)),
       ),
       child: Column(
@@ -806,14 +810,14 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
                 fontWeight: FontWeight.w700,
                 fontSize: 15),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
           _summaryRow('Total testados', '$total'),
           _summaryRow('Encontrados', '$found / $total ($rate%)'),
           _summaryRow('Com número', '$withNum ($numRate% dos encontrados)'),
           _summaryRow('Tempo médio', '$avgMs ms'),
           if (_exportDone)
             _summaryRow('Supabase', 'Dados exportados'),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
           OutlinedButton.icon(
             onPressed: () => launchUrl(
               Uri.parse(
@@ -840,7 +844,7 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
               style: const TextStyle(color: Colors.white54, fontSize: 13)),
           Text(value,
               style: const TextStyle(
-                  color: Colors.white,
+                  color: AppColors.textPrimary,
                   fontWeight: FontWeight.w600,
                   fontSize: 13)),
         ],

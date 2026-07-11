@@ -5,7 +5,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/navigation/app_router.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/app_typography.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/voice_providers.dart';
@@ -40,7 +43,7 @@ class SettingsScreen extends ConsumerWidget {
         backgroundColor: AppTheme.backgroundSurface,
       ),
       body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
         children: [
           // ─── Seção: Bluetooth Social ───────────────────────────────────────
           const _SectionHeader(label: AppStrings.settingsBleSection),
@@ -206,7 +209,7 @@ class SettingsScreen extends ConsumerWidget {
 
           // Descrição do app
           const Padding(
-            padding: EdgeInsets.fromLTRB(16, 4, 16, 12),
+            padding: EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xxs, AppSpacing.md, AppSpacing.sm),
             child: Text(
               AppStrings.settingsAppDesc,
               style: TextStyle(
@@ -224,7 +227,7 @@ class SettingsScreen extends ConsumerWidget {
             value: AppStrings.settingsAppVersion,
           ),
 
-          const SizedBox(height: 32),
+          const SizedBox(height: AppSpacing.xxl),
         ],
       ),
     );
@@ -242,15 +245,10 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 6),
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.lg, AppSpacing.md, AppSpacing.gap6),
       child: Text(
         label.toUpperCase(),
-        style: const TextStyle(
-          color: AppTheme.accent,
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.2,
-        ),
+        style: AppTypography.labelMedium.copyWith(color: AppTheme.accent),
       ),
     );
   }
@@ -275,27 +273,23 @@ class _SwitchTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
         decoration: BoxDecoration(
           color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
         ),
         child: Icon(icon, color: AppTheme.accent, size: 20),
       ),
       title: Text(
         title,
-        style: const TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: FontWeight.w600,
-          fontSize: 14,
-        ),
+        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
       ),
       subtitle: Text(
         subtitle,
-        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+        style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
       ),
       trailing: Switch(
         value: value,
@@ -317,33 +311,29 @@ class _BlePowerTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
         decoration: BoxDecoration(
           color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
         ),
         child: const Icon(Icons.settings_input_antenna, color: AppTheme.accent, size: 20),
       ),
-      title: const Text(
+      title: Text(
         AppStrings.settingsBleTxPower,
-        style: TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: FontWeight.w600,
-          fontSize: 14,
-        ),
+        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
       ),
-      subtitle: const Text(
+      subtitle: Text(
         AppStrings.settingsBleTxPowerDesc,
-        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+        style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
       ),
       trailing: DropdownButton<int>(
         value: value,
         dropdownColor: AppTheme.backgroundElevated,
         underline: const SizedBox.shrink(),
-        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
         items: const [
           DropdownMenuItem(value: 0, child: Text(AppStrings.bleTxPowerMin)),
           DropdownMenuItem(value: 1, child: Text(AppStrings.bleTxPowerLow)),
@@ -366,34 +356,30 @@ class _CooldownTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
         decoration: BoxDecoration(
           color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
         ),
         child: const Icon(Icons.timer_outlined, color: AppTheme.accent, size: 20),
       ),
-      title: const Text(
+      title: Text(
         AppStrings.settingsNotifCooldown,
-        style: TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: FontWeight.w600,
-          fontSize: 14,
-        ),
+        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
       ),
-      subtitle: const Text(
+      subtitle: Text(
         AppStrings.settingsNotifCooldownDesc,
-        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+        style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
       ),
       // DropdownButton integrado ao trailing do ListTile
       trailing: DropdownButton<int>(
         value: value,
         dropdownColor: AppTheme.backgroundElevated,
         underline: const SizedBox.shrink(),
-        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
         items: const [
           DropdownMenuItem(value: 0,  child: Text('Sempre')),
           DropdownMenuItem(value: 5,  child: Text('5 min')),
@@ -417,29 +403,25 @@ class _VoiceRateTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
         decoration: BoxDecoration(
           color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
         ),
         child: const Icon(Icons.speed_outlined, color: AppTheme.accent, size: 20),
       ),
-      title: const Text(
+      title: Text(
         AppStrings.voiceSpeechRate,
-        style: TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: FontWeight.w600,
-          fontSize: 14,
-        ),
+        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
       ),
       trailing: DropdownButton<double>(
         value: value,
         dropdownColor: AppTheme.backgroundElevated,
         underline: const SizedBox.shrink(),
-        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+        style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
         items: const [
           DropdownMenuItem(value: 0.3, child: Text(AppStrings.voiceRateSlow)),
           DropdownMenuItem(value: 0.5, child: Text(AppStrings.voiceRateNormal)),
@@ -472,7 +454,7 @@ class _NavTile extends StatelessWidget {
         height: 40,
         decoration: BoxDecoration(
           color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
         ),
         child: Icon(icon, color: AppTheme.textSecondary, size: 20),
       ),
@@ -514,7 +496,7 @@ class _InfoTile extends StatelessWidget {
         height: 40,
         decoration: BoxDecoration(
           color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
         ),
         child: Icon(icon, color: AppTheme.textSecondary, size: 20),
       ),
@@ -528,10 +510,7 @@ class _InfoTile extends StatelessWidget {
       ),
       trailing: Text(
         value,
-        style: const TextStyle(
-          color: AppTheme.textSecondary,
-          fontSize: 13,
-        ),
+        style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
       ),
     );
   }
@@ -552,28 +531,24 @@ class _OverlayToggleTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
         decoration: BoxDecoration(
           color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(AppRadius.lg),
         ),
         child: const Icon(Icons.mic_external_on_outlined,
             color: AppTheme.accent, size: 20),
       ),
-      title: const Text(
+      title: Text(
         AppStrings.settingsOverlayEnabled,
-        style: TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: FontWeight.w600,
-          fontSize: 14,
-        ),
+        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
       ),
-      subtitle: const Text(
+      subtitle: Text(
         AppStrings.settingsOverlayEnabledDesc,
-        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+        style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
       ),
       trailing: Switch(
         value: value,

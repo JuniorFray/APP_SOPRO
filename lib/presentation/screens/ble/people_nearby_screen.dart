@@ -3,7 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/constants/strings.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/ble_encounter_entity.dart';
 import '../../../domain/entities/context_card_entity.dart';
 import '../../../infrastructure/ble/discovered_sopro_user.dart';
@@ -142,7 +146,7 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
                 color: AppTheme.accent,
               ),
             ),
-            SizedBox(width: 16),
+            SizedBox(width: AppSpacing.md),
             Text(
               AppStrings.bleCardLoading,
               style: TextStyle(color: AppTheme.textPrimary),
@@ -196,7 +200,7 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
       isScrollControlled: true,
       backgroundColor: AppTheme.backgroundSurface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.button)),
       ),
       builder: (_) => _ContextCardSheet(card: card, lastSeen: lastSeen),
     );
@@ -224,7 +228,7 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
           ),
           // Indicador de visibilidade (advertising ativo ou não)
           Padding(
-            padding: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.only(right: AppSpacing.xs),
             child: _AdvertisingChip(isAdvertising: isAdvertising),
           ),
         ],
@@ -246,7 +250,7 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             CircularProgressIndicator(color: AppTheme.accent),
-            SizedBox(height: 16),
+            SizedBox(height: AppSpacing.md),
             Text(
               AppStrings.bleScanning,
               style: TextStyle(color: AppTheme.textSecondary),
@@ -271,7 +275,7 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
             const _ScanningBanner(),
             Expanded(
               child: ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs, horizontal: AppSpacing.md),
                 itemCount: users.length,
                 itemBuilder: (_, i) => _UserTile(
                   user: users[i],
@@ -298,10 +302,10 @@ class _ScanningBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: AppTheme.accent.withOpacity(0.1), // ignore: deprecated_member_use
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: const Row(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+      child: Row(
         children: [
-          SizedBox(
+          const SizedBox(
             width: 14,
             height: 14,
             child: CircularProgressIndicator(
@@ -309,13 +313,10 @@ class _ScanningBanner extends StatelessWidget {
               color: AppTheme.accent,
             ),
           ),
-          SizedBox(width: 10),
+          const SizedBox(width: AppSpacing.gap10),
           Text(
             AppStrings.bleScanning,
-            style: TextStyle(
-              color: AppTheme.textSecondary,
-              fontSize: 13,
-            ),
+            style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
           ),
         ],
       ),
@@ -331,12 +332,12 @@ class _AdvertisingChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.gap10, vertical: AppSpacing.xxs),
       decoration: BoxDecoration(
         color: isAdvertising
             ? AppTheme.accent.withOpacity(0.15) // ignore: deprecated_member_use
             : Colors.grey.withOpacity(0.15),    // ignore: deprecated_member_use
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppRadius.icon),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -346,15 +347,12 @@ class _AdvertisingChip extends StatelessWidget {
             size: 14,
             color: isAdvertising ? AppTheme.accent : AppTheme.textSecondary,
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: AppSpacing.xxs),
           Text(
             isAdvertising
                 ? AppStrings.bleAdvertising
                 : AppStrings.bleNotAdvertising,
-            style: TextStyle(
-              fontSize: 12,
-              color: isAdvertising ? AppTheme.accent : AppTheme.textSecondary,
-            ),
+            style: AppTypography.bodySmall.copyWith(color: isAdvertising ? AppTheme.accent : AppTheme.textSecondary),
           ),
         ],
       ),
@@ -373,11 +371,11 @@ class _UserTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       color: AppTheme.backgroundSurface,
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.icon)),
       child: ListTile(
         onTap: onTap,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),
         leading: CircleAvatar(
           backgroundColor: AppTheme.accent.withOpacity(0.15), // ignore: deprecated_member_use
           child: Text(
@@ -400,11 +398,11 @@ class _UserTile extends StatelessWidget {
                 user.card!.bio.isNotEmpty ? user.card!.bio : user.card!.tags,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
               )
-            : const Text(
+            : Text(
                 AppStrings.bleViewCard,
-                style: TextStyle(color: AppTheme.accent, fontSize: 13),
+                style: AppTypography.bodyMedium.copyWith(color: AppTheme.accent),
               ),
         trailing: _RssiIndicator(level: user.rssiLevel),
       ),
@@ -428,7 +426,7 @@ class _RssiIndicator extends StatelessWidget {
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         Icon(icon, color: color, size: 20),
-        Text(label, style: TextStyle(color: color, fontSize: 10)),
+        Text(label, style: AppTypography.labelSmall.copyWith(color: color)),
       ],
     );
   }
@@ -445,7 +443,7 @@ class _EmptyState extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.bluetooth_searching, size: 72, color: AppTheme.accent),
-          SizedBox(height: 20),
+          SizedBox(height: AppSpacing.lg),
           Text(
             AppStrings.bleNoUsers,
             style: TextStyle(
@@ -454,7 +452,7 @@ class _EmptyState extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          SizedBox(height: 8),
+          SizedBox(height: AppSpacing.xs),
           Text(
             AppStrings.bleNoUsersHint,
             textAlign: TextAlign.center,
@@ -475,12 +473,12 @@ class _ErrorState extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: const EdgeInsets.all(AppSpacing.xxl),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const Icon(Icons.bluetooth_disabled, size: 64, color: AppTheme.textSecondary),
-            const SizedBox(height: 20),
+            const SizedBox(height: AppSpacing.lg),
             Text(
               message,
               textAlign: TextAlign.center,
@@ -536,7 +534,7 @@ class _ContextCardSheet extends StatelessWidget {
 
     return SingleChildScrollView(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, AppSpacing.xxl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -548,11 +546,11 @@ class _ContextCardSheet extends StatelessWidget {
                 height: 4,
                 decoration: BoxDecoration(
                   color: AppTheme.textSecondary.withOpacity(0.3), // ignore: deprecated_member_use
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
                 ),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: AppSpacing.lg),
 
             // ── Avatar + nome + ocupação ───────────────────────────────────
             Row(
@@ -570,7 +568,7 @@ class _ContextCardSheet extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
+                const SizedBox(width: AppSpacing.md),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -587,10 +585,7 @@ class _ContextCardSheet extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           _occupationLine,
-                          style: const TextStyle(
-                            color: AppTheme.accent,
-                            fontSize: 13,
-                          ),
+                          style: AppTypography.bodyMedium.copyWith(color: AppTheme.accent),
                         ),
                       ],
                     ],
@@ -601,25 +596,22 @@ class _ContextCardSheet extends StatelessWidget {
 
             // ── Interesses (chips) ─────────────────────────────────────────
             if (tags.isNotEmpty) ...[
-              const SizedBox(height: 14),
+              const SizedBox(height: AppSpacing.gap14),
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
                 children: tags.map((tag) => Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.gap10, vertical: AppSpacing.xxs),
                   decoration: BoxDecoration(
                     color: AppTheme.accent.withOpacity(0.10), // ignore: deprecated_member_use
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(AppRadius.button),
                     border: Border.all(
                       color: AppTheme.accent.withOpacity(0.25), // ignore: deprecated_member_use
                     ),
                   ),
                   child: Text(
                     tag,
-                    style: const TextStyle(
-                      color: AppTheme.accent,
-                      fontSize: 12,
-                    ),
+                    style: AppTypography.bodySmall.copyWith(color: AppTheme.accent),
                   ),
                 )).toList(),
               ),
@@ -627,9 +619,9 @@ class _ContextCardSheet extends StatelessWidget {
 
             // ── Nota pessoal / bio ─────────────────────────────────────────
             if (card.bio.isNotEmpty) ...[
-              const SizedBox(height: 14),
+              const SizedBox(height: AppSpacing.gap14),
               const Divider(color: AppTheme.backgroundElevated),
-              const SizedBox(height: 10),
+              const SizedBox(height: AppSpacing.gap10),
               Text(
                 card.bio,
                 style: const TextStyle(
@@ -641,7 +633,7 @@ class _ContextCardSheet extends StatelessWidget {
             ],
 
             // ── Última vez visto ───────────────────────────────────────────
-            const SizedBox(height: 14),
+            const SizedBox(height: AppSpacing.gap14),
             Row(
               children: [
                 const Icon(
@@ -649,18 +641,15 @@ class _ContextCardSheet extends StatelessWidget {
                   size: 14,
                   color: AppTheme.textDisabled,
                 ),
-                const SizedBox(width: 4),
+                const SizedBox(width: AppSpacing.xxs),
                 Text(
                   _formatLastSeen(),
-                  style: const TextStyle(
-                    color: AppTheme.textDisabled,
-                    fontSize: 12,
-                  ),
+                  style: AppTypography.bodySmall.copyWith(color: AppTheme.textDisabled),
                 ),
               ],
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: AppSpacing.lg),
 
             // ── Botão WhatsApp — só se o contato compartilhou o telefone ───
             if (card.phone.isNotEmpty) ...[
@@ -672,14 +661,14 @@ class _ContextCardSheet extends StatelessWidget {
                   label: const Text(AppStrings.bleWhatsApp),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF25D366),
-                    foregroundColor: Colors.white,
+                    foregroundColor: AppColors.textPrimary,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+                      borderRadius: BorderRadius.circular(AppRadius.icon),
                     ),
                   ),
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: AppSpacing.xs),
             ],
 
             SizedBox(
@@ -690,7 +679,7 @@ class _ContextCardSheet extends StatelessWidget {
                   foregroundColor: AppTheme.accent,
                   side: const BorderSide(color: AppTheme.accent),
                   shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(AppRadius.icon),
                   ),
                 ),
                 child: const Text(AppStrings.bleClose),

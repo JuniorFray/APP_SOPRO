@@ -6,7 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/navigation/app_router.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/app_typography.dart';
 import '../../../core/utils/environment_icon_mapper.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
@@ -14,6 +18,9 @@ import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/trigger_providers.dart';
 import '../../providers/voice_providers.dart';
+import '../../widgets/sopro_card.dart';
+import '../../widgets/sopro_primary_button.dart';
+import '../../widgets/sopro_text_field.dart';
 import 'add_environment_screen.dart';
 
 // Tela de detalhe de um Environment.
@@ -65,16 +72,11 @@ class EnvironmentDetailScreen extends ConsumerWidget {
 
           // Cabeçalho da seção de triggers com contagem dinâmica
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.lg, AppSpacing.md, AppSpacing.xxs),
             child: triggersAsync.maybeWhen(
               data: (triggers) => Text(
                 '${AppStrings.triggersSection} (${triggers.length})',
-                style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.5,
-                ),
+                style: AppTypography.labelLarge.copyWith(color: AppTheme.textPrimary),
               ),
               orElse: () => const Text(
                 AppStrings.triggersSection,
@@ -102,7 +104,7 @@ class EnvironmentDetailScreen extends ConsumerWidget {
               data: (triggers) => triggers.isEmpty
                   ? const _EmptyTriggersState()
                   : ListView.builder(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxs),
                       itemCount: triggers.length,
                       itemBuilder: (_, i) => _TriggerTile(
                         trigger: triggers[i],
@@ -123,7 +125,7 @@ class EnvironmentDetailScreen extends ConsumerWidget {
       isScrollControlled: true,
       backgroundColor: AppTheme.backgroundElevated,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.button)),
       ),
       builder: (_) => _TriggerSheet(
         environmentId: environment.id,
@@ -145,30 +147,25 @@ class _EnvironmentInfoCard extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: AppTheme.cardDecoration(),
+      child: SoproCard(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
         child: Row(
           children: [
             // Emoji ilustrativo do ambiente com cor do mapper
             Text(visual.emoji, style: const TextStyle(fontSize: 18)),
-            const SizedBox(width: 10),
+            const SizedBox(width: AppSpacing.gap10),
             Expanded(
               child: Text(
                 '${environment.latitude.toStringAsFixed(5)}, '
                 '${environment.longitude.toStringAsFixed(5)}',
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 12,
-                  fontFamily: 'monospace',
-                ),
+                style: AppTypography.monospace.copyWith(color: AppTheme.textSecondary),
               ),
             ),
-            const SizedBox(width: 12),
+            const SizedBox(width: AppSpacing.sm),
             // Badge de raio do geofence
             Container(
               padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  const EdgeInsets.symmetric(horizontal: AppSpacing.xs, vertical: AppSpacing.xxs),
               decoration: BoxDecoration(
                 color: AppTheme.backgroundElevated,
                 borderRadius: BorderRadius.circular(AppTheme.radiusBadge),
@@ -217,7 +214,7 @@ class _TriggerTile extends ConsumerWidget {
           side: const BorderSide(color: AppTheme.borderColor, width: 0.5),
         ),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 4, 10),
+          padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.gap10, AppSpacing.xxs, AppSpacing.gap10),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -228,12 +225,8 @@ class _TriggerTile extends ConsumerWidget {
                   children: [
                     Text(
                       trigger.title,
-                      style: TextStyle(
-                        color: trigger.isActive
-                            ? AppTheme.textPrimary
-                            : AppTheme.textDisabled,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
+                      style: AppTypography.titleSmall.copyWith(
+                        color: trigger.isActive ? AppTheme.textPrimary : AppTheme.textDisabled,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -241,11 +234,8 @@ class _TriggerTile extends ConsumerWidget {
                       trigger.content,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: trigger.isActive
-                            ? AppTheme.textSecondary
-                            : AppTheme.textDisabled,
-                        fontSize: 12,
+                      style: AppTypography.bodySmall.copyWith(
+                        color: trigger.isActive ? AppTheme.textSecondary : AppTheme.textDisabled,
                       ),
                     ),
                   ],
@@ -289,7 +279,7 @@ class _TriggerTile extends ConsumerWidget {
       isScrollControlled: true,
       backgroundColor: AppTheme.backgroundElevated,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.button)),
       ),
       builder: (_) => _TriggerSheet(
         environmentId: trigger.environmentId,
@@ -340,11 +330,11 @@ class _DeleteBackground extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
       decoration: BoxDecoration(
         color: AppTheme.accent,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
       ),
       alignment: Alignment.centerRight,
-      padding: const EdgeInsets.only(right: 20),
-      child: const Icon(Icons.delete_outline, color: Colors.white, size: 26),
+      padding: const EdgeInsets.only(right: AppSpacing.lg),
+      child: const Icon(Icons.delete_outline, color: AppColors.textPrimary, size: 26),
     );
   }
 }
@@ -360,7 +350,7 @@ class _EmptyTriggersState extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.bolt_outlined, size: 60, color: AppTheme.accent),
-          SizedBox(height: 16),
+          SizedBox(height: AppSpacing.md),
           Text(
             AppStrings.noTriggersYet,
             style: TextStyle(
@@ -369,7 +359,7 @@ class _EmptyTriggersState extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          SizedBox(height: 6),
+          SizedBox(height: AppSpacing.gap6),
           Text(
             AppStrings.noTriggersHint,
             style: TextStyle(color: AppTheme.textSecondary),
@@ -447,10 +437,10 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
               child: Container(
                 width: 36,
                 height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
+                margin: const EdgeInsets.only(bottom: AppSpacing.md),
                 decoration: BoxDecoration(
                   color: AppTheme.textDisabled,
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
                 ),
               ),
             ),
@@ -458,118 +448,84 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
             // Título diferente conforme o modo de uso
             Text(
               _isEditing ? AppStrings.editTriggerTitle : AppStrings.addTrigger,
-              style: const TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+              style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.md),
 
             // Campo título — opcional; botão de microfone preenche por voz
-            TextFormField(
+            SoproTextField(
               controller: _titleCtrl,
-              style: const TextStyle(color: AppTheme.textPrimary),
+              label: AppStrings.triggerTitleLabel,
+              hint: _recordingTitle
+                  ? AppStrings.voiceFillHint
+                  : AppStrings.triggerTitleHint,
               textCapitalization: TextCapitalization.sentences,
-              decoration: _fieldDecoration(
-                label: AppStrings.triggerTitleLabel,
-                hint: _recordingTitle
-                    ? AppStrings.voiceFillHint
-                    : AppStrings.triggerTitleHint,
-              ).copyWith(
-                suffixIcon: _recordingTitle
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppTheme.accent,
-                          ),
-                        ),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.mic_outlined,
-                            color: AppTheme.accent, size: 20),
-                        tooltip: AppStrings.voiceMicTooltip,
-                        onPressed: () => _recordForField(
-                          _titleCtrl,
-                          (v) => setState(() => _recordingTitle = v),
+              suffixIcon: _recordingTitle
+                  ? const Padding(
+                      padding: EdgeInsets.all(AppSpacing.sm),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppTheme.accent,
                         ),
                       ),
-              ),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.mic_outlined,
+                          color: AppTheme.accent, size: 20),
+                      tooltip: AppStrings.voiceMicTooltip,
+                      onPressed: () => _recordForField(
+                        _titleCtrl,
+                        (v) => setState(() => _recordingTitle = v),
+                      ),
+                    ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.sm),
 
             // Campo conteúdo (multi-linha) com botão de microfone para ditar
-            TextFormField(
+            SoproTextField(
               controller: _contentCtrl,
-              style: const TextStyle(color: AppTheme.textPrimary),
+              label: AppStrings.triggerContentLabel,
+              hint: _recordingContent
+                  ? AppStrings.voiceFillHint
+                  : AppStrings.triggerContentHint,
               maxLines: 3,
               textCapitalization: TextCapitalization.sentences,
               validator: (v) =>
                   (v == null || v.trim().isEmpty)
                       ? AppStrings.triggerContentRequired
                       : null,
-              decoration: _fieldDecoration(
-                label: AppStrings.triggerContentLabel,
-                hint: _recordingContent
-                    ? AppStrings.voiceFillHint
-                    : AppStrings.triggerContentHint,
-              ).copyWith(
-                suffixIcon: _recordingContent
-                    ? const Padding(
-                        padding: EdgeInsets.all(12),
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppTheme.accent,
-                          ),
-                        ),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.mic_outlined,
-                            color: AppTheme.accent, size: 20),
-                        tooltip: AppStrings.voiceMicTooltip,
-                        onPressed: () => _recordForField(
-                          _contentCtrl,
-                          (v) => setState(() => _recordingContent = v),
-                        ),
-                      ),
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // Botão salvar
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _isSaving ? null : _submit,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.accent,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                child: _isSaving
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
+              suffixIcon: _recordingContent
+                  ? const Padding(
+                      padding: EdgeInsets.all(AppSpacing.sm),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: Colors.white,
+                          color: AppTheme.accent,
                         ),
-                      )
-                    : const Text(
-                        AppStrings.save,
-                        style: TextStyle(fontWeight: FontWeight.bold),
                       ),
-              ),
+                    )
+                  : IconButton(
+                      icon: const Icon(Icons.mic_outlined,
+                          color: AppTheme.accent, size: 20),
+                      tooltip: AppStrings.voiceMicTooltip,
+                      onPressed: () => _recordForField(
+                        _contentCtrl,
+                        (v) => setState(() => _recordingContent = v),
+                      ),
+                    ),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+
+            // Botão salvar
+            SoproPrimaryButton(
+              label: AppStrings.save,
+              onPressed: _isSaving ? null : _submit,
+              loading: _isSaving,
             ),
           ],
         ),
@@ -641,29 +597,4 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
     if (mounted) Navigator.pop(context);
   }
 
-  InputDecoration _fieldDecoration({
-    required String label,
-    required String hint,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      labelStyle: const TextStyle(color: AppTheme.textSecondary),
-      hintStyle: const TextStyle(color: AppTheme.textDisabled, fontSize: 12),
-      filled: true,
-      fillColor: AppTheme.backgroundSurface,
-      enabledBorder: const OutlineInputBorder(
-        borderSide: BorderSide(color: AppTheme.backgroundPrimary),
-      ),
-      focusedBorder: const OutlineInputBorder(
-        borderSide: BorderSide(color: AppTheme.accent),
-      ),
-      errorBorder: const OutlineInputBorder(
-        borderSide: BorderSide(color: Colors.red),
-      ),
-      focusedErrorBorder: const OutlineInputBorder(
-        borderSide: BorderSide(color: Colors.red),
-      ),
-    );
-  }
 }

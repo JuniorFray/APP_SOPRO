@@ -15,7 +15,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/constants/strings.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/ble_encounter_entity.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/encounter_providers.dart';
@@ -56,7 +59,7 @@ class EncountersScreen extends ConsumerWidget {
         data: (encounters) => encounters.isEmpty
             ? const _EmptyState()
             : ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
                 itemCount: encounters.length,
                 itemBuilder: (_, i) => _EncounterTile(
                   encounter: encounters[i],
@@ -116,25 +119,21 @@ class _EncounterTile extends StatelessWidget {
       direction: DismissDirection.endToStart,
       background: Container(
         alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
+        padding: const EdgeInsets.only(right: AppSpacing.lg),
         color: Colors.red.shade800,
-        child: const Icon(Icons.delete_outline, color: Colors.white),
+        child: const Icon(Icons.delete_outline, color: AppColors.textPrimary),
       ),
       onDismissed: (_) => onDelete(),
       child: ListTile(
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
         leading: CircleAvatar(
           radius: 24,
           // ignore: deprecated_member_use
           backgroundColor: AppTheme.accent.withOpacity(0.15),
           child: Text(
             encounter.initial,
-            style: const TextStyle(
-              color: AppTheme.accent,
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
-            ),
+            style: AppTypography.titleMedium.copyWith(color: AppTheme.accent),
           ),
         ),
         title: Text(
@@ -152,17 +151,11 @@ class _EncounterTile extends StatelessWidget {
             if (encounter.occupationLine.isNotEmpty)
               Text(
                 encounter.occupationLine,
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 13,
-                ),
+                style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
               ),
             Text(
               _formatDate(encounter.encounteredAt),
-              style: const TextStyle(
-                color: AppTheme.textDisabled,
-                fontSize: 12,
-              ),
+              style: AppTypography.bodySmall.copyWith(color: AppTheme.textDisabled),
             ),
           ],
         ),
@@ -199,7 +192,7 @@ class _EmptyState extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.people_outline, size: 64, color: AppTheme.textDisabled),
-          SizedBox(height: 20),
+          SizedBox(height: AppSpacing.lg),
           Text(
             AppStrings.encountersEmpty,
             style: TextStyle(
@@ -208,7 +201,7 @@ class _EmptyState extends StatelessWidget {
               fontWeight: FontWeight.w500,
             ),
           ),
-          SizedBox(height: 8),
+          SizedBox(height: AppSpacing.xs),
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 40),
             child: Text(

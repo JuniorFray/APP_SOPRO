@@ -21,7 +21,11 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/navigation/app_router.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
 import '../../../infrastructure/logging/app_logger.dart';
@@ -32,6 +36,8 @@ import '../../providers/trigger_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../../widgets/environment_card.dart';
+import '../../widgets/sopro_primary_button.dart';
+import '../../widgets/sopro_text_field.dart';
 import '../ble/people_nearby_screen.dart';
 import '../environment/add_environment_screen.dart';
 import '../settings/settings_screen.dart';
@@ -153,7 +159,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         data: (environments) => environments.isEmpty
             ? const _EmptyState()
             : ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
                 itemCount: environments.length,
                 itemBuilder: (_, i) =>
                     EnvironmentCard(environment: environments[i]),
@@ -166,12 +172,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         children: [
           // FAB de voz redesenhado — 64 dp, hold=gravar, arrastar=cancelar
           const _VoiceFab(),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.md),
           // FAB principal — cria novo ambiente
           FloatingActionButton.extended(
             onPressed: () => pushScreen(context, const AddEnvironmentScreen()),
             backgroundColor: AppTheme.accent,
-            foregroundColor: Colors.white,
+            foregroundColor: AppColors.textPrimary,
             heroTag: 'add_env_fab',
             icon: const Icon(Icons.add),
             label: const Text(AppStrings.newEnvironment),
@@ -543,9 +549,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('${AppStrings.voiceTriggerSavedIn} ${env.name} ✓'),
         // ignore: deprecated_member_use
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.snackbarSuccess,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       // FIX 4: TTS confirma a ação ao usuário
       await _speak(
@@ -601,9 +607,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text('${AppStrings.voiceTriggerSavedIn} ${env.name} ✓'),
       // ignore: deprecated_member_use
-      backgroundColor: Colors.green.shade700,
+      backgroundColor: AppColors.snackbarSuccess,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
     ));
     await _speak('Anotado! Vou te lembrar de $title quando chegar em ${env.name}.'); // FIX 4
   }
@@ -695,9 +701,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           '${AppStrings.voiceEnvAndTriggerCreated}: ${env.name} ✓',
         ),
         // ignore: deprecated_member_use
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.snackbarSuccess,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       await _speak('Anotado! Ambiente ${env.name} criado com o lembrete $title.'); // FIX 4
       await _setSuccess();
@@ -742,9 +748,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('${AppStrings.voiceEnvCreated}: ${env.name} ✓'),
         // ignore: deprecated_member_use
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.snackbarSuccess,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       await _speak('Pronto! Ambiente ${env.name} criado.'); // FIX 4
       await _setSuccess();
@@ -776,9 +782,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           '${AppStrings.voiceTriggerDeactivated}: "$resolvedTitle"',
         ),
         // ignore: deprecated_member_use
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.snackbarSuccess,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       await _speak('Feito! Lembrete $resolvedTitle marcado como resolvido.'); // FIX 4
       await _setSuccess();
@@ -790,7 +796,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           '${AppStrings.voiceTriggerNotFound}: "${result.triggerAction}"',
         ),
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       await _speak('Não encontrei esse lembrete.'); // FIX 4
     }
@@ -863,9 +869,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(msg),
         // ignore: deprecated_member_use
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.snackbarSuccess,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       // FIX 4: TTS resume o que foi criado
       if (result.triggerTitles.isNotEmpty) {
@@ -888,7 +894,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           content: Text('${AppStrings.voicePendingTriggers} $list'),
           duration: const Duration(seconds: 5),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
         ));
       }
     }
@@ -916,9 +922,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('${AppStrings.voiceEnvUpdated}: ${env.name} ✓'),
         // ignore: deprecated_member_use
-        backgroundColor: Colors.green.shade700,
+        backgroundColor: AppColors.snackbarSuccess,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       await _speak( // FIX 4
         'Feito! Raio de ${env.name} atualizado para ${result.environmentRadius} metros.',
@@ -1020,7 +1026,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       content: Text('${AppStrings.voiceEnvDeleted}: ${env.name}'),
       duration: const Duration(seconds: 5),
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       action: SnackBarAction(
         label: AppStrings.undo,
         onPressed: () async {
@@ -1201,7 +1207,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('${AppStrings.voiceAllTriggersDeleted}: ${env.name}'),
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
         ));
         await _speak('Todos os lembretes de ${env.name} removidos.'); // FIX 4
       },
@@ -1233,7 +1239,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       isScrollControlled: true,
       backgroundColor: AppTheme.backgroundElevated,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.sheet)),
       ),
       builder: (_) => sheet,
     );
@@ -1267,11 +1273,11 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
         // Contador de segundos: visível somente durante gravação
         if (_isRecording) ...[
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.xs),
           Text(
             _formatSeconds(_recordingSeconds),
             style: const TextStyle(
-              color: Color(0xFFE53935),
+              color: AppColors.danger,
               fontSize: 12,
               fontWeight: FontWeight.bold,
             ),
@@ -1289,28 +1295,28 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     switch (_fabState) {
       case _FabState.idle:
         bgColor = AppTheme.accent;
-        child   = const Icon(Icons.mic_rounded, color: Colors.white, size: 28);
+        child   = const Icon(Icons.mic_rounded, color: AppColors.textPrimary, size: 28);
 
       case _FabState.recording:
-        bgColor = const Color(0xFFE53935); // vermelho durante gravação
-        child   = const Icon(Icons.mic_rounded, color: Colors.white, size: 28);
+        bgColor = AppColors.danger; // vermelho durante gravação
+        child   = const Icon(Icons.mic_rounded, color: AppColors.textPrimary, size: 28);
 
       case _FabState.processing:
         bgColor = AppTheme.accent;
         child   = const SizedBox(
           width: 22, height: 22,
           child: CircularProgressIndicator(
-            color: Colors.white, strokeWidth: 2.5,
+            color: AppColors.textPrimary, strokeWidth: 2.5,
           ),
         );
 
       case _FabState.success:
-        bgColor = const Color(0xFF2E7D32); // verde escuro
-        child   = const Icon(Icons.check_rounded, color: Colors.white, size: 32);
+        bgColor = AppColors.fabSuccessDark; // verde escuro
+        child   = const Icon(Icons.check_rounded, color: AppColors.textPrimary, size: 32);
 
       case _FabState.error:
-        bgColor = Colors.red.shade700;
-        child   = const Icon(Icons.mic_off_rounded, color: Colors.white, size: 28);
+        bgColor = AppColors.snackbarDanger;
+        child   = const Icon(Icons.mic_off_rounded, color: AppColors.textPrimary, size: 28);
     }
 
     return Container(
@@ -1323,8 +1329,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           BoxShadow(
             // Glow suave: rgba(232,68,90,0.35) em idle, mais intenso ao gravar
             color: _isRecording
-                ? const Color(0x8CE53935)  // vermelho de gravação 55% opacity
-                : const Color(0x59E8445A), // accent 35% opacity — glow padrão
+                ? AppColors.fabGlowRecording  // vermelho de gravação 55% opacity
+                : AppColors.fabGlowIdle,      // accent 35% opacity — glow padrão
             blurRadius:   _isRecording ? 18 : 12,
             spreadRadius: _isRecording ? 3  : 1,
           ),
@@ -1369,7 +1375,7 @@ class _EnvNotFoundSheet extends StatelessWidget {
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -1377,10 +1383,10 @@ class _EnvNotFoundSheet extends StatelessWidget {
             // Alça visual do sheet
             Container(
               width: 36, height: 4,
-              margin: const EdgeInsets.only(bottom: 16),
+              margin: const EdgeInsets.only(bottom: AppSpacing.md),
               decoration: BoxDecoration(
                 color: AppTheme.textDisabled,
-                borderRadius: BorderRadius.circular(2),
+                borderRadius: BorderRadius.circular(AppRadius.xs),
               ),
             ),
 
@@ -1390,7 +1396,7 @@ class _EnvNotFoundSheet extends StatelessWidget {
               color: AppTheme.textSecondary,
               size: 40,
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.sm),
 
             // Mensagem principal
             Text(
@@ -1405,30 +1411,24 @@ class _EnvNotFoundSheet extends StatelessWidget {
 
             // Contexto: título do trigger que precisa ser salvo
             if (triggerTitle.isNotEmpty) ...[
-              const SizedBox(height: 6),
+              const SizedBox(height: AppSpacing.gap6),
               Text(
                 '"$triggerTitle"',
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 13,
-                ),
+                style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
                 textAlign: TextAlign.center,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
             ],
-            const SizedBox(height: 20),
+            const SizedBox(height: AppSpacing.lg),
 
             // Botão primário: usa GPS atual para criar o ambiente agora
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: onCreateNow,
-                icon: const Icon(Icons.add_location_alt_outlined),
-                label: const Text(AppStrings.voiceCreateEnvNow),
-              ),
+            SoproPrimaryButton(
+              label: AppStrings.voiceCreateEnvNow,
+              onPressed: onCreateNow,
+              icon: const Icon(Icons.add_location_alt_outlined),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xxs),
 
             // Botão secundário: seleciona entre ambientes já existentes
             TextButton(
@@ -1469,7 +1469,7 @@ class _EnvPickerSheet extends ConsumerWidget {
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1478,37 +1478,30 @@ class _EnvPickerSheet extends ConsumerWidget {
             Center(
               child: Container(
                 width: 36, height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
+                margin: const EdgeInsets.only(bottom: AppSpacing.md),
                 decoration: BoxDecoration(
                   color: AppTheme.textDisabled,
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
                 ),
               ),
             ),
 
             Text(
               title,
-              style: const TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+              style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
             ),
 
             // Trecho do comando reconhecido para dar contexto ao usuário
             if (subtitle.isNotEmpty) ...[
-              const SizedBox(height: 6),
+              const SizedBox(height: AppSpacing.gap6),
               Text(
                 '"$subtitle"',
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 13,
-                ),
+                style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
             ],
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.md),
 
             // Lista de ambientes cadastrados
             envsAsync.when(
@@ -1580,7 +1573,7 @@ class _TriggerListSheet extends ConsumerWidget {
         final triggers = snap.data ?? [];
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xl),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1589,23 +1582,19 @@ class _TriggerListSheet extends ConsumerWidget {
                 Center(
                   child: Container(
                     width: 36, height: 4,
-                    margin: const EdgeInsets.only(bottom: 16),
+                    margin: const EdgeInsets.only(bottom: AppSpacing.md),
                     decoration: BoxDecoration(
                       color: AppTheme.textDisabled,
-                      borderRadius: BorderRadius.circular(2),
+                      borderRadius: BorderRadius.circular(AppRadius.xs),
                     ),
                   ),
                 ),
 
                 Text(
                   '${AppStrings.voiceTriggerListTitle} — ${environment.name}',
-                  style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: AppSpacing.md),
 
                 if (!snap.hasData)
                   const Center(
@@ -1643,10 +1632,7 @@ class _TriggerListSheet extends ConsumerWidget {
                         subtitle: t.title.isNotEmpty
                             ? Text(
                                 t.content,
-                                style: const TextStyle(
-                                  color: AppTheme.textSecondary,
-                                  fontSize: 12,
-                                ),
+                                style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
                               )
@@ -1734,23 +1720,19 @@ class _FallbackSheetState extends ConsumerState<_FallbackSheet> {
           Center(
             child: Container(
               width: 36, height: 4,
-              margin: const EdgeInsets.only(bottom: 16),
+              margin: const EdgeInsets.only(bottom: AppSpacing.md),
               decoration: BoxDecoration(
                 color: AppTheme.textDisabled,
-                borderRadius: BorderRadius.circular(2),
+                borderRadius: BorderRadius.circular(AppRadius.xs),
               ),
             ),
           ),
 
-          const Text(
+          Text(
             AppStrings.voiceIntentFallback,
-            style: TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
+            style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: AppSpacing.gap6),
           // Exemplos de comandos para guiar o usuário na re-digitação
           const Text(
             AppStrings.voiceExamples,
@@ -1760,52 +1742,24 @@ class _FallbackSheetState extends ConsumerState<_FallbackSheet> {
               height: 1.5,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.md),
 
           // Campo de texto editável com a transcrição do Gemini
-          TextField(
+          SoproTextField(
             controller: _ctrl,
-            autofocus:  true,
-            style: const TextStyle(color: AppTheme.textPrimary),
+            label: AppStrings.voiceTranscriptLabel,
             maxLines: 3,
-            minLines: 1,
-            decoration: InputDecoration(
-              labelText:  AppStrings.voiceTranscriptLabel,
-              labelStyle: const TextStyle(color: AppTheme.textSecondary),
-              filled:     true,
-              fillColor:  AppTheme.backgroundSurface,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide.none,
-              ),
-            ),
+            autofocus: true,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpacing.md),
 
           // Botão de re-análise: chama Gemini com o texto corrigido
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _reanalyzing ? null : _reanalyze,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.accent,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-              child: _reanalyzing
-                  ? const SizedBox(
-                      width: 20, height: 20,
-                      child: CircularProgressIndicator(
-                        color: Colors.white, strokeWidth: 2,
-                      ),
-                    )
-                  : const Text(
-                      AppStrings.voiceReanalyze,
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-            ),
+          SoproPrimaryButton(
+            label: AppStrings.voiceReanalyze,
+            onPressed: _reanalyzing ? null : _reanalyze,
+            loading: _reanalyzing,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.xs),
         ],
       ),
     );
@@ -1825,7 +1779,7 @@ class _EnvsListSheet extends ConsumerWidget {
 
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1833,22 +1787,18 @@ class _EnvsListSheet extends ConsumerWidget {
             Center(
               child: Container(
                 width: 36, height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
+                margin: const EdgeInsets.only(bottom: AppSpacing.md),
                 decoration: BoxDecoration(
                   color: AppTheme.textDisabled,
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
                 ),
               ),
             ),
-            const Text(
+            Text(
               AppStrings.voiceEnvListTitle,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+              style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.md),
 
             envsAsync.when(
               loading: () => const Center(
@@ -1888,10 +1838,7 @@ class _EnvsListSheet extends ConsumerWidget {
                         ),
                         subtitle: Text(
                           '${envs[i].radiusMeters.toInt()} m de raio',
-                          style: const TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 12,
-                          ),
+                          style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
                         ),
                       ),
                     ),
@@ -1924,7 +1871,7 @@ class _DeleteTriggerPickerSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1933,23 +1880,19 @@ class _DeleteTriggerPickerSheet extends StatelessWidget {
             Center(
               child: Container(
                 width: 36, height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
+                margin: const EdgeInsets.only(bottom: AppSpacing.md),
                 decoration: BoxDecoration(
                   color: AppTheme.textDisabled,
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.circular(AppRadius.xs),
                 ),
               ),
             ),
 
-            const Text(
+            Text(
               AppStrings.voiceDeletePickerTitle,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+              style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppSpacing.md),
 
             // Lista de triggers correspondentes à busca
             ListView.separated(
@@ -1975,9 +1918,7 @@ class _DeleteTriggerPickerSheet extends StatelessWidget {
                   subtitle: t.title.isNotEmpty && t.content.isNotEmpty
                       ? Text(
                           t.content,
-                          style: const TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 12,
-                          ),
+                          style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         )
@@ -2008,7 +1949,7 @@ class _DeleteAllTriggersConfirmSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.center,
@@ -2016,55 +1957,37 @@ class _DeleteAllTriggersConfirmSheet extends StatelessWidget {
             // Alça do sheet
             Container(
               width: 36, height: 4,
-              margin: const EdgeInsets.only(bottom: 16),
+              margin: const EdgeInsets.only(bottom: AppSpacing.md),
               decoration: BoxDecoration(
                 color: AppTheme.textDisabled,
-                borderRadius: BorderRadius.circular(2),
+                borderRadius: BorderRadius.circular(AppRadius.xs),
               ),
             ),
 
             const Icon(Icons.warning_amber_rounded,
                 color: AppTheme.accent, size: 44),
-            const SizedBox(height: 12),
+            const SizedBox(height: AppSpacing.sm),
 
-            const Text(
+            Text(
               AppStrings.voiceDeleteAllTitle,
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
+              style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.xs),
 
             Text(
               'Todos os gatilhos de "${environment.name}" '
               'serão removidos. Esta ação não pode ser desfeita.',
-              style: const TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 13,
-              ),
+              style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppSpacing.xl),
 
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: onConfirm,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.accent,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                child: const Text(
-                  AppStrings.confirm,
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
+            SoproPrimaryButton(
+              label: AppStrings.confirm,
+              onPressed: onConfirm,
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: AppSpacing.xxs),
 
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -2092,7 +2015,7 @@ class _EmptyState extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(Icons.air, size: 80, color: AppTheme.accent),
-          SizedBox(height: 24),
+          SizedBox(height: AppSpacing.xl),
           Text(
             AppStrings.homeEmptyTitle,
             style: TextStyle(
@@ -2101,7 +2024,7 @@ class _EmptyState extends StatelessWidget {
               fontWeight: FontWeight.w600,
             ),
           ),
-          SizedBox(height: 8),
+          SizedBox(height: AppSpacing.xs),
           Text(
             AppStrings.homeEmptySubtitle,
             textAlign: TextAlign.center,

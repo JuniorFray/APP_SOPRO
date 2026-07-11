@@ -21,11 +21,17 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/context_card_entity.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/settings_providers.dart';
+import '../../widgets/sopro_primary_button.dart';
+import '../../widgets/sopro_text_field.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -101,7 +107,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       context: context,
       backgroundColor: AppTheme.backgroundSurface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.card)),
       ),
       builder: (ctx) => SafeArea(
         child: Column(
@@ -111,10 +117,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             Container(
               width: 36,
               height: 4,
-              margin: const EdgeInsets.symmetric(vertical: 12),
+              margin: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
               decoration: BoxDecoration(
                 color: AppTheme.textDisabled,
-                borderRadius: BorderRadius.circular(2),
+                borderRadius: BorderRadius.circular(AppRadius.xs),
               ),
             ),
             const Padding(
@@ -158,7 +164,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
               onTap: () => Navigator.pop(ctx),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppSpacing.xs),
           ],
         ),
       ),
@@ -304,7 +310,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       padding: const EdgeInsets.all(5),
                       child: const Icon(
                         Icons.camera_alt,
-                        color: Colors.white,
+                        color: AppColors.textPrimary,
                         size: 14,
                       ),
                     ),
@@ -313,117 +319,100 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: AppSpacing.xxl),
 
           // ── Seção: Identidade ───────────────────────────────────────────
           const _SectionLabel(label: AppStrings.profileSectionIdentity),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
 
-          TextFormField(
+          SoproTextField(
             controller: _nameCtrl,
+            label: AppStrings.profileName,
+            hint: AppStrings.profileNameHint,
             textCapitalization: TextCapitalization.words,
-            decoration: _inputDecoration(
-              label: AppStrings.profileName,
-              hint: AppStrings.profileNameHint,
-            ),
             maxLength: 50,
             onChanged: (_) => setState(() {}), // atualiza avatar em tempo real
             validator: (v) => (v == null || v.trim().isEmpty)
                 ? AppStrings.profileNameRequired
                 : null,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
 
-          TextFormField(
+          SoproTextField(
             controller: _roleCtrl,
+            label: AppStrings.profileRole,
+            hint: AppStrings.profileRoleHint,
             textCapitalization: TextCapitalization.words,
-            decoration: _inputDecoration(
-              label: AppStrings.profileRole,
-              hint: AppStrings.profileRoleHint,
-            ),
             maxLength: 60,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
 
-          TextFormField(
+          SoproTextField(
             controller: _companyCtrl,
+            label: AppStrings.profileCompany,
+            hint: AppStrings.profileCompanyHint,
             textCapitalization: TextCapitalization.words,
-            decoration: _inputDecoration(
-              label: AppStrings.profileCompany,
-              hint: AppStrings.profileCompanyHint,
-            ),
             maxLength: 60,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xl),
 
           // ── Seção: Contexto ─────────────────────────────────────────────
           const _SectionLabel(label: AppStrings.profileSectionContext),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
 
-          TextFormField(
+          SoproTextField(
             controller: _tagsCtrl,
-            textCapitalization: TextCapitalization.none,
-            decoration: _inputDecoration(
-              label: AppStrings.profileInterests,
-              hint: AppStrings.profileInterestsHint,
-            ),
+            label: AppStrings.profileInterests,
+            hint: AppStrings.profileInterestsHint,
             maxLength: 120,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: AppSpacing.sm),
 
-          TextFormField(
+          SoproTextField(
             controller: _bioCtrl,
+            label: AppStrings.profileNote,
+            hint: AppStrings.profileNoteHint,
             textCapitalization: TextCapitalization.sentences,
-            decoration: _inputDecoration(
-              label: AppStrings.profileNote,
-              hint: AppStrings.profileNoteHint,
-            ),
             maxLines: 4,
             maxLength: 500,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xl),
 
           // ── Seção: Contato ──────────────────────────────────────────────
           const _SectionLabel(label: AppStrings.profileSectionContact),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.xs),
 
           // Campo de WhatsApp/telefone — compartilhado via BLE se preenchido.
           // Só dígitos; o app monta o link wa.me/55<número> ao exibir o cartão.
-          TextFormField(
+          SoproTextField(
             controller: _phoneCtrl,
+            label: AppStrings.profilePhone,
+            hint: AppStrings.profilePhoneHint,
             keyboardType: TextInputType.phone,
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            decoration: _inputDecoration(
-              label: AppStrings.profilePhone,
-              hint: AppStrings.profilePhoneHint,
-            ).copyWith(
-              prefixIcon: const Icon(
-                Icons.chat_bubble_outline,
-                color: AppTheme.textSecondary,
-                size: 20,
-              ),
-              helperText: shareWhatsApp
-                  ? AppStrings.profilePhoneHelperOn
-                  : AppStrings.profilePhoneHelperOff,
-              helperStyle: TextStyle(
-                color: shareWhatsApp
-                    ? AppTheme.accent
-                    : AppTheme.textDisabled,
-                fontSize: 11,
-              ),
+            prefixIcon: const Icon(
+              Icons.chat_bubble_outline,
+              color: AppTheme.textSecondary,
+              size: 20,
+            ),
+            helperText: shareWhatsApp
+                ? AppStrings.profilePhoneHelperOn
+                : AppStrings.profilePhoneHelperOff,
+            helperStyle: AppTypography.caption.copyWith(
+              color: shareWhatsApp ? AppTheme.accent : AppTheme.textDisabled,
             ),
             maxLength: 13,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: AppSpacing.xl),
 
           // ── Seção: Privacidade ──────────────────────────────────────────
           const _SectionLabel(label: AppStrings.profileSectionPrivacy),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.xs),
 
           Container(
             decoration: BoxDecoration(
               color: AppTheme.backgroundSurface,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(AppRadius.icon),
             ),
             child: SwitchListTile(
               value: isVisible,
@@ -447,14 +436,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.xs),
 
           // Toggle independente: compartilha o telefone no cartão BLE ou não.
           // O número continua salvo no perfil mas é omitido do payload se desligado.
           Container(
             decoration: BoxDecoration(
               color: AppTheme.backgroundSurface,
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(AppRadius.icon),
             ),
             child: SwitchListTile(
               value: shareWhatsApp,
@@ -481,51 +470,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: AppSpacing.xxl),
 
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _saving ? null : _save,
-              child: _saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Text(AppStrings.profileSave),
-            ),
+          SoproPrimaryButton(
+            label: AppStrings.profileSave,
+            onPressed: _saving ? null : _save,
+            loading: _saving,
           ),
         ],
       ),
     );
   }
 
-  InputDecoration _inputDecoration({
-    required String label,
-    required String hint,
-  }) {
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      labelStyle: const TextStyle(color: AppTheme.textSecondary),
-      hintStyle: const TextStyle(color: AppTheme.textDisabled),
-      filled: true,
-      fillColor: AppTheme.backgroundSurface,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide.none,
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: AppTheme.accent, width: 1.5),
-      ),
-      counterStyle: const TextStyle(color: AppTheme.textDisabled, fontSize: 11),
-    );
-  }
 }
 
 // Rótulo de seção com separador
