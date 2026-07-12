@@ -12,6 +12,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +23,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/constants/strings.dart';
 import '../../../core/navigation/app_router.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_motion.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_shadows.dart';
 import '../../../core/theme/app_spacing.dart';
@@ -119,7 +121,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
-        // tracking 0.8 = identidade de marca Sopro — mantido explicitamente
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        // Glass blur — conteúdo que rola sob a AppBar aparece desfocado
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              decoration: const BoxDecoration(
+                color: Color(0x08FFFFFF), // white 3%
+                border: Border(
+                  bottom: BorderSide(color: AppColors.borderHighlight, width: 0.5),
+                ),
+              ),
+            ),
+          ),
+        ),
+        // tracking 0.8 = identidade de marca Sopro
         title: const Text(
           AppStrings.homeTitle,
           style: TextStyle(
@@ -129,26 +148,46 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             letterSpacing: 0.8,
           ),
         ),
-        backgroundColor: AppTheme.backgroundSurface,
         actions: [
-          // Abre a tela de BLE Social ("Pessoas Aqui")
           IconButton(
             onPressed: () => pushScreen(context, const PeopleNearbyScreen()),
-            icon: const Icon(Icons.people_outline),
+            icon: const Icon(Icons.people_outline, color: AppColors.appBarButtonIcon),
             tooltip: AppStrings.peopleNearby,
+            style: ButtonStyle(
+              backgroundColor: const WidgetStatePropertyAll(AppColors.appBarButtonBg),
+              shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: AppColors.border, width: 0.5),
+              )),
+            ),
           ),
-          // Abre a tela de perfil (ContextCard)
+          const SizedBox(width: 4),
           IconButton(
             onPressed: () => Navigator.pushNamed(context, '/profile'),
-            icon: const Icon(Icons.person_outline),
+            icon: const Icon(Icons.person_outline, color: AppColors.appBarButtonIcon),
             tooltip: AppStrings.profileTooltip,
+            style: ButtonStyle(
+              backgroundColor: const WidgetStatePropertyAll(AppColors.appBarButtonBg),
+              shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: AppColors.border, width: 0.5),
+              )),
+            ),
           ),
-          // Abre a tela de configurações
+          const SizedBox(width: 4),
           IconButton(
             onPressed: () => pushScreen(context, const SettingsScreen()),
-            icon: const Icon(Icons.settings_outlined),
+            icon: const Icon(Icons.settings_outlined, color: AppColors.appBarButtonIcon),
             tooltip: AppStrings.settingsTooltip,
+            style: ButtonStyle(
+              backgroundColor: const WidgetStatePropertyAll(AppColors.appBarButtonBg),
+              shape: WidgetStatePropertyAll(RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: AppColors.border, width: 0.5),
+              )),
+            ),
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: environmentsAsync.when(
@@ -182,22 +221,42 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // FAB de voz redesenhado — 64 dp, hold=gravar, arrastar=cancelar
+          // FAB de voz redesenhado — 72 dp, hold=gravar, arrastar=cancelar
           const _VoiceFab(),
           const SizedBox(height: AppSpacing.md),
-          // FAB principal — cria novo ambiente
-          FloatingActionButton.extended(
-            onPressed: () => pushScreen(context, const AddEnvironmentScreen()),
-            backgroundColor: AppColors.accent,
-            foregroundColor: AppColors.textPrimary,
-            elevation: 0,
-            heroTag: 'add_env_fab',
-            icon: const Icon(Icons.add, size: 20),
-            label: Text(
-              AppStrings.newEnvironment,
-              style: AppTypography.labelLarge.copyWith(
-                color: AppColors.textPrimary,
-                fontWeight: FontWeight.w700,
+          // Botão "Novo Ambiente" — gradiente pink-red premium
+          GestureDetector(
+            onTap: () => pushScreen(context, const AddEnvironmentScreen()),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFFFF6178), Color(0xFFF04666)],
+                ),
+                borderRadius: BorderRadius.circular(AppRadius.button),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x40FF4566),
+                    blurRadius: 16,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.add, size: 20, color: AppColors.textPrimary),
+                  const SizedBox(width: 8),
+                  Text(
+                    AppStrings.newEnvironment,
+                    style: AppTypography.labelLarge.copyWith(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -258,6 +317,10 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Ativado por _handleOpenEnvironment quando Gemini não retorna environmentName.
   bool _pendingEnvCreate = false;
 
+  // Visual press feedback (0.96 scale) — revertido após 200 ms pelo timer
+  bool   _isVisuallyPressed = false;
+  Timer? _pressScaleTimer;
+
   @override
   void initState() {
     super.initState();
@@ -297,6 +360,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     _overlayChannel.setMethodCallHandler(null); // cancela o listener ao sair da tela
     _pulseCtrl.dispose();
     _recordingTimer?.cancel();
+    _pressScaleTimer?.cancel();
     // Garante que gravação seja cancelada se o widget for descartado durante uso
     ref.read(voiceServiceProvider).cancelRecording();
     super.dispose();
@@ -314,7 +378,16 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   void _onPressStart() {
     if (_fabState != _FabState.idle) return;
     _pressStartTime = DateTime.now();
-    setState(() { _fabState = _FabState.recording; _recordingSeconds = 0; });
+    setState(() {
+      _isVisuallyPressed = true;
+      _fabState           = _FabState.recording;
+      _recordingSeconds   = 0;
+    });
+    // Reverte o scale de press após 200 ms (animação tátil breve)
+    _pressScaleTimer?.cancel();
+    _pressScaleTimer = Timer(const Duration(milliseconds: 200), () {
+      if (mounted) setState(() => _isVisuallyPressed = false);
+    });
     _pulseCtrl.repeat(reverse: true);
     _recordingTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
@@ -326,6 +399,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   // Dedo levanta → verifica duração mínima (500 ms) antes de processar
   void _onPressEnd() {
+    _pressScaleTimer?.cancel();
+    if (mounted) setState(() => _isVisuallyPressed = false);
     if (!_isRecording) return;
     final elapsed = DateTime.now()
         .difference(_pressStartTime ?? DateTime.now())
@@ -346,7 +421,11 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   }
 
   // Evento de cancelamento do SO (ligação, notificação que roubou o foco, etc.)
-  void _onPressCancel() => _cancelRecording();
+  void _onPressCancel() {
+    _pressScaleTimer?.cancel();
+    if (mounted) setState(() => _isVisuallyPressed = false);
+    _cancelRecording();
+  }
 
   // ── Ciclo de gravação ──────────────────────────────────────────────────────
 
@@ -1272,21 +1351,25 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // Listener usa PointerDown/PointerUp — eventos de baixo nível do SO,
-        // sem threshold de tempo. Mais confiável que GestureDetector no Android.
-        Listener(
-          behavior: HitTestBehavior.opaque,
-          onPointerDown:   (_) => _onPressStart(),
-          onPointerUp:     (_) => _onPressEnd(),
-          onPointerCancel: (_) => _onPressCancel(),
-          child: AnimatedBuilder(
-            animation: _pulseAnim,
-            builder: (context, child) {
-              // Pulso visível apenas durante gravação
-              final scale = _isRecording ? _pulseAnim.value : 1.0;
-              return Transform.scale(scale: scale, child: child);
-            },
-            child: _buildButtonBody(),
+        // AnimatedScale: press feedback 0.96 (revertido em 200 ms)
+        AnimatedScale(
+          scale: _isVisuallyPressed ? 0.96 : 1.0,
+          duration: AppMotion.micro,
+          curve: AppMotion.snap,
+          child: Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown:   (_) => _onPressStart(),
+            onPointerUp:     (_) => _onPressEnd(),
+            onPointerCancel: (_) => _onPressCancel(),
+            child: AnimatedBuilder(
+              animation: _pulseAnim,
+              builder: (context, child) {
+                // Pulso visível apenas durante gravação
+                final scale = _isRecording ? _pulseAnim.value : 1.0;
+                return Transform.scale(scale: scale, child: child);
+              },
+              child: _buildButtonBody(),
+            ),
           ),
         ),
 
@@ -1306,61 +1389,105 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     );
   }
 
-  // Constrói o corpo do botão conforme o estado atual
+  // Constrói o corpo do botão conforme o estado atual — Dark Glass 72×72
   Widget _buildButtonBody() {
-    final Color  bgColor;
-    final Widget child;
+    Widget fabChild;
+    Color  borderColor;
 
     switch (_fabState) {
       case _FabState.idle:
-        bgColor = AppColors.accent;
-        child   = const Icon(Icons.mic_rounded, color: AppColors.textPrimary, size: 28);
+        fabChild    = const Icon(Icons.mic_rounded, color: AppColors.textPrimary, size: 30);
+        borderColor = const Color(0x33FFFFFF); // white 20% — borda sutil sobre pink
 
       case _FabState.recording:
-        bgColor = AppColors.danger;
-        child   = const Icon(Icons.mic_rounded, color: AppColors.textPrimary, size: 28);
+        fabChild    = const Icon(Icons.mic_rounded, color: AppColors.danger, size: 30);
+        borderColor = const Color(0x66FF5B5B); // danger 40%
 
       case _FabState.processing:
-        bgColor = AppColors.accent;
-        child   = const SizedBox(
-          width: 22, height: 22,
+        fabChild = const SizedBox(
+          width: 24, height: 24,
           child: CircularProgressIndicator(
-            color: AppColors.textPrimary,
-            strokeWidth: 2.5,
+            color: AppColors.accent,
+            strokeWidth: 2.0,
             strokeCap: StrokeCap.round,
           ),
         );
+        borderColor = AppColors.borderHighlight;
 
       case _FabState.success:
-        bgColor = AppColors.fabSuccessDark;
-        child   = const Icon(Icons.check_rounded, color: AppColors.textPrimary, size: 32);
+        fabChild    = const Icon(Icons.check_rounded, color: AppColors.success, size: 32);
+        borderColor = const Color(0x5932D296); // success 35%
 
       case _FabState.error:
-        bgColor = AppColors.snackbarDanger;
-        child   = const Icon(Icons.mic_off_rounded, color: AppColors.textPrimary, size: 28);
+        fabChild    = const Icon(Icons.mic_off_rounded, color: AppColors.danger, size: 30);
+        borderColor = const Color(0x40FF5B5B); // danger 25%
     }
 
-    return Container(
-      width:  64,
-      height: 64,
-      decoration: BoxDecoration(
-        color:  bgColor,
-        shape:  BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: _isRecording
-                ? AppColors.fabGlowRecording
-                : AppColors.fabGlowIdle,
-            blurRadius:   _isRecording
-                ? AppShadows.fabRecording.blurRadius
-                : AppShadows.fabIdle.blurRadius,
-            spreadRadius: _isRecording
-                ? AppShadows.fabRecording.spreadRadius
-                : AppShadows.fabIdle.spreadRadius,
+    return SizedBox(
+      width:  72,
+      height: 72,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Camada de glow — fora do ClipOval para não ser cortado pelo clip
+          Container(
+            width:  72,
+            height: 72,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: _isRecording
+                      ? AppColors.fabGlowRecording
+                      : AppColors.fabGlowIdle,
+                  blurRadius:   _isRecording
+                      ? AppShadows.fabRecording.blurRadius
+                      : AppShadows.fabIdle.blurRadius,
+                  spreadRadius: _isRecording
+                      ? AppShadows.fabRecording.spreadRadius
+                      : AppShadows.fabIdle.spreadRadius,
+                ),
+              ],
+            ),
+          ),
+          // Conteúdo: idle=gradiente pink-red sólido, outros=glass escuro
+          ClipOval(
+            child: _fabState == _FabState.idle
+                ? Container(
+                    width:  72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [AppColors.fabPinkStart, AppColors.fabPinkEnd],
+                      ),
+                      border: Border.all(color: borderColor, width: 0.75),
+                    ),
+                    child: Center(child: fabChild),
+                  )
+                : BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                    child: Container(
+                      width:  72,
+                      height: 72,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            Color(0x0AFFFFFF), // white 4%
+                            Color(0x05FFFFFF), // white 2%
+                          ],
+                        ),
+                        border: Border.all(color: borderColor, width: 0.75),
+                      ),
+                      child: Center(child: fabChild),
+                    ),
+                  ),
           ),
         ],
       ),
-      child: Center(child: child),
     );
   }
 
@@ -2036,37 +2163,66 @@ class _EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
+        padding: const EdgeInsets.symmetric(horizontal: 48),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 96,
-              height: 96,
-              decoration: BoxDecoration(
-                // ignore: deprecated_member_use
-                color: AppColors.accent.withOpacity(0.08),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.air,
-                size: 48,
-                color: AppColors.accent,
+            // Anel externo: glow radial difuso
+            SizedBox(
+              width: 120,
+              height: 120,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Outer glow ring
+                  Container(
+                    width: 120,
+                    height: 120,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          Color(0x1A4F8CFF), // accent 10%
+                          Color(0x004F8CFF), // transparent
+                        ],
+                      ),
+                    ),
+                  ),
+                  // Inner glass circle
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: const BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(0x14FFFFFF), // white 8% — glass tint
+                      border: Border.fromBorderSide(
+                        BorderSide(color: AppColors.border, width: 0.5),
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.air,
+                      size: 36,
+                      color: AppColors.accent,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: AppSpacing.xl),
+            const SizedBox(height: 36),
             Text(
               AppStrings.homeEmptyTitle,
               style: AppTypography.titleMedium.copyWith(
                 color: AppColors.textPrimary,
+                letterSpacing: -0.2,
               ),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: AppSpacing.xs),
+            const SizedBox(height: 12),
             Text(
               AppStrings.homeEmptySubtitle,
               style: AppTypography.bodyMedium.copyWith(
-                color: AppColors.textSecondary,
+                color: AppColors.textDisabled,
+                height: 1.65,
               ),
               textAlign: TextAlign.center,
             ),

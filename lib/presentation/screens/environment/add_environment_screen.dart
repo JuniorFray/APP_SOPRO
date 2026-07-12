@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -18,8 +19,6 @@ import '../../../infrastructure/geocoding/geocoding_repository.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
-import '../../widgets/sopro_text_field.dart';
-
 // Tela de criação OU edição de Environment com mapa interativo.
 //
 // Modo criação: [environment] == null — campos em branco, submit gera UUID novo.
@@ -51,7 +50,8 @@ class AddEnvironmentScreen extends ConsumerStatefulWidget {
       _AddEnvironmentScreenState();
 }
 
-class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
+class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
+    with TickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameController;
   late final TextEditingController _radiusController;
@@ -79,6 +79,13 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   // Centro inicial do mapa: São Paulo (referência urbana padrão para o Brasil)
   static const _defaultCenter = LatLng(-23.5505, -46.6333);
 
+  // Animação de pulso do marcador de mapa
+  late final AnimationController _markerPulseCtrl;
+  late final Animation<double>   _markerPulseAnim;
+
+  // Valor do slider de raio (50–1000 m), sincronizado com _radiusController
+  double _radiusSlider = 100.0;
+
   bool get _isEditing => widget.environment != null;
 
   @override
@@ -88,10 +95,19 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     _nameController = TextEditingController(
       text: widget.environment?.name ?? widget.initialName ?? '',
     );
-    _radiusController = TextEditingController(
-      text: widget.environment != null
-          ? widget.environment!.radiusMeters.toStringAsFixed(0)
-          : AppStrings.radiusDefault,
+    final initialRadius = widget.environment != null
+        ? widget.environment!.radiusMeters
+        : (double.tryParse(AppStrings.radiusDefault) ?? 100.0);
+    _radiusSlider = initialRadius.clamp(50.0, 1000.0);
+    _radiusController = TextEditingController(text: _radiusSlider.toInt().toString());
+
+    // Pulso animado do pin de localização no mapa
+    _markerPulseCtrl = AnimationController(
+      duration: const Duration(milliseconds: 1200),
+      vsync: this,
+    )..repeat(reverse: true);
+    _markerPulseAnim = Tween<double>(begin: 0.6, end: 1.2).animate(
+      CurvedAnimation(parent: _markerPulseCtrl, curve: Curves.easeInOut),
     );
     if (widget.environment != null) {
       // Posiciona o pin na localização existente
@@ -140,6 +156,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   void dispose() {
     _nameRecordTimer?.cancel();
     _searchDebounce?.cancel();
+    _markerPulseCtrl.dispose();
     ref.read(voiceServiceProvider).cancelRecording();
     _nameController.dispose();
     _radiusController.dispose();
@@ -151,119 +168,281 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.backgroundPrimary,
-      appBar: AppBar(
-        // Título diferente conforme o modo de uso
-        title: Text(
-          _isEditing
-              ? AppStrings.editEnvironmentTitle
-              : AppStrings.addEnvironmentTitle,
-        ),
-        actions: [
-          _isSaving
-              ? const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: AppSpacing.md),
-                  child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                )
-              : TextButton(
-                  // Salvar só habilitado quando um ponto foi selecionado
-                  onPressed: _selectedPoint != null ? _submit : null,
-                  child: Text(
-                    AppStrings.save,
-                    style: TextStyle(
-                      color: _selectedPoint != null
-                          ? AppColors.textPrimary
-                          : AppTheme.textDisabled,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-        ],
-      ),
+      extendBodyBehindAppBar: true,
+      backgroundColor: AppColors.backgroundPrimary,
+      appBar: _buildAppBar(),
       body: Form(
         key: _formKey,
-        child: Column(
+        child: Stack(
           children: [
-            // Campo nome do ambiente com botão de microfone para ditar o nome
-            Padding(
-              padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xs),
-              child: SoproTextField(
-                controller: _nameController,
-                label: AppStrings.environmentNameLabel,
-                hint: _recordingName
-                    ? AppStrings.voiceFillHint
-                    : AppStrings.environmentNameHint,
-                textCapitalization: TextCapitalization.words,
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? AppStrings.environmentNameRequired
-                    : null,
-                suffixIcon: _recordingName
-                    ? const Padding(
-                        padding: EdgeInsets.all(AppSpacing.sm),
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppTheme.accent,
+            // Mapa full-screen — ocupa toda a área do body
+            Positioned.fill(
+              child: FlutterMap(
+                mapController: _mapController,
+                options: MapOptions(
+                  initialCenter: _defaultCenter,
+                  initialZoom: 12.0,
+                  onTap: (_, point) => setState(() {
+                    _selectedPoint = point;
+                    _searchResults = [];
+                  }),
+                ),
+                children: [
+                  // Tiles Carto Dark Matter
+                  TileLayer(
+                    urlTemplate:
+                        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                    subdomains: const ['a', 'b', 'c', 'd'],
+                    userAgentPackageName: 'com.sopro.sopro',
+                  ),
+                  // Marcador animado
+                  if (_selectedPoint != null)
+                    AnimatedBuilder(
+                      animation: _markerPulseAnim,
+                      builder: (_, __) => MarkerLayer(
+                        markers: [
+                          Marker(
+                            point: _selectedPoint!,
+                            alignment: Alignment.topCenter,
+                            child: _buildMarker(),
                           ),
-                        ),
-                      )
-                    : IconButton(
-                        icon: const Icon(Icons.mic_outlined,
-                            color: AppTheme.accent, size: 20),
-                        tooltip: AppStrings.voiceMicTooltip,
-                        onPressed: _recordForName,
+                        ],
                       ),
+                    ),
+                ],
               ),
             ),
 
-            // Campo de busca por endereço + lista de resultados (fora do mapa)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+            // Card glass superior: nome + busca (flutua sobre o mapa)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _buildTopCard(context),
+            ),
+
+            // Instrução central quando nenhum ponto selecionado
+            if (_selectedPoint == null)
+              const Positioned(
+                bottom: 220,
+                left: 16,
+                right: 16,
+                child: _MapChip(label: AppStrings.mapTapInstruction),
+              ),
+
+            // Botão GPS — canto inferior direito acima do painel
+            Positioned(
+              bottom: 210,
+              right: 12,
+              child: _buildGpsButton(),
+            ),
+
+            // Painel glass inferior: raio + slider + salvar
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: _buildBottomPanel(context),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      flexibleSpace: ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            decoration: const BoxDecoration(
+              color: Color(0x08FFFFFF), // white 3%
+              border: Border(
+                bottom: BorderSide(color: AppColors.borderHighlight, width: 0.5),
+              ),
+            ),
+          ),
+        ),
+      ),
+      title: Text(
+        _isEditing ? AppStrings.editEnvironmentTitle : AppStrings.addEnvironmentTitle,
+        style: const TextStyle(
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary,
+        ),
+      ),
+      actions: [
+        if (_isSaving)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.textPrimary,
+              ),
+            ),
+          )
+        else
+          TextButton(
+            onPressed: _selectedPoint != null ? _submit : null,
+            child: Text(
+              AppStrings.save,
+              style: TextStyle(
+                color: _selectedPoint != null
+                    ? AppColors.textPrimary
+                    : AppColors.textDisabled,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // Card glass flutuante com campo de nome e busca de endereço
+  Widget _buildTopCard(BuildContext context) {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0x14FFFFFF), Color(0x03FFFFFF)],
+            ),
+            border: Border(bottom: BorderSide(color: AppColors.borderHighlight, width: 0.5)),
+          ),
+          foregroundDecoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0x1EFFFFFF), Colors.transparent],
+              stops: [0.0, 0.3],
+            ),
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Material(
-                    elevation: 2,
-                    borderRadius: BorderRadius.circular(AppRadius.md),
-                    color: AppTheme.backgroundElevated,
+                  // Campo de nome do ambiente
+                  TextFormField(
+                    controller: _nameController,
+                    textCapitalization: TextCapitalization.words,
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? AppStrings.environmentNameRequired
+                        : null,
+                    style: AppTypography.bodyMedium
+                        .copyWith(color: AppColors.textPrimary),
+                    decoration: InputDecoration(
+                      labelText: AppStrings.environmentNameLabel,
+                      hintText: _recordingName
+                          ? AppStrings.voiceFillHint
+                          : AppStrings.environmentNameHint,
+                      hintStyle: AppTypography.bodySmall
+                          .copyWith(color: AppColors.textDisabled),
+                      labelStyle: AppTypography.bodySmall
+                          .copyWith(color: AppColors.textSecondary),
+                      floatingLabelStyle: AppTypography.caption.copyWith(
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      filled: true,
+                      fillColor: const Color(0x1AFFFFFF),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.input),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.input),
+                        borderSide: const BorderSide(
+                            color: AppColors.border, width: 0.5),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.input),
+                        borderSide: const BorderSide(
+                            color: AppColors.accent, width: 1.5),
+                      ),
+                      errorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.input),
+                        borderSide: const BorderSide(
+                            color: AppColors.danger, width: 1.0),
+                      ),
+                      focusedErrorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(AppRadius.input),
+                        borderSide: const BorderSide(
+                            color: AppColors.danger, width: 1.5),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
+                      suffixIcon: _recordingName
+                          ? const Padding(
+                              padding: EdgeInsets.all(AppSpacing.sm),
+                              child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppColors.accent,
+                                ),
+                              ),
+                            )
+                          : IconButton(
+                              icon: const Icon(Icons.mic_outlined,
+                                  color: AppColors.accent, size: 20),
+                              tooltip: AppStrings.voiceMicTooltip,
+                              onPressed: _recordForName,
+                            ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  // Campo de busca por endereço
+                  Container(
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: const Color(0x1AFFFFFF),
+                      borderRadius: BorderRadius.circular(AppRadius.input),
+                      border:
+                          Border.all(color: AppColors.border, width: 0.5),
+                    ),
                     child: Row(
                       children: [
-                        const SizedBox(width: AppSpacing.gap10),
+                        const SizedBox(width: 12),
                         _searching
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
-                                  color: AppTheme.accent,
+                                  color: AppColors.accent,
                                 ),
                               )
-                            : const Icon(
-                                Icons.search,
-                                color: AppTheme.textSecondary,
-                                size: 18,
-                              ),
-                        const SizedBox(width: AppSpacing.gap6),
+                            : const Icon(Icons.search,
+                                color: AppColors.textSecondary, size: 18),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: TextField(
                             controller: _searchCtrl,
                             focusNode: _searchFocusNode,
-                            style: AppTypography.bodyMedium.copyWith(color: AppTheme.textPrimary),
+                            style: AppTypography.bodyMedium
+                                .copyWith(color: AppColors.textPrimary),
                             decoration: InputDecoration(
                               hintText: AppStrings.searchAddressHint,
-                              hintStyle: AppTypography.bodyMedium.copyWith(color: AppTheme.textDisabled),
+                              hintStyle: AppTypography.bodyMedium
+                                  .copyWith(color: AppColors.textDisabled),
                               border: InputBorder.none,
-                              contentPadding:
-                                  const EdgeInsets.symmetric(vertical: AppSpacing.gap10),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  vertical: 12),
                             ),
                             textInputAction: TextInputAction.search,
                             onSubmitted: (_) => _searchAddress(),
@@ -277,30 +456,24 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                               _searchResults = [];
                             }),
                             child: const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: AppSpacing.xs),
-                              child: Icon(
-                                Icons.clear,
-                                size: 16,
-                                color: AppTheme.textDisabled,
-                              ),
+                              padding: EdgeInsets.symmetric(horizontal: 8),
+                              child: Icon(Icons.clear,
+                                  size: 16,
+                                  color: AppColors.textDisabled),
                             ),
                           ),
                       ],
                     ),
                   ),
+                  // Resultados da busca
                   if (_searchResults.isNotEmpty)
                     Container(
-                      margin: const EdgeInsets.only(top: 2),
+                      margin: const EdgeInsets.only(top: 4),
                       decoration: BoxDecoration(
-                        color: AppTheme.backgroundSurface,
+                        color: AppColors.backgroundCard,
                         borderRadius: BorderRadius.circular(AppRadius.md),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Colors.black26,
-                            blurRadius: 4,
-                            offset: Offset(0, 2),
-                          ),
-                        ],
+                        border:
+                            Border.all(color: AppColors.border, width: 0.5),
                       ),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -308,17 +481,13 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                           return ListTile(
                             dense: true,
                             contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 0,
-                            ),
-                            leading: const Icon(
-                              Icons.location_on_outlined,
-                              color: AppTheme.accent,
-                              size: 18,
-                            ),
+                                horizontal: 12),
+                            leading: const Icon(Icons.location_on_outlined,
+                                color: AppColors.accent, size: 18),
                             title: Text(
                               r.displayName,
-                              style: AppTypography.bodySmall.copyWith(color: AppTheme.textPrimary),
+                              style: AppTypography.bodySmall
+                                  .copyWith(color: AppColors.textPrimary),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -330,100 +499,202 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
 
-            // Mapa interativo (ocupa a maior parte da tela)
-            Expanded(
-              child: Stack(
+  // Pin animado com halo + pulso
+  Widget _buildMarker() {
+    return Stack(
+      alignment: Alignment.bottomCenter,
+      clipBehavior: Clip.none,
+      children: [
+        // Anel de pulso animado
+        Positioned(
+          bottom: 36,
+          child: Transform.scale(
+            scale: _markerPulseAnim.value,
+            child: Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border:
+                    Border.all(color: const Color(0x80FF6B82), width: 2),
+              ),
+            ),
+          ),
+        ),
+        // Halo fixo
+        Positioned(
+          bottom: 36,
+          child: Container(
+            width: 28,
+            height: 28,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Color(0x33FF6B82),
+            ),
+          ),
+        ),
+        // Ícone do pin com sombra rosa
+        const Icon(
+          Icons.location_pin,
+          color: Color(0xFFFF6B82),
+          size: 44,
+          shadows: [
+            Shadow(
+              color: Color(0x66FF6B82),
+              blurRadius: 12,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  // Botão de localização atual — glass mini FAB
+  Widget _buildGpsButton() {
+    return FloatingActionButton.small(
+      onPressed: _loadingLocation ? null : _onLocationButtonPressed,
+      backgroundColor: AppColors.backgroundCard,
+      tooltip: AppStrings.useCurrentLocation,
+      heroTag: 'gps_fab',
+      child: _loadingLocation
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.textSecondary,
+              ),
+            )
+          : const Icon(Icons.my_location, color: AppColors.textSecondary),
+    );
+  }
+
+  // Painel glass inferior: raio + slider premium + botão salvar
+  Widget _buildBottomPanel(BuildContext context) {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0x14FFFFFF), Color(0x03FFFFFF)],
+            ),
+            border: Border(top: BorderSide(color: AppColors.borderHighlight, width: 0.5)),
+          ),
+          foregroundDecoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0x1EFFFFFF), Colors.transparent],
+              stops: [0.0, 0.3],
+            ),
+          ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  FlutterMap(
-                    mapController: _mapController,
-                    options: MapOptions(
-                      initialCenter: _defaultCenter,
-                      initialZoom: 12.0,
-                      // Callback de toque: atualiza o pin e limpa busca
-                      onTap: (_, point) => setState(() {
-                        _selectedPoint = point;
-                        _searchResults = [];
-                      }),
-                    ),
+                  // Raio: label + valor numérico
+                  Row(
                     children: [
-                      // Camada de tiles do OpenStreetMap (gratuito, sem API key)
-                      TileLayer(
-                        urlTemplate:
-                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                        userAgentPackageName: 'com.sopro.sopro',
+                      Text(
+                        AppStrings.radiusLabel,
+                        style: AppTypography.bodySmall
+                            .copyWith(color: AppColors.textSecondary),
                       ),
-                      // Pin de localização selecionada
-                      if (_selectedPoint != null)
-                        MarkerLayer(
-                          markers: [
-                            Marker(
-                              point: _selectedPoint!,
-                              // Anchor no topo do ícone para alinhar com o ponto
-                              alignment: Alignment.topCenter,
-                              child: const Icon(
-                                Icons.location_pin,
-                                color: AppTheme.accent,
-                                size: 44,
-                              ),
-                            ),
-                          ],
+                      const Spacer(),
+                      Text(
+                        '${_radiusSlider.toInt()} m',
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w600,
                         ),
+                      ),
                     ],
                   ),
-
-                  // Instrução exibida enquanto nenhum ponto está selecionado
-                  if (_selectedPoint == null)
-                    const Positioned(
-                      bottom: 72,
-                      left: 16,
-                      right: 16,
-                      child: _MapChip(label: AppStrings.mapTapInstruction),
+                  // Slider premium: trilho gradiente pink→azul, thumb glass
+                  SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 6,
+                      overlayColor: const Color(0x33FF6B82),
+                      overlayShape:
+                          const RoundSliderOverlayShape(overlayRadius: 16),
+                      thumbShape: const _GlassThumb(),
+                      trackShape: const _GradientTrack(),
                     ),
-
-                  // Botão "Localização atual" — usa GPS nativo via MethodChannel
-                  Positioned(
-                    bottom: 8,
-                    right: 8,
-                    child: FloatingActionButton.small(
-                      onPressed: _loadingLocation ? null : _onLocationButtonPressed,
-                      backgroundColor: AppTheme.backgroundElevated,
-                      tooltip: AppStrings.useCurrentLocation,
-                      child: _loadingLocation
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: AppTheme.textSecondary,
-                              ),
-                            )
-                          : const Icon(
-                              Icons.my_location,
-                              color: AppTheme.textSecondary,
-                            ),
+                    child: Slider(
+                      value: _radiusSlider,
+                      min: 50,
+                      max: 1000,
+                      onChanged: (v) => setState(() {
+                        _radiusSlider = v;
+                        _radiusController.text = v.toInt().toString();
+                      }),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  // Botão Salvar — gradiente pink-red, desabilitado sem ponto
+                  SizedBox(
+                    width: double.infinity,
+                    child: GestureDetector(
+                      onTap: (_selectedPoint != null && !_isSaving) ? _submit : null,
+                      child: Container(
+                        height: 52,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: _selectedPoint != null
+                                ? const [Color(0xFFFF6178), Color(0xFFF04666)]
+                                : const [Color(0x66FF6178), Color(0x66F04666)],
+                          ),
+                          borderRadius: BorderRadius.circular(AppRadius.button),
+                          boxShadow: _selectedPoint != null
+                              ? const [
+                                  BoxShadow(
+                                    color: Color(0x40FF4566),
+                                    blurRadius: 12,
+                                    offset: Offset(0, 4),
+                                  ),
+                                ]
+                              : null,
+                        ),
+                        alignment: Alignment.center,
+                        child: _isSaving
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                AppStrings.save,
+                                style: AppTypography.labelLarge.copyWith(
+                                  color: AppColors.textPrimary,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
                 ],
               ),
             ),
-
-            // Campo raio com sufixo "m"
-            Padding(
-              padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
-              child: SoproTextField(
-                controller: _radiusController,
-                label: AppStrings.radiusLabel,
-                suffixText: 'm',
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                validator: (v) {
-                  final n = double.tryParse(v ?? '');
-                  return (n == null || n <= 0) ? AppStrings.radiusInvalid : null;
-                },
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -620,6 +891,108 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     if (mounted) Navigator.pop(context);
   }
 
+}
+
+// Trilho gradiente pink→azul para o slider premium
+class _GradientTrack extends SliderTrackShape with BaseSliderTrackShape {
+  const _GradientTrack();
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset offset, {
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required Animation<double> enableAnimation,
+    required TextDirection textDirection,
+    required Offset thumbCenter,
+    Offset? secondaryOffset,
+    bool isDiscrete = false,
+    bool isEnabled = false,
+    double additionalActiveTrackHeight = 2,
+  }) {
+    final trackRect = getPreferredRect(
+      parentBox: parentBox,
+      offset: offset,
+      sliderTheme: sliderTheme,
+    );
+    final radius = Radius.circular(trackRect.height / 2);
+
+    // Trilho inativo (fundo)
+    context.canvas.drawRRect(
+      RRect.fromRectAndRadius(trackRect, radius),
+      Paint()..color = const Color(0x33FFFFFF),
+    );
+
+    // Porção ativa: gradiente pink → azul
+    final activeRect = Rect.fromLTRB(
+        trackRect.left, trackRect.top, thumbCenter.dx, trackRect.bottom);
+    if (activeRect.width > 0) {
+      context.canvas.drawRRect(
+        RRect.fromRectAndRadius(activeRect, radius),
+        Paint()
+          ..shader = const LinearGradient(
+            colors: [Color(0xFFFF6B82), Color(0xFF4F8CFF)],
+          ).createShader(trackRect),
+      );
+    }
+  }
+}
+
+// Thumb glass com glow rosa para o slider premium
+class _GlassThumb extends SliderComponentShape {
+  const _GlassThumb();
+
+  @override
+  Size getPreferredSize(bool isEnabled, bool isDiscrete) =>
+      const Size(24, 24);
+
+  @override
+  void paint(
+    PaintingContext context,
+    Offset center, {
+    required Animation<double> activationAnimation,
+    required Animation<double> enableAnimation,
+    required bool isDiscrete,
+    required TextPainter labelPainter,
+    required RenderBox parentBox,
+    required SliderThemeData sliderTheme,
+    required TextDirection textDirection,
+    required double value,
+    required double textScaleFactor,
+    required Size sizeWithOverflow,
+  }) {
+    final canvas = context.canvas;
+
+    // Glow externo
+    canvas.drawCircle(
+      center,
+      14,
+      Paint()
+        ..color = const Color(0x33FF6B82)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+
+    // Fundo glass ultra-translúcido
+    canvas.drawCircle(center, 11, Paint()..color = const Color(0x0DFFFFFF));
+
+    // Borda rosa sutil
+    canvas.drawCircle(
+      center,
+      11,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..color = const Color(0x66FF6B82) // pink 40%
+        ..strokeWidth = 1.5,
+    );
+
+    // Reflexo interno (canto superior esquerdo)
+    canvas.drawCircle(
+      Offset(center.dx - 2, center.dy - 2),
+      3,
+      Paint()..color = const Color(0x4DFFFFFF), // white 30%
+    );
+  }
 }
 
 // Chip flutuante sobre o mapa com texto informativo

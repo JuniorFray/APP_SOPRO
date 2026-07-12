@@ -5,7 +5,6 @@ import '../../core/constants/strings.dart';
 import '../../core/navigation/app_router.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
-import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 import '../../core/utils/environment_icon_mapper.dart';
 import '../../domain/entities/environment_entity.dart';
@@ -14,9 +13,8 @@ import '../providers/trigger_providers.dart';
 import '../screens/environment/environment_detail_screen.dart';
 import 'sopro_card.dart';
 
-/// Card de ambiente na lista da Home — V2 Premium.
-/// Layout Row customizado (substituindo ListTile) para controle total
-/// de hierarquia, espaçamento e badge de triggers.
+/// Card de ambiente — Dark Glass Dashboard.
+/// Layout customizado: ícone 64×64, nome, separador, raio + badge de triggers.
 class EnvironmentCard extends ConsumerWidget {
   final EnvironmentEntity environment;
 
@@ -37,80 +35,102 @@ class EnvironmentCard extends ConsumerWidget {
       },
       background: _DeleteBackground(),
       child: SoproCard(
-        margin: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md,
-          vertical: AppSpacing.gap6,
-        ),
+        glass: true,
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         child: InkWell(
           onTap: () => pushScreen(
             context,
             EnvironmentDetailScreen(environment: environment),
           ),
           child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.md,
-              vertical: 14,
-            ),
+            padding: const EdgeInsets.all(18),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Ícone: squircle estilo Apple app icon, cor semântica do mapper
+                // Ícone: 64×64 squircle, cor semântica do mapper
                 Container(
-                  width: 52,
-                  height: 52,
+                  width: 64,
+                  height: 64,
                   decoration: BoxDecoration(
                     // ignore: deprecated_member_use
-                    color: visual.color.withOpacity(0.15),
+                    color: visual.color.withOpacity(0.12),
                     borderRadius: BorderRadius.circular(AppRadius.card),
+                    border: Border.all(
+                      // ignore: deprecated_member_use
+                      color: visual.color.withOpacity(0.20),
+                      width: 0.5,
+                    ),
                   ),
                   alignment: Alignment.center,
                   child: Text(
                     visual.emoji,
-                    style: const TextStyle(fontSize: 26),
+                    style: const TextStyle(fontSize: 30),
                   ),
                 ),
-                const SizedBox(width: 14),
+                const SizedBox(width: 16),
 
-                // Nome + raio
+                // Conteúdo: nome + separador + metadados
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        environment.name,
-                        style: AppTypography.titleSmall.copyWith(
-                          color: AppColors.textPrimary,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                      // Nome + seta
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              environment.name,
+                              style: AppTypography.titleSmall.copyWith(
+                                color: AppColors.textPrimary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right,
+                            size: 18,
+                            color: AppColors.textDisabled,
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 5),
+                      const SizedBox(height: 10),
+
+                      // Separador glass
+                      Container(
+                        height: 0.5,
+                        color: AppColors.border,
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Raio + badge de triggers
                       Row(
                         children: [
                           const Icon(
-                            Icons.radio_button_unchecked,
-                            size: 10,
+                            Icons.my_location,
+                            size: 11,
                             color: AppColors.textDisabled,
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            '${environment.radiusMeters.toInt()} m de raio',
+                            '${environment.radiusMeters.toInt()} m',
                             style: AppTypography.caption.copyWith(
-                              color: AppColors.textSecondary,
+                              color: AppColors.textDisabled,
                             ),
+                          ),
+                          const Spacer(),
+                          triggersAsync.when(
+                            data: (triggers) =>
+                                _TriggerCountBadge(count: triggers.length),
+                            loading: () => const SizedBox(width: 56, height: 14),
+                            error: (_, __) => const SizedBox.shrink(),
                           ),
                         ],
                       ),
                     ],
                   ),
-                ),
-                const SizedBox(width: 12),
-
-                // Badge de contagem de triggers
-                triggersAsync.when(
-                  data: (triggers) =>
-                      _TriggerCountBadge(count: triggers.length),
-                  loading: () => const SizedBox(width: 44, height: 44),
-                  error: (_, __) => const SizedBox.shrink(),
                 ),
               ],
             ),
@@ -154,7 +174,7 @@ class EnvironmentCard extends ConsumerWidget {
   }
 }
 
-/// Badge de contagem de triggers com ícone bolt e hierarquia clara.
+/// Badge inline de contagem de triggers.
 class _TriggerCountBadge extends StatelessWidget {
   final int count;
 
@@ -163,48 +183,22 @@ class _TriggerCountBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (count == 0) {
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Text(
-            '—',
-            style: AppTypography.bodySmall.copyWith(
-              color: AppColors.textDisabled,
-            ),
-          ),
-          Text(
-            AppStrings.triggers,
-            style: AppTypography.caption.copyWith(
-              color: AppColors.textDisabled,
-            ),
-          ),
-        ],
+      return Text(
+        'Nenhum gatilho',
+        style: AppTypography.caption.copyWith(color: AppColors.textDisabled),
       );
     }
 
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.bolt, size: 14, color: AppColors.accent),
-            const SizedBox(width: 2),
-            Text(
-              '$count',
-              style: AppTypography.titleSmall.copyWith(
-                color: AppColors.accent,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-        ),
+        const Icon(Icons.bolt, size: 12, color: AppColors.accent),
+        const SizedBox(width: 3),
         Text(
-          count == 1 ? 'gatilho' : AppStrings.triggers,
+          '$count ${count == 1 ? 'gatilho' : AppStrings.triggers}',
           style: AppTypography.caption.copyWith(
-            color: AppColors.textSecondary,
+            color: AppColors.accent,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ],
@@ -212,21 +206,28 @@ class _TriggerCountBadge extends StatelessWidget {
   }
 }
 
-/// Background de exclusão (swipe endToStart) — usa danger, não primary.
+/// Background de exclusão (swipe endToStart) — gradiente danger direcionado.
 class _DeleteBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.md,
-        vertical: AppSpacing.gap6,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.danger,
-        borderRadius: BorderRadius.circular(AppRadius.card),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            Color(0x33FF5B5B), // danger 20%
+            Color(0xD9FF5B5B), // danger 85%
+          ],
+        ),
+        borderRadius: BorderRadius.all(Radius.circular(AppRadius.card)),
+        border: Border.fromBorderSide(
+          BorderSide(color: Color(0x4DFF5B5B), width: 0.5), // danger 30%
+        ),
       ),
       alignment: Alignment.centerRight,
-      padding: const EdgeInsets.only(right: AppSpacing.lg),
+      padding: const EdgeInsets.only(right: 20),
       child: const Icon(
         Icons.delete_outline,
         color: AppColors.textPrimary,
