@@ -23,6 +23,7 @@ import '../../../core/constants/strings.dart';
 import '../../../core/navigation/app_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
+import '../../../core/theme/app_shadows.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
@@ -104,7 +105,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       return const Scaffold(
         backgroundColor: AppTheme.backgroundPrimary,
         body: Center(
-          child: CircularProgressIndicator(color: AppTheme.accent),
+          child: CircularProgressIndicator(
+            color: AppColors.accent,
+            strokeWidth: 2.5,
+            strokeCap: StrokeCap.round,
+          ),
         ),
       );
     }
@@ -114,14 +119,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
-        // 0.04em de letter-spacing no título "Sopro" — identidade visual do app
+        // tracking 0.8 = identidade de marca Sopro — mantido explicitamente
         title: const Text(
           AppStrings.homeTitle,
           style: TextStyle(
-            fontSize: 20,
+            fontSize: 22,
             fontWeight: FontWeight.w700,
-            color: AppTheme.textPrimary,
-            letterSpacing: 0.8, // 0.04 × 20sp
+            color: AppColors.textPrimary,
+            letterSpacing: 0.8,
           ),
         ),
         backgroundColor: AppTheme.backgroundSurface,
@@ -148,18 +153,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
       body: environmentsAsync.when(
         loading: () => const Center(
-          child: CircularProgressIndicator(color: AppTheme.accent),
+          child: CircularProgressIndicator(
+            color: AppColors.accent,
+            strokeWidth: 2.5,
+            strokeCap: StrokeCap.round,
+          ),
         ),
-        error: (e, _) => const Center(
+        error: (e, _) => Center(
           child: Text(
             AppStrings.errorGeneric,
-            style: TextStyle(color: AppTheme.textSecondary),
+            style: AppTypography.bodyMedium.copyWith(
+              color: AppColors.textSecondary,
+            ),
           ),
         ),
         data: (environments) => environments.isEmpty
             ? const _EmptyState()
             : ListView.builder(
-                padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                physics: const BouncingScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(0, AppSpacing.sm, 0, 160),
                 itemCount: environments.length,
                 itemBuilder: (_, i) =>
                     EnvironmentCard(environment: environments[i]),
@@ -176,11 +188,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           // FAB principal — cria novo ambiente
           FloatingActionButton.extended(
             onPressed: () => pushScreen(context, const AddEnvironmentScreen()),
-            backgroundColor: AppTheme.accent,
+            backgroundColor: AppColors.accent,
             foregroundColor: AppColors.textPrimary,
+            elevation: 0,
             heroTag: 'add_env_fab',
-            icon: const Icon(Icons.add),
-            label: const Text(AppStrings.newEnvironment),
+            icon: const Icon(Icons.add, size: 20),
+            label: Text(
+              AppStrings.newEnvironment,
+              style: AppTypography.labelLarge.copyWith(
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ],
       ),
@@ -1276,10 +1295,10 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           const SizedBox(height: AppSpacing.xs),
           Text(
             _formatSeconds(_recordingSeconds),
-            style: const TextStyle(
+            style: AppTypography.caption.copyWith(
               color: AppColors.danger,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
             ),
           ),
         ],
@@ -1294,24 +1313,26 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
     switch (_fabState) {
       case _FabState.idle:
-        bgColor = AppTheme.accent;
+        bgColor = AppColors.accent;
         child   = const Icon(Icons.mic_rounded, color: AppColors.textPrimary, size: 28);
 
       case _FabState.recording:
-        bgColor = AppColors.danger; // vermelho durante gravação
+        bgColor = AppColors.danger;
         child   = const Icon(Icons.mic_rounded, color: AppColors.textPrimary, size: 28);
 
       case _FabState.processing:
-        bgColor = AppTheme.accent;
+        bgColor = AppColors.accent;
         child   = const SizedBox(
           width: 22, height: 22,
           child: CircularProgressIndicator(
-            color: AppColors.textPrimary, strokeWidth: 2.5,
+            color: AppColors.textPrimary,
+            strokeWidth: 2.5,
+            strokeCap: StrokeCap.round,
           ),
         );
 
       case _FabState.success:
-        bgColor = AppColors.fabSuccessDark; // verde escuro
+        bgColor = AppColors.fabSuccessDark;
         child   = const Icon(Icons.check_rounded, color: AppColors.textPrimary, size: 32);
 
       case _FabState.error:
@@ -1327,12 +1348,15 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         shape:  BoxShape.circle,
         boxShadow: [
           BoxShadow(
-            // Glow suave: rgba(232,68,90,0.35) em idle, mais intenso ao gravar
             color: _isRecording
-                ? AppColors.fabGlowRecording  // vermelho de gravação 55% opacity
-                : AppColors.fabGlowIdle,      // accent 35% opacity — glow padrão
-            blurRadius:   _isRecording ? 18 : 12,
-            spreadRadius: _isRecording ? 3  : 1,
+                ? AppColors.fabGlowRecording
+                : AppColors.fabGlowIdle,
+            blurRadius:   _isRecording
+                ? AppShadows.fabRecording.blurRadius
+                : AppShadows.fabIdle.blurRadius,
+            spreadRadius: _isRecording
+                ? AppShadows.fabRecording.spreadRadius
+                : AppShadows.fabIdle.spreadRadius,
           ),
         ],
       ),
@@ -2010,27 +2034,44 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.air, size: 80, color: AppTheme.accent),
-          SizedBox(height: AppSpacing.xl),
-          Text(
-            AppStrings.homeEmptyTitle,
-            style: TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                // ignore: deprecated_member_use
+                color: AppColors.accent.withOpacity(0.08),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.air,
+                size: 48,
+                color: AppColors.accent,
+              ),
             ),
-          ),
-          SizedBox(height: AppSpacing.xs),
-          Text(
-            AppStrings.homeEmptySubtitle,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: AppTheme.textSecondary),
-          ),
-        ],
+            const SizedBox(height: AppSpacing.xl),
+            Text(
+              AppStrings.homeEmptyTitle,
+              style: AppTypography.titleMedium.copyWith(
+                color: AppColors.textPrimary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              AppStrings.homeEmptySubtitle,
+              style: AppTypography.bodyMedium.copyWith(
+                color: AppColors.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }
