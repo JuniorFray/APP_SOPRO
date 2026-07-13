@@ -12,6 +12,7 @@ import '../../../core/theme/app_typography.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/voice_providers.dart';
+import '../../widgets/glass_surface.dart';
 import '../encounters/encounters_screen.dart';
 import '../../../infrastructure/overlay/floating_voice_service_manager.dart';
 
@@ -41,7 +42,15 @@ class SettingsScreen extends ConsumerWidget {
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
         title: const Text(AppStrings.settingsTitle),
-        backgroundColor: AppTheme.backgroundSurface,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        // Liquid Glass — delega ao primitivo central GlassSurface.
+        flexibleSpace: const GlassSurface(
+          borderRadius: BorderRadius.zero,
+          edges: GlassEdges.bottom,
+          child: SizedBox.expand(),
+        ),
       ),
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),

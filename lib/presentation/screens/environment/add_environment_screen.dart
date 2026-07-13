@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -20,6 +19,7 @@ import '../../../infrastructure/location/location_guard.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
+import '../../widgets/glass_surface.dart';
 // Tela de criação OU edição de Environment com mapa interativo.
 //
 // Modo criação: [environment] == null — campos em branco, submit gera UUID novo.
@@ -261,18 +261,11 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
       backgroundColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
-      flexibleSpace: ClipRect(
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-          child: Container(
-            decoration: const BoxDecoration(
-              color: Color(0x08FFFFFF), // white 3%
-              border: Border(
-                bottom: BorderSide(color: AppColors.borderHighlight, width: 0.5),
-              ),
-            ),
-          ),
-        ),
+      // Liquid Glass — delega ao primitivo central GlassSurface.
+      flexibleSpace: const GlassSurface(
+        borderRadius: BorderRadius.zero,
+        edges: GlassEdges.bottom,
+        child: SizedBox.expand(),
       ),
       title: Text(
         _isEditing ? AppStrings.editEnvironmentTitle : AppStrings.addEnvironmentTitle,
@@ -314,27 +307,10 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
 
   // Card glass flutuante com campo de nome e busca de endereço
   Widget _buildTopCard(BuildContext context) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0x14FFFFFF), Color(0x03FFFFFF)],
-            ),
-            border: Border(bottom: BorderSide(color: AppColors.borderHighlight, width: 0.5)),
-          ),
-          foregroundDecoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0x1EFFFFFF), Colors.transparent],
-              stops: [0.0, 0.3],
-            ),
-          ),
-          child: SafeArea(
+    return GlassSurface(
+      borderRadius: BorderRadius.zero,
+      edges: GlassEdges.bottom,
+      child: SafeArea(
             bottom: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
@@ -506,8 +482,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
               ),
             ),
           ),
-        ),
-      ),
     );
   }
 
@@ -584,28 +558,11 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
 
   // Painel glass inferior: raio + slider premium + botão salvar
   Widget _buildBottomPanel(BuildContext context) {
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0x14FFFFFF), Color(0x03FFFFFF)],
-            ),
-            border: Border(top: BorderSide(color: AppColors.borderHighlight, width: 0.5)),
-          ),
-          foregroundDecoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0x1EFFFFFF), Colors.transparent],
-              stops: [0.0, 0.3],
-            ),
-          ),
-          child: SafeArea(
-            top: false,
+    return GlassSurface(
+      borderRadius: BorderRadius.zero,
+      edges: GlassEdges.top,
+      child: SafeArea(
+        top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
               child: Column(
@@ -701,8 +658,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
               ),
             ),
           ),
-        ),
-      ),
     );
   }
 

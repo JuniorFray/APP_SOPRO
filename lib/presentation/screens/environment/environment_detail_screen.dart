@@ -18,6 +18,7 @@ import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/trigger_providers.dart';
 import '../../providers/voice_providers.dart';
+import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_card.dart';
 import '../../widgets/sopro_primary_button.dart';
 import '../../widgets/sopro_text_field.dart';
@@ -46,6 +47,15 @@ class EnvironmentDetailScreen extends ConsumerWidget {
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
         title: Text(currentEnv.name),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        // Liquid Glass — delega ao primitivo central GlassSurface.
+        flexibleSpace: const GlassSurface(
+          borderRadius: BorderRadius.zero,
+          edges: GlassEdges.bottom,
+          child: SizedBox.expand(),
+        ),
         actions: [
           // Botão para editar o ambiente (nome, raio, localização)
           IconButton(

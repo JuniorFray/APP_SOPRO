@@ -15,6 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_spacing.dart';
+import '../../widgets/glass_surface.dart';
 
 // URL da tabela de benchmark no Supabase
 const _supabaseUrl =
@@ -632,7 +633,15 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
       backgroundColor: const Color(0xFF0D0D1A),
       appBar: AppBar(
         title: const Text('Benchmark Geocoder'),
-        backgroundColor: const Color(0xFF1A1A2E),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        // Liquid Glass — delega ao primitivo central GlassSurface.
+        flexibleSpace: const GlassSurface(
+          borderRadius: BorderRadius.zero,
+          edges: GlassEdges.bottom,
+          child: SizedBox.expand(),
+        ),
       ),
       body: _isRunning ? _buildRunningView() : _buildIdleView(),
     );

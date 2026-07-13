@@ -22,6 +22,7 @@ import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/ble_encounter_entity.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/encounter_providers.dart';
+import '../../widgets/glass_surface.dart';
 
 class EncountersScreen extends ConsumerWidget {
   const EncountersScreen({super.key});
@@ -34,7 +35,15 @@ class EncountersScreen extends ConsumerWidget {
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
         title: const Text(AppStrings.encountersTitle),
-        backgroundColor: AppTheme.backgroundSurface,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        // Liquid Glass — delega ao primitivo central GlassSurface.
+        flexibleSpace: const GlassSurface(
+          borderRadius: BorderRadius.zero,
+          edges: GlassEdges.bottom,
+          child: SizedBox.expand(),
+        ),
         actions: [
           // Botão de limpar histórico — só aparece quando há encontros
           encountersAsync.whenData((list) => list).valueOrNull?.isNotEmpty == true

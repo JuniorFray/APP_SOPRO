@@ -41,6 +41,7 @@ import '../../providers/trigger_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../../widgets/environment_card.dart';
+import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_primary_button.dart';
 import '../../widgets/sopro_text_field.dart';
 import '../ble/people_nearby_screen.dart';
@@ -130,19 +131,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
-        // Glass blur — conteúdo que rola sob a AppBar aparece desfocado
-        flexibleSpace: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: const BoxDecoration(
-                color: Color(0x08FFFFFF), // white 3%
-                border: Border(
-                  bottom: BorderSide(color: AppColors.borderHighlight, width: 0.5),
-                ),
-              ),
-            ),
-          ),
+        // Liquid Glass — conteúdo que rola sob a AppBar aparece desfocado.
+        // Delega ao primitivo central GlassSurface (identidade única do app).
+        flexibleSpace: const GlassSurface(
+          borderRadius: BorderRadius.zero,
+          edges: GlassEdges.bottom,
+          child: SizedBox.expand(),
         ),
         // tracking 0.8 = identidade de marca Sopro
         title: const Text(
@@ -1472,18 +1466,22 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
                     child: Center(child: fabChild),
                   )
                 : BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                    // Corpo glass do FAB (estados não-idle) — mesmo tom premium.
+                    // Mantido inline: círculo + borda variável por estado.
+                    filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                     child: Container(
                       width:  72,
                       height: 72,
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
                           colors: [
+                            Color(0x38FFFFFF), // white 22% — especular superior
                             Color(0x0AFFFFFF), // white 4%
-                            Color(0x05FFFFFF), // white 2%
+                            Color(0x08FFFFFF), // white 3%
                           ],
+                          stops: [0.0, 0.25, 1.0],
                         ),
                         border: Border.all(color: borderColor, width: 0.75),
                       ),

@@ -30,6 +30,7 @@ import '../../../domain/entities/context_card_entity.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/settings_providers.dart';
+import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_primary_button.dart';
 import '../../widgets/sopro_text_field.dart';
 
@@ -251,7 +252,15 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
         title: const Text(AppStrings.profileTitle),
-        backgroundColor: AppTheme.backgroundSurface,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        // Liquid Glass — delega ao primitivo central GlassSurface.
+        flexibleSpace: const GlassSurface(
+          borderRadius: BorderRadius.zero,
+          edges: GlassEdges.bottom,
+          child: SizedBox.expand(),
+        ),
       ),
       body: _loaded ? _buildForm(isVisible, shareWhatsApp) : _buildLoading(),
     );

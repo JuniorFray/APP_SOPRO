@@ -14,6 +14,7 @@ import '../../../infrastructure/ble/discovered_sopro_user.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/settings_providers.dart';
+import '../../widgets/glass_surface.dart';
 import '../encounters/encounters_screen.dart';
 
 // PeopleNearbyScreen — "Pessoas Aqui"
@@ -215,7 +216,15 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
         title: const Text(AppStrings.peopleNearby),
-        backgroundColor: AppTheme.backgroundSurface,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        // Liquid Glass — delega ao primitivo central GlassSurface.
+        flexibleSpace: const GlassSurface(
+          borderRadius: BorderRadius.zero,
+          edges: GlassEdges.bottom,
+          child: SizedBox.expand(),
+        ),
         actions: [
           // Histórico de encontros BLE
           IconButton(

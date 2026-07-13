@@ -1,10 +1,9 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
 import '../../core/theme/app_shadows.dart';
+import 'glass_surface.dart';
 
 /// Card padrão do Sopro — Dark Glass V3.
 /// [glass: true]  BackdropFilter + fundo translúcido (EnvironmentCard, FAB, etc.)
@@ -33,56 +32,16 @@ class SoproCard extends StatelessWidget {
         : child;
 
     if (glass) {
-      // Outer container: apenas margin + sombra difusa (fora do ClipRRect para não cortar)
-      return Container(
+      // Liquid Glass espesso — delega ao primitivo central GlassSurface para
+      // manter a identidade única do app (mesma receita da Home). Saída idêntica.
+      return GlassSurface(
         margin: margin,
-        decoration: BoxDecoration(
-          borderRadius: borderRadius,
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x26000000),
-              blurRadius: 24,
-              spreadRadius: 0,
-              offset: Offset(0, 8),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: borderRadius,
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: borderRadius,
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0x14FFFFFF), // white 8%
-                    Color(0x03FFFFFF), // white 1%
-                  ],
-                ),
-                border: bordered
-                    ? Border.all(color: AppColors.borderHighlight, width: 0.5)
-                    : null,
-              ),
-              foregroundDecoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Color(0x1EFFFFFF), // white 12% — reflexo superior
-                    Colors.transparent,
-                  ],
-                  stops: [0.0, 0.45],
-                ),
-              ),
-              child: Material(
-                color: Colors.transparent,
-                child: content,
-              ),
-            ),
-          ),
+        borderRadius: borderRadius,
+        edges: bordered ? GlassEdges.all : GlassEdges.none,
+        shadows: GlassSurface.cardShadows,
+        child: Material(
+          color: Colors.transparent,
+          child: content,
         ),
       );
     }
