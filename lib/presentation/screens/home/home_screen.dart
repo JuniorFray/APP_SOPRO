@@ -31,6 +31,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
+import '../../../infrastructure/location/location_guard.dart';
 import '../../../infrastructure/logging/app_logger.dart';
 import '../../../infrastructure/voice/voice_service.dart';
 import '../../providers/database_provider.dart';
@@ -743,9 +744,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     int radiusMeters = 100,
   }) async {
     try {
-      final loc = await ref
-          .read(nativeLocationServiceProvider)
-          .getCurrentPosition();
+      final service = ref.read(nativeLocationServiceProvider);
+      final loc = await getLocationWithGpsCheck(context, service);
       if (loc == null) return null;
 
       final env = EnvironmentEntity(

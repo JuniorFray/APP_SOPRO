@@ -17,6 +17,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <!-- Tipo específico "location" exigido pelo Android 14+ para serviços com GPS -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <!-- Tipo específico "microphone" exigido pelo Android 14+ (API 34+) para serviços
+         que acessam o microfone via SpeechRecognizer. Sem essa permissão + foregroundServiceType,
+         startForeground() lança MissingForegroundServiceTypeException em targetSdk >= 34. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <!-- Permite reiniciar o serviço após reboot do dispositivo -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
@@ -114,9 +118,13 @@
 
         <!-- FloatingVoiceService — exibe botão flutuante de voz sobre outros apps.
              Requer SYSTEM_ALERT_WINDOW concedido pelo usuário (verificado em runtime).
-             android:exported="false": só o próprio app pode iniciar este serviço. -->
+             android:exported="false": só o próprio app pode iniciar este serviço.
+             foregroundServiceType="microphone": obrigatório no Android 14+ (API 34+) para
+             serviços que usam SpeechRecognizer; sem isso startForeground() lança
+             MissingForegroundServiceTypeException em apps com targetSdk >= 34. -->
         <service
             android:name=".FloatingVoiceService"
+            android:foregroundServiceType="microphone"
             android:exported="false"/>
 
         <meta-data

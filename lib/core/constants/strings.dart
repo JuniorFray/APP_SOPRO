@@ -161,6 +161,13 @@ class AppStrings {
       'Permissão de localização negada. Habilite nas configurações do dispositivo.';
   static const locationError =
       'Não foi possível obter sua localização. Tente novamente.';
+  static const gpsDisabledTitle        = 'Ative a localização';
+  static const gpsDisabledBody         =
+      'O GPS do aparelho está desligado.\n\n'
+      'Para utilizar recursos baseados em localização é necessário '
+      'ativar a localização do dispositivo.';
+  static const gpsDisabledCancel       = 'Cancelar';
+  static const gpsDisabledOpenSettings = 'Abrir Configurações';
 
   // Busca de endereço por Nominatim (OpenStreetMap)
   static const searchAddressHint = 'Buscar endereço ou lugar...';

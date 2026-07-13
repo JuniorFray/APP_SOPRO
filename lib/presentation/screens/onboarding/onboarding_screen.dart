@@ -32,6 +32,7 @@ import '../../providers/ble_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../widgets/sopro_primary_button.dart';
+import '../../../infrastructure/overlay/floating_voice_service_manager.dart';
 
 // Dados imutáveis de cada passo do onboarding
 class _Step {
@@ -193,25 +194,26 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
     }
   }
 
-  // Verifica se a permissão foi concedida, ativa o FloatingVoiceService e avança.
+  // Ativa o FloatingVoiceService via política central e avança para o Home.
   Future<void> _checkAndActivateOverlay() async {
     try {
-      final hasPerm =
-          await _overlayChannel.invokeMethod<bool>('hasOverlayPermission') ?? false;
-      if (hasPerm) {
-        await _overlayChannel.invokeMethod<void>('startFloatingVoiceService');
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('floating_voice_enabled', true);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('floating_voice_enabled', true);
+      final String? failure = await FloatingVoiceServiceManager.tryStart();
+      if (failure == null) {
         if (mounted) {
           ref.read(floatingVoiceEnabledProvider.notifier).state = true;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content:  Text(AppStrings.obOverlayActivated),
+              content: Text(AppStrings.obOverlayActivated),
               duration: Duration(seconds: 2),
               behavior: SnackBarBehavior.floating,
             ),
           );
         }
+      } else {
+        // Pré-requisito ausente — reverte pref; o usuário ativa depois nas Configurações
+        await prefs.setBool('floating_voice_enabled', false);
       }
     } catch (_) {
       // Silencioso — o usuário pode ativar depois nas Configurações

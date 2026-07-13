@@ -7,6 +7,7 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -81,8 +82,9 @@ class MainActivity : FlutterActivity() {
         private const val PREFS_GEOFENCE_NAMES  = GeofenceReceiver.PREFS_NAME
 
         // ── Overlay (botão flutuante de voz) ──────────────────────────────────
-        private const val OVERLAY_CHANNEL = "com.sopro.sopro/overlay"
-        private const val TAG             = "MainActivity"
+        private const val OVERLAY_CHANNEL  = "com.sopro.sopro/overlay"
+        private const val PERM_REQUEST_MIC = 1004
+        private const val TAG              = "MainActivity"
 
         // UUIDs Sopro — FIXOS (nunca alterar; identificam o app na rede BLE)
         private val SERVICE_UUID           = ParcelUuid.fromString("550e8400-e29b-41d4-a716-446655440000")
@@ -121,6 +123,9 @@ class MainActivity : FlutterActivity() {
 
     // Canal de overlay — armazenado para invocar métodos Dart a partir do onNewIntent
     private var overlayChannel: MethodChannel? = null
+
+    // Promise pendente de requestMicrophonePermission() — resolvida em onRequestPermissionsResult
+    private var pendingMicPermResult: MethodChannel.Result? = null
 
     // ═════════════════════════════════════════════════════════════════════════
     // Ciclo de vida da Activity
@@ -193,6 +198,32 @@ class MainActivity : FlutterActivity() {
                     "getCurrentPosition" -> {
                         Logger.debug("location_fetch_start", feature = "location", action = call.method)
                         getCurrentPosition(result)
+                    }
+                    "isLocationEnabled" -> {
+                        Logger.debug("gps_check_started", feature = "location", action = call.method)
+                        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+                        val enabled = lm.isLocationEnabled
+                        val providerGps     = lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                        val providerNetwork = lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+                        Logger.debug(
+                            if (enabled) "gps_enabled" else "gps_disabled",
+                            feature = "location",
+                            action  = call.method,
+                            payload = mapOf(
+                                "gps_enabled"      to enabled.toString(),
+                                "provider_gps"     to providerGps.toString(),
+                                "provider_network" to providerNetwork.toString()
+                            )
+                        )
+                        result.success(enabled)
+                    }
+                    "openLocationSettings" -> {
+                        startActivity(
+                            Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        )
+                        Logger.info("opening_location_settings", feature = "location", action = call.method)
+                        result.success(null)
                     }
                     else -> {
                         Logger.warn("method_channel_not_implemented", feature = "location",
@@ -310,6 +341,17 @@ class MainActivity : FlutterActivity() {
                         Logger.debug("overlay_permission_check", feature = "overlay",
                             action = call.method, payload = mapOf("granted" to hasPermission.toString()))
                         result.success(hasPermission)
+                    }
+
+                    // Verifica se RECORD_AUDIO foi concedido — chamado pelo Dart antes de ativar o botão
+                    "hasMicrophonePermission" -> {
+                        result.success(hasMicrophonePermission())
+                    }
+
+                    // Solicita RECORD_AUDIO ao usuário — retorna bool via MethodChannel.Result
+                    // pendingMicPermResult guarda a promise até onRequestPermissionsResult()
+                    "requestMicrophonePermission" -> {
+                        requestMicrophonePermission(result)
                     }
 
                     "startFloatingVoiceService" -> {
@@ -818,6 +860,32 @@ class MainActivity : FlutterActivity() {
         } else {
             result.success(true) // versões anteriores ao Android 10 não precisam
         }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Microfone — permissão para FloatingVoiceService
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // Retorna true se RECORD_AUDIO foi concedido pelo usuário.
+    private fun hasMicrophonePermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    // Solicita RECORD_AUDIO ao usuário; result é resolvida em onRequestPermissionsResult().
+    // Se já concedida, resolve imediatamente com true sem exibir dialog.
+    private fun requestMicrophonePermission(result: MethodChannel.Result) {
+        if (hasMicrophonePermission()) {
+            Logger.debug("permission_already_granted", feature = "overlay",
+                action = "requestMicrophonePermission",
+                payload = mapOf("permission" to "RECORD_AUDIO"))
+            result.success(true); return
+        }
+        pendingMicPermResult = result
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.RECORD_AUDIO),
+            PERM_REQUEST_MIC
+        )
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -1333,6 +1401,21 @@ class MainActivity : FlutterActivity() {
                 }
                 pendingBgLocResult?.success(granted)
                 pendingBgLocResult = null
+            }
+            PERM_REQUEST_MIC -> {
+                val granted = grantResults.isNotEmpty() &&
+                              grantResults[0] == PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    Logger.info("permission_granted", feature = "overlay",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permission" to "RECORD_AUDIO"))
+                } else {
+                    Logger.warn("permission_denied", feature = "overlay",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permission" to "RECORD_AUDIO"))
+                }
+                pendingMicPermResult?.success(granted)
+                pendingMicPermResult = null
             }
         }
     }

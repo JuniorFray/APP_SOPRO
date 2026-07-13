@@ -22,6 +22,16 @@ class NativeLocationService {
     return await _method.invokeMethod<bool>('requestPermission') ?? false;
   }
 
+  /// Retorna true se o serviço de localização do dispositivo está habilitado.
+  Future<bool> isLocationEnabled() async {
+    return await _method.invokeMethod<bool>('isLocationEnabled') ?? false;
+  }
+
+  /// Abre as configurações de localização do Android (ACTION_LOCATION_SOURCE_SETTINGS).
+  Future<void> openLocationSettings() async {
+    await _method.invokeMethod<void>('openLocationSettings');
+  }
+
   /// Obtém a posição atual do dispositivo (pontual — não inicia monitoramento).
   /// Retorna null se GPS não disponível ou permissão negada.
   Future<({double latitude, double longitude, double accuracy})?> getCurrentPosition() async {

@@ -6,9 +6,11 @@ import android.annotation.SuppressLint
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.database.sqlite.SQLiteDatabase
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.hardware.display.DisplayManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.*
@@ -42,6 +44,8 @@ import java.net.URL
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 
 // FloatingVoiceService — botão circular flutuante de voz sobre todos os apps.
 //
@@ -181,27 +185,141 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
     override fun onCreate() {
         super.onCreate()
-        SessionManager.init(this)
+
+        Logger.info("service_started", feature = "floating_voice", action = "onCreate",
+            payload = mapOf("android_sdk" to Build.VERSION.SDK_INT.toString()))
+
+        // SessionManager deve ser init antes de qualquer Logger.* para que device_id esteja disponível
+        Logger.debug("session_manager_init_start", feature = "floating_voice", action = "onCreate")
+        try {
+            SessionManager.init(this)
+        } catch (e: Exception) {
+            logException("session_manager_init", e)
+            throw e
+        }
+        Logger.debug("session_manager_init_done", feature = "floating_voice", action = "onCreate")
+
+        // SYSTEM_ALERT_WINDOW é pré-requisito do overlay — sem ela o addView() falha
+        Logger.debug("checking_overlay_permission", feature = "floating_voice", action = "onCreate")
         if (!Settings.canDrawOverlays(this)) {
             Logger.warn("overlay_permission_denied", feature = "floating_voice", action = "onCreate",
                 payload = mapOf("permission" to "SYSTEM_ALERT_WINDOW"))
+            Logger.info("service_stopping", feature = "floating_voice", action = "onCreate",
+                payload = mapOf("reason" to "overlay_permission_denied"))
             stopSelf(); return
         }
-        // TTS nativo — onInit() é chamado assincronamente após init
-        tts = TextToSpeech(this, this)
+        Logger.debug("overlay_permission_granted", feature = "floating_voice", action = "onCreate")
 
-        // SpeechRecognizer deve ser criado na main thread — onCreate() já é main
-        initSpeechRecognizer()
+        // Android 14+ (API 34+): RECORD_AUDIO deve estar concedido em runtime ANTES de
+        // startForeground() com serviceType=microphone; sem ela o sistema lança SecurityException.
+        // Camada defensiva — a permissão já deveria ter sido solicitada pela UI (SettingsScreen).
+        Logger.debug("checking_record_audio_permission", feature = "floating_voice", action = "onCreate")
+        if (android.content.pm.PackageManager.PERMISSION_GRANTED !=
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.RECORD_AUDIO)) {
+            Logger.warn("microphone_permission_denied_at_start", feature = "floating_voice",
+                action = "onCreate", payload = mapOf("permission" to "RECORD_AUDIO"))
+            Logger.info("service_stopping", feature = "floating_voice", action = "onCreate",
+                payload = mapOf("reason" to "record_audio_permission_denied"))
+            stopSelf(); return
+        }
+        Logger.debug("record_audio_permission_granted", feature = "floating_voice", action = "onCreate")
 
-        startForeground(NOTIF_ID, buildSilentNotification())
+        // startForeground() deve ser chamado o mais cedo possível no onCreate() para evitar
+        // ANR no Android 16 (API 36), que aplica limite de 5 s para promoção a foreground.
+        // 3-arg: obrigatório para targetSdk >= 34 quando foregroundServiceType está declarado.
+        // SecurityException: RECORD_AUDIO ausente ou FOREGROUND_SERVICE_MICROPHONE ausente.
+        // IllegalStateException: ForegroundServiceStartNotAllowedException (API 31+, background-start).
+        Logger.debug("starting_foreground", feature = "floating_voice", action = "onCreate",
+            payload = mapOf("notif_id" to NOTIF_ID.toString(), "sdk" to Build.VERSION.SDK_INT.toString()))
+        val fgsNotification = try {
+            buildSilentNotification()
+        } catch (e: Exception) {
+            logException("build_notification", e)
+            Logger.info("service_stopping", feature = "floating_voice", action = "onCreate",
+                payload = mapOf("reason" to "build_notification_failed"))
+            stopSelf(); return
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, fgsNotification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+            } else {
+                startForeground(NOTIF_ID, fgsNotification)
+            }
+        } catch (e: SecurityException) {
+            Logger.error("fgs_security_exception", feature = "floating_voice", action = "onCreate",
+                exception = e, payload = mapOf("cause" to (e.message ?: "unknown")))
+            logException("start_foreground", e)
+            Logger.info("service_stopping", feature = "floating_voice", action = "onCreate",
+                payload = mapOf("reason" to "fgs_security_exception"))
+            stopSelf(); return
+        } catch (e: IllegalStateException) {
+            // Cobre ForegroundServiceStartNotAllowedException (API 31+, subclasse de IllegalStateException)
+            Logger.error("fgs_illegal_state_exception", feature = "floating_voice", action = "onCreate",
+                exception = e, payload = mapOf("cause" to (e.message ?: "unknown")))
+            logException("start_foreground", e)
+            Logger.info("service_stopping", feature = "floating_voice", action = "onCreate",
+                payload = mapOf("reason" to "fgs_illegal_state"))
+            stopSelf(); return
+        } catch (e: Exception) {
+            Logger.error("fgs_unexpected_exception", feature = "floating_voice", action = "onCreate",
+                exception = e, payload = mapOf("cause" to (e.message ?: "unknown")))
+            logException("start_foreground", e)
+            Logger.info("service_stopping", feature = "floating_voice", action = "onCreate",
+                payload = mapOf("reason" to "fgs_unexpected_exception"))
+            stopSelf(); return
+        }
+
         Logger.info("foreground_started", feature = "floating_voice", action = "startForeground",
             payload = mapOf("notif_id" to NOTIF_ID.toString()))
 
-        createOverlayButton()
+        // TTS nativo — onInit() é chamado assincronamente após init
+        Logger.debug("tts_init_start", feature = "floating_voice", action = "onCreate")
+        try {
+            tts = TextToSpeech(this, this)
+        } catch (e: Exception) {
+            logException("tts_init", e)
+            throw e
+        }
+        Logger.debug("tts_init_requested", feature = "floating_voice", action = "onCreate",
+            payload = mapOf("note" to "onInit_callback_is_async"))
+
+        // SpeechRecognizer deve ser criado na main thread — onCreate() já é main
+        Logger.debug("init_speech_recognizer_start", feature = "floating_voice", action = "onCreate")
+        try {
+            initSpeechRecognizer()
+        } catch (e: Exception) {
+            logException("speech_init", e)
+            throw e
+        }
+
+        Logger.debug("create_overlay_start", feature = "floating_voice", action = "onCreate")
+        try {
+            createOverlayButton()
+        } catch (e: Exception) {
+            logException("overlay_create", e)
+            Logger.info("service_stopping", feature = "floating_voice", action = "onCreate",
+                payload = mapOf("reason" to "overlay_create_failed"))
+            stopSelf(); return
+        }
         Logger.debug("overlay_created", feature = "floating_voice", action = "onCreate")
 
         (applicationContext as Application).registerActivityLifecycleCallbacks(lifecycleCallbacks)
         Logger.info("service_created", feature = "floating_voice", action = "onCreate")
+    }
+
+    // START_NOT_STICKY: se o processo for morto após um crash inesperado, o Android NÃO reinicia
+    // o serviço automaticamente — evita crash loop que levaria o sistema a force-stop o app.
+    // O usuário reativa o botão manualmente pelo toggle nas Configurações.
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        try {
+            Logger.info("service_start_command", feature = "floating_voice", action = "onStartCommand",
+                payload = mapOf("flags" to flags.toString(), "start_id" to startId.toString()))
+        } catch (e: Exception) {
+            logException("service_start_command", e)
+        }
+        return START_NOT_STICKY
     }
 
     // FIX 4: seleciona melhor voz pt-BR offline e ajusta velocidade/tom após init assíncrono
@@ -237,19 +355,25 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
-        serviceScope.cancel()
-        (applicationContext as Application).unregisterActivityLifecycleCallbacks(lifecycleCallbacks)
-        // SpeechRecognizer.destroy() deve ser chamado na main thread
-        speechRecognizer?.destroy()
-        speechRecognizer = null
-        rippleAnimators.forEach { it.cancel() }
-        mainHandler.removeCallbacksAndMessages(null)
-        tts?.stop(); tts?.shutdown(); tts = null
-        removeOverlayButton()
-        Logger.debug("overlay_removed", feature = "floating_voice", action = "onDestroy")
-        Logger.info("foreground_stopped", feature = "floating_voice", action = "onDestroy")
-        Logger.info("service_destroyed", feature = "floating_voice", action = "onDestroy")
-        super.onDestroy()
+        try {
+            Logger.info("service_destroying", feature = "floating_voice", action = "onDestroy")
+            serviceScope.cancel()
+            (applicationContext as Application).unregisterActivityLifecycleCallbacks(lifecycleCallbacks)
+            // SpeechRecognizer.destroy() deve ser chamado na main thread
+            speechRecognizer?.destroy()
+            speechRecognizer = null
+            rippleAnimators.forEach { it.cancel() }
+            mainHandler.removeCallbacksAndMessages(null)
+            tts?.stop(); tts?.shutdown(); tts = null
+            removeOverlayButton()
+            Logger.debug("overlay_removed", feature = "floating_voice", action = "onDestroy")
+            Logger.info("foreground_stopped", feature = "floating_voice", action = "onDestroy")
+            Logger.info("service_destroyed", feature = "floating_voice", action = "onDestroy")
+        } catch (e: Exception) {
+            logException("service_destroy", e)
+        } finally {
+            super.onDestroy()
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -262,7 +386,16 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 action = "init_speech_recognizer")
             return
         }
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        Logger.debug("speech_recognition_available", feature = "floating_voice",
+            action = "init_speech_recognizer")
+        Logger.debug("creating_speech_recognizer", feature = "floating_voice",
+            action = "init_speech_recognizer")
+        try {
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        } catch (e: Exception) {
+            logException("speech_create", e)
+            throw e
+        }
         Logger.debug("speech_recognizer_created", feature = "floating_voice",
             action = "init_speech_recognizer")
 
@@ -270,26 +403,33 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
             // Reconhecedor pronto — inicia animação de escuta
             override fun onReadyForSpeech(params: Bundle?) {
-                Logger.debug("speech_ready", feature = "floating_voice", action = "stt",
-                    correlationId = voiceCorrelationId)
-                startRippleAnimations()
+                try {
+                    Logger.debug("speech_ready", feature = "floating_voice", action = "stt",
+                        correlationId = voiceCorrelationId)
+                    startRippleAnimations()
+                } catch (e: Exception) { logException("speech_ready", e) }
             }
 
             // Usuário começou a falar
             override fun onBeginningOfSpeech() {
-                Logger.trace("speech_began", feature = "floating_voice", action = "stt",
-                    correlationId = voiceCorrelationId)
+                try {
+                    Logger.trace("speech_began", feature = "floating_voice", action = "stt",
+                        correlationId = voiceCorrelationId)
+                } catch (e: Exception) { logException("speech_begin", e) }
             }
 
             // Usuário parou de falar — muda visual para "processando"
             override fun onEndOfSpeech() {
-                Logger.debug("speech_end_of_speech", feature = "floating_voice", action = "stt",
-                    correlationId = voiceCorrelationId)
-                showProcessingState()
+                try {
+                    Logger.debug("speech_end_of_speech", feature = "floating_voice", action = "stt",
+                        correlationId = voiceCorrelationId)
+                    showProcessingState()
+                } catch (e: Exception) { logException("speech_end", e) }
             }
 
             // Resultado final — classifica via Gemini ou usa diretamente como nome
             override fun onResults(results: Bundle?) {
+                try { // stage: speech_results
                 isListening = false
                 val text = results
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
@@ -353,10 +493,12 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
                 // Caso geral — envia ao Gemini para classificação em IO thread
                 serviceScope.launch { processTextWithGemini(text) }
+                } catch (e: Exception) { logException("speech_results", e) }
             }
 
             // Erro de reconhecimento — exibe mensagem amigável
             override fun onError(error: Int) {
+                try { // stage: speech_error
                 isListening = false
                 val msg = when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH         -> "Não entendi. Tente novamente."
@@ -374,6 +516,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 voiceCorrelationId = null
                 revertButtonAppearance()
                 speak(msg)
+                } catch (e: Exception) { logException("speech_error", e) }
             }
 
             // Resultado parcial — registrado em trace para diagnóstico de STT
@@ -397,27 +540,47 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Notificação foreground mínima (IMPORTANCE_MIN — sem som/ícone na barra)
+    // Notificação foreground (IMPORTANCE_LOW — Android 14+ exige mínimo LOW para FGS válido)
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun buildSilentNotification(): Notification {
+        Logger.debug("build_notification_start", feature = "floating_voice", action = "foreground_notification",
+            payload = mapOf("channel_id" to CHANNEL_ID))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (nm.getNotificationChannel(CHANNEL_ID) == null) {
-                nm.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "Sopro — Segundo plano",
-                        NotificationManager.IMPORTANCE_MIN).apply { setShowBadge(false) }
-                )
+                // IMPORTANCE_LOW: não emite som, mas é válido para FGS no Android 14+.
+                // IMPORTANCE_MIN causava IllegalArgumentException ao vincular o canal a FGS do tipo microphone.
+                Logger.debug("creating_notification_channel", feature = "floating_voice",
+                    action = "foreground_notification",
+                    payload = mapOf("channel_id" to CHANNEL_ID, "importance" to "IMPORTANCE_LOW"))
+                try {
+                    nm.createNotificationChannel(
+                        NotificationChannel(CHANNEL_ID, "Sopro — Segundo plano",
+                            NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
+                    )
+                } catch (e: IllegalArgumentException) {
+                    logException("notification_channel", e); throw e
+                } catch (e: Exception) {
+                    logException("notification_channel", e); throw e
+                }
+                Logger.debug("notification_channel_created", feature = "floating_voice",
+                    action = "foreground_notification",
+                    payload = mapOf("channel_id" to CHANNEL_ID))
             }
         }
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.notification_icon)
-            .setContentTitle("Sopro")
-            .setContentText("Botão de voz ativo")
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setOngoing(true)
-            .setSilent(true)
-            .build()
+        val notification = try {
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.notification_icon)
+                .setContentTitle("Sopro")
+                .setContentText("Botão de voz ativo")
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .setSilent(true)
+                .build()
+        } catch (e: Exception) {
+            logException("notification_display", e); throw e
+        }
         Logger.debug("notification_created", feature = "floating_voice", action = "foreground_notification",
             payload = mapOf("channel_id" to CHANNEL_ID, "notif_id" to NOTIF_ID.toString()))
         return notification
@@ -429,7 +592,20 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun createOverlayButton() {
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        // Android 11+ (API 30+): WindowManager deve ser obtido via createWindowContext() com
+        // display explícito. Usar getSystemService() direto do Service context retorna um
+        // WindowManager sem associação de display, causando BadTokenException no addView()
+        // em Android 14/15 com edge-to-edge enforcement. createWindowContext() associa o
+        // contexto ao display físico default e ao tipo TYPE_APPLICATION_OVERLAY antes do
+        // addView(), eliminando o token inválido.
+        windowManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val dm = getSystemService(DisplayManager::class.java)
+            val display = dm.getDisplay(Display.DEFAULT_DISPLAY)!!
+            createWindowContext(display, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
+                .getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        } else {
+            getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        }
 
         val btnPx       = dpToPx(56)  // botão principal 56 dp
         val ripplePx    = dpToPx(60)  // cada ripple parte de 60dp (escala até 2.5 = 150dp)
@@ -492,7 +668,15 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         layoutParams = params
 
         container.setOnTouchListener { _, event -> handleTouch(event); true }
-        windowManager?.addView(container, params)
+        Logger.debug("adding_overlay_view", feature = "floating_voice", action = "create_overlay",
+            payload = mapOf("container_size_px" to containerPx.toString(), "layout_type" to layoutType.toString()))
+        try {
+            windowManager?.addView(container, params)
+            Logger.debug("overlay_view_added", feature = "floating_voice", action = "create_overlay")
+        } catch (e: Exception) {
+            logException("overlay_add_view", e)
+            throw e
+        }
     }
 
     private fun circleDrawable(color: Int) = GradientDrawable().apply {
@@ -542,6 +726,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     p.y = initParamY + dy
                     try { windowManager?.updateViewLayout(containerView, p) } catch (e: Exception) {
                         Logger.trace("overlay_update_failed", feature = "floating_voice", exception = e)
+                        logException("overlay_update", e)
                     }
                 }
             }
@@ -612,6 +797,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         }
 
         try {
+            Logger.debug("starting_speech_listener", feature = "floating_voice", action = "start_listen",
+                correlationId = voiceCorrelationId)
             speechRecognizer?.startListening(intent)
             isListening = true
 
@@ -632,6 +819,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         } catch (e: Exception) {
             Logger.error("speech_start_failed", feature = "floating_voice", action = "start_listen",
                 exception = e, correlationId = voiceCorrelationId)
+            logException("speech_start", e)
             showToast("Erro ao acessar microfone")
             isListening = false
             CorrelationManager.endOperation("voice")
@@ -718,6 +906,9 @@ Texto: $transcript""".trimIndent()
 
         var responseBody = ""
         val geminiStart = System.currentTimeMillis()
+        Logger.info("gemini_request_sending", feature = "floating_voice", action = "gemini",
+            payload = mapOf("endpoint" to GEMINI_ENDPOINT, "body_length" to body.length.toString()),
+            correlationId = corrId)
         val result = try {
             val url  = URL("$GEMINI_ENDPOINT?key=$apiKey")
             val conn = (url.openConnection() as HttpURLConnection).apply {
@@ -750,7 +941,12 @@ Texto: $transcript""".trimIndent()
                     payload = mapOf("http_code" to code.toString(),
                         "response_length" to responseBody.length.toString()),
                     correlationId = corrId)
-                parseGeminiResponse(responseBody, transcript)
+                try {
+                    parseGeminiResponse(responseBody, transcript)
+                } catch (e: Exception) {
+                    logException("gemini_response", e)
+                    FloatVoiceResult(null, null, null, null, transcript, error = "response_parse: ${e.message}")
+                }
             }
         } catch (e: Exception) {
             val geminiDuration = System.currentTimeMillis() - geminiStart
@@ -759,6 +955,7 @@ Texto: $transcript""".trimIndent()
                 exception = e,
                 payload = mapOf("response_preview" to responseBody.take(200)),
                 correlationId = corrId)
+            logException("gemini_request", e)
             FloatVoiceResult(null, null, null, null, transcript, error = e.message)
         }
 
@@ -847,6 +1044,7 @@ Texto: $transcript""".trimIndent()
         } catch (e: Exception) {
             Logger.error("gemini_parse_failed", feature = "floating_voice", action = "parse",
                 exception = e, correlationId = corrId)
+            logException("intent_parser", e)
             FloatVoiceResult(null, null, null, null, transcript, error = "parse_error: ${e.message}")
         }
     }
@@ -856,6 +1054,7 @@ Texto: $transcript""".trimIndent()
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun executeVoiceResult(result: FloatVoiceResult) {
+        try {
         if (result.error != null) {
             Logger.warn("voice_result_error", feature = "floating_voice", action = "execute",
                 payload = mapOf("error" to result.error), correlationId = voiceCorrelationId)
@@ -887,9 +1086,8 @@ Texto: $transcript""".trimIndent()
                 showToast("Criando '$envName'...")
                 serviceScope.launch(Dispatchers.IO) {
                     val loc = getLastLocationBlocking()
-                    val prefs = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
-                    val lat = loc?.latitude ?: prefs.getFloat("flutter.last_known_lat", 0f).toDouble()
-                    val lon = loc?.longitude ?: prefs.getFloat("flutter.last_known_lon", 0f).toDouble()
+                    val lat = loc?.latitude ?: 0.0
+                    val lon = loc?.longitude ?: 0.0
                     val ok = if (lat != 0.0 && lon != 0.0) writeEnvironmentToDb(envName, lat, lon, 100) else false
                     withContext(Dispatchers.Main) {
                         if (ok) speak("Pronto! Ambiente $envName criado.")
@@ -926,10 +1124,9 @@ Texto: $transcript""".trimIndent()
                 confirmed && pendingEnv.isNotEmpty() -> {
                     showToast("Criando ambiente e lembrete...")
                     serviceScope.launch(Dispatchers.IO) {
-                        val loc   = getLastLocationBlocking()
-                        val prefs = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
-                        val lat   = loc?.latitude  ?: prefs.getFloat("flutter.last_known_lat", 0f).toDouble()
-                        val lon   = loc?.longitude ?: prefs.getFloat("flutter.last_known_lon", 0f).toDouble()
+                        val loc = getLastLocationBlocking()
+                        val lat = loc?.latitude ?: 0.0
+                        val lon = loc?.longitude ?: 0.0
                         if (lat != 0.0 && lon != 0.0) {
                             val envOk     = writeEnvironmentToDb(pendingEnv, lat, lon, 100)
                             val triggerOk = if (envOk) writeTriggerToDb(pendingTitle, pendingContent, pendingEnv) else false
@@ -1027,6 +1224,9 @@ Texto: $transcript""".trimIndent()
                         val ok = writeTriggerToDb(title, result.triggerContent ?: "", resolvedEnvCapitalized)
                         withContext(Dispatchers.Main) {
                             if (ok) {
+                                Logger.info("command_executed", feature = "floating_voice", action = "execute",
+                                    payload = mapOf("command" to "create_trigger"),
+                                    correlationId = voiceCorrelationId)
                                 showToast("Anotado! Vou te lembrar de $title em $resolvedEnvCapitalized ✓")
                                 speak("Anotado! Vou te lembrar de $title quando chegar em $resolvedEnvCapitalized.")
                             } else {
@@ -1080,12 +1280,8 @@ Texto: $transcript""".trimIndent()
                     showToast("Criando '$envName'...")
                     serviceScope.launch(Dispatchers.IO) {
                         val loc = getLastLocationBlocking()
-                        // Fallback: usa última localização salva se GPS retornou null agora
-                        val prefs = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
-                        val lat = loc?.latitude
-                            ?: prefs.getFloat("flutter.last_known_lat", 0f).toDouble()
-                        val lon = loc?.longitude
-                            ?: prefs.getFloat("flutter.last_known_lon", 0f).toDouble()
+                        val lat = loc?.latitude ?: 0.0
+                        val lon = loc?.longitude ?: 0.0
                         val ok = if (lat != 0.0 && lon != 0.0) {
                             writeEnvironmentToDb(envName, lat, lon, 100)
                         } else {
@@ -1100,8 +1296,12 @@ Texto: $transcript""".trimIndent()
                             false
                         }
                         withContext(Dispatchers.Main) {
-                            if (ok) speak("Pronto! Ambiente $envName criado.")
-                            else if (lat != 0.0 || lon != 0.0) speak("Não consegui criar o ambiente. Tente novamente.")
+                            if (ok) {
+                                Logger.info("command_executed", feature = "floating_voice", action = "execute",
+                                    payload = mapOf("command" to "create_environment"),
+                                    correlationId = voiceCorrelationId)
+                                speak("Pronto! Ambiente $envName criado.")
+                            } else if (lat != 0.0 || lon != 0.0) speak("Não consegui criar o ambiente. Tente novamente.")
                             CorrelationManager.endOperation("voice")
                             voiceCorrelationId = null
                         }
@@ -1114,8 +1314,12 @@ Texto: $transcript""".trimIndent()
                     serviceScope.launch(Dispatchers.IO) {
                         val ok = deleteEnvironmentFromDb(envName)
                         withContext(Dispatchers.Main) {
-                            if (ok) speak("Ambiente $envName removido.")
-                            else speak("Não encontrei o ambiente $envName.")
+                            if (ok) {
+                                Logger.info("command_executed", feature = "floating_voice", action = "execute",
+                                    payload = mapOf("command" to "delete_environment"),
+                                    correlationId = voiceCorrelationId)
+                                speak("Ambiente $envName removido.")
+                            } else speak("Não encontrei o ambiente $envName.")
                             CorrelationManager.endOperation("voice")
                             voiceCorrelationId = null
                         }
@@ -1132,7 +1336,12 @@ Texto: $transcript""".trimIndent()
                 serviceScope.launch(Dispatchers.IO) {
                     val ok = deleteTriggerFromDb(envName, title)
                     withContext(Dispatchers.Main) {
-                        if (ok) speak("Lembrete removido.")
+                        if (ok) {
+                            Logger.info("command_executed", feature = "floating_voice", action = "execute",
+                                payload = mapOf("command" to "delete_trigger"),
+                                correlationId = voiceCorrelationId)
+                            speak("Lembrete removido.")
+                        }
                         CorrelationManager.endOperation("voice")
                         voiceCorrelationId = null
                     }
@@ -1145,6 +1354,7 @@ Texto: $transcript""".trimIndent()
                 voiceCorrelationId = null
             }
         }
+        } catch (e: Exception) { logException("command_dispatch", e) }
     }
 
     // Lê nomes de ambientes direto do SQLite — garante nomes exatos no prompt Gemini.
@@ -1177,6 +1387,7 @@ Texto: $transcript""".trimIndent()
                 durationMs = System.currentTimeMillis() - start,
                 exception = e,
                 correlationId = CorrelationManager.correlationIdFor("voice"))
+            logException("gemini_request", e)
             emptyList()
         } finally {
             try { db?.close() } catch (e: Exception) {
@@ -1254,6 +1465,7 @@ Texto: $transcript""".trimIndent()
                 exception = e,
                 payload = if (LoggerConfiguration.debugLogging) mapOf("name" to name) else null,
                 correlationId = corrId)
+            logException("command_dispatch", e)
             false
         } finally {
             try { db?.close() } catch (e: Exception) {
@@ -1324,6 +1536,7 @@ Texto: $transcript""".trimIndent()
                 payload = if (LoggerConfiguration.debugLogging)
                     mapOf("title" to title, "environment_name" to envName) else null,
                 correlationId = corrId)
+            logException("command_dispatch", e)
             false
         } finally {
             try { db?.close() } catch (e: Exception) {
@@ -1396,6 +1609,7 @@ Texto: $transcript""".trimIndent()
                 payload = if (LoggerConfiguration.debugLogging)
                     mapOf("environment_name" to envName) else null,
                 correlationId = corrId)
+            logException("command_dispatch", e)
             false
         } finally {
             try { db?.close() } catch (e: Exception) {
@@ -1472,6 +1686,7 @@ Texto: $transcript""".trimIndent()
                 payload = if (LoggerConfiguration.debugLogging)
                     mapOf("environment_name" to envName) else null,
                 correlationId = corrId)
+            logException("command_dispatch", e)
             false
         } finally {
             try { db?.close() } catch (e: Exception) {
@@ -1530,24 +1745,32 @@ Texto: $transcript""".trimIndent()
             flags
         )
 
-        LocationServices.getGeofencingClient(this)
-            .addGeofences(request, pendingIntent)
-            .addOnSuccessListener {
-                Logger.info("geofence_registered", feature = "floating_voice", action = "geofence",
-                    payload = if (LoggerConfiguration.debugLogging)
-                        mapOf("name" to name, "id" to id) else mapOf("id" to id))
-            }
-            .addOnFailureListener { e ->
-                Logger.error("geofence_registration_failed", feature = "floating_voice",
-                    action = "geofence",
-                    exception = e,
-                    payload = if (LoggerConfiguration.debugLogging)
-                        mapOf("name" to name, "id" to id) else mapOf("id" to id))
-            }
+        try {
+            LocationServices.getGeofencingClient(this)
+                .addGeofences(request, pendingIntent)
+                .addOnSuccessListener {
+                    Logger.info("geofence_registered", feature = "floating_voice", action = "geofence",
+                        payload = if (LoggerConfiguration.debugLogging)
+                            mapOf("name" to name, "id" to id) else mapOf("id" to id))
+                }
+                .addOnFailureListener { e ->
+                    Logger.error("geofence_registration_failed", feature = "floating_voice",
+                        action = "geofence",
+                        exception = e,
+                        payload = if (LoggerConfiguration.debugLogging)
+                            mapOf("name" to name, "id" to id) else mapOf("id" to id))
+                    logException("geofence_register", e)
+                }
+        } catch (e: SecurityException) {
+            logException("geofence_register", e)
+        } catch (e: Exception) {
+            logException("geofence_register", e)
+        }
     }
 
-    // Obtém última localização GPS em modo bloqueante — chamado de Dispatchers.IO.
-    // Retorna null se permissão negada ou GPS indisponível.
+    // Obtém localização GPS em modo bloqueante — chamado de Dispatchers.IO.
+    // Pipeline: lastLocation (cache passivo) → getCurrentLocation (fix ativo) → prefs cache.
+    // Retorna null somente se permissão negada e as três etapas falharem.
     @SuppressLint("MissingPermission")
     private fun getLastLocationBlocking(): android.location.Location? {
         if (ContextCompat.checkSelfPermission(
@@ -1557,29 +1780,110 @@ Texto: $transcript""".trimIndent()
                 payload = mapOf("permission" to "ACCESS_FINE_LOCATION"))
             return null
         }
-        val start = System.currentTimeMillis()
-        return try {
-            val location = Tasks.await(
-                LocationServices.getFusedLocationProviderClient(this).lastLocation,
-                10_000L, TimeUnit.MILLISECONDS
-            )
-            // Persiste última localização válida — usada como fallback quando GPS retorna null
-            if (location != null) {
-                getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
-                    .putLong("flutter.last_known_lat", java.lang.Double.doubleToRawLongBits(location.latitude))
-                    .putLong("flutter.last_known_lon", java.lang.Double.doubleToRawLongBits(location.longitude))
-                    .apply()
+
+        // Verifica GPS antes de tentar FusedLocationProvider — evita null silencioso
+        Logger.debug("gps_check_started", feature = "floating_voice", action = "location")
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
+        if (!locationManager.isLocationEnabled) {
+            val providerGps     = locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+            val providerNetwork = locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+            Logger.debug("gps_disabled", feature = "floating_voice", action = "location",
+                payload = mapOf(
+                    "gps_enabled"      to "false",
+                    "provider_gps"     to providerGps.toString(),
+                    "provider_network" to providerNetwork.toString()
+                ))
+            // GPS desligado — pula FusedProvider e usa prefs cache diretamente
+            val prefs   = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
+            val latBits = prefs.getLong("flutter.last_known_lat", 0L)
+            val lonBits = prefs.getLong("flutter.last_known_lon", 0L)
+            if (latBits == 0L && lonBits == 0L) {
+                Logger.warn("location_unavailable", feature = "floating_voice", action = "location",
+                    payload = mapOf("reason" to "gps_disabled_no_cache"))
+                return null
             }
-            Logger.debug("location_obtained", feature = "floating_voice", action = "location",
-                durationMs = System.currentTimeMillis() - start,
-                payload = mapOf("has_location" to (location != null).toString()))
-            location
+            Logger.debug("location_cache_used", feature = "floating_voice", action = "location",
+                payload = mapOf("reason" to "gps_disabled"))
+            return android.location.Location("prefs_cache").also { loc ->
+                loc.latitude  = java.lang.Double.longBitsToDouble(latBits)
+                loc.longitude = java.lang.Double.longBitsToDouble(lonBits)
+            }
+        }
+        Logger.debug("gps_enabled", feature = "floating_voice", action = "location")
+
+        val fused = LocationServices.getFusedLocationProviderClient(this)
+        val start = System.currentTimeMillis()
+
+        // Etapa 1: lastLocation — zero bateria, usa cache passivo do sistema
+        val cached: android.location.Location? = try {
+            Tasks.await(fused.lastLocation, 5_000L, TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
             Logger.warn("location_fetch_failed", feature = "floating_voice", action = "location",
-                durationMs = System.currentTimeMillis() - start,
-                exception = e)
+                durationMs = System.currentTimeMillis() - start, exception = e)
             null
         }
+        if (cached != null) {
+            Logger.debug("location_last_location_hit", feature = "floating_voice", action = "location",
+                durationMs = System.currentTimeMillis() - start,
+                payload = mapOf("source" to "last_location"))
+            saveLocationToPrefs(cached)
+            return cached
+        }
+        Logger.debug("location_last_location_null", feature = "floating_voice", action = "location",
+            durationMs = System.currentTimeMillis() - start)
+
+        // Etapa 2: getCurrentLocation — single-shot ativo, solicita fix fresco ao hardware
+        Logger.debug("location_current_location_requested", feature = "floating_voice", action = "location")
+        val fresh: android.location.Location? = try {
+            val cts = CancellationTokenSource()
+            val result = Tasks.await(
+                fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token),
+                8_000L, TimeUnit.MILLISECONDS
+            )
+            if (result != null) {
+                Logger.debug("location_current_location_success", feature = "floating_voice",
+                    action = "location", durationMs = System.currentTimeMillis() - start)
+                saveLocationToPrefs(result)
+            } else {
+                Logger.warn("location_current_location_failed", feature = "floating_voice",
+                    action = "location", durationMs = System.currentTimeMillis() - start,
+                    payload = mapOf("reason" to "null_result"))
+            }
+            result
+        } catch (e: java.util.concurrent.TimeoutException) {
+            Logger.warn("location_current_location_timeout", feature = "floating_voice",
+                action = "location", durationMs = System.currentTimeMillis() - start)
+            null
+        } catch (e: Exception) {
+            Logger.warn("location_current_location_failed", feature = "floating_voice",
+                action = "location", durationMs = System.currentTimeMillis() - start, exception = e)
+            null
+        }
+        if (fresh != null) return fresh
+
+        // Etapa 3: prefs cache — último fix válido gravado em sessão anterior (leitura correta via getLong)
+        val prefs = getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE)
+        val latBits = prefs.getLong("flutter.last_known_lat", 0L)
+        val lonBits = prefs.getLong("flutter.last_known_lon", 0L)
+        if (latBits == 0L && lonBits == 0L) {
+            Logger.warn("location_unavailable", feature = "floating_voice", action = "location",
+                durationMs = System.currentTimeMillis() - start)
+            return null
+        }
+        Logger.debug("location_cache_used", feature = "floating_voice", action = "location",
+            durationMs = System.currentTimeMillis() - start)
+        return android.location.Location("prefs_cache").also { loc ->
+            loc.latitude  = java.lang.Double.longBitsToDouble(latBits)
+            loc.longitude = java.lang.Double.longBitsToDouble(lonBits)
+        }
+    }
+
+    // Persiste localização válida para fallback em execuções futuras.
+    private fun saveLocationToPrefs(location: android.location.Location) {
+        getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
+            .putLong("flutter.last_known_lat", java.lang.Double.doubleToRawLongBits(location.latitude))
+            .putLong("flutter.last_known_lon", java.lang.Double.doubleToRawLongBits(location.longitude))
+            .apply()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1622,6 +1926,27 @@ Texto: $transcript""".trimIndent()
         rippleAnimators.forEach { it.cancel() }
         rippleAnimators.clear()
         rippleViews.forEach { v -> v.scaleX = 1f; v.scaleY = 1f; v.alpha = 0f }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // logException — padrão único de service_exception para Supabase remoto.
+    // Inclui stage, exception, message, stack (400 chars), android_sdk,
+    // manufacturer e model. Nunca lança exceção — totalmente protegido.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun logException(stage: String, e: Throwable) {
+        try {
+            Logger.error("service_exception", feature = "floating_voice", action = stage,
+                payload = mapOf(
+                    "stage"        to stage,
+                    "exception"    to e.javaClass.name,
+                    "message"      to (e.message ?: ""),
+                    "stack"        to e.stackTraceToString().take(400),
+                    "android_sdk"  to Build.VERSION.SDK_INT.toString(),
+                    "manufacturer" to Build.MANUFACTURER,
+                    "model"        to Build.MODEL
+                ))
+        } catch (_: Exception) { /* proteção: nunca lançar durante log */ }
     }
 
     // ─────────────────────────────────────────────────────────────────────────

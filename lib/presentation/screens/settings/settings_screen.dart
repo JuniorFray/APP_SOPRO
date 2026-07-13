@@ -13,6 +13,7 @@ import '../../providers/ble_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../encounters/encounters_screen.dart';
+import '../../../infrastructure/overlay/floating_voice_service_manager.dart';
 
 // Canal nativo para o FloatingVoiceService (botão flutuante de voz)
 const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
@@ -162,26 +163,35 @@ class SettingsScreen extends ConsumerWidget {
             value: floatingVoice,
             onChanged: (v) async {
               if (v) {
-                // Verifica permissão SYSTEM_ALERT_WINDOW antes de ativar
-                final bool hasPerm = await _overlayChannel.invokeMethod<bool>(
-                      'hasOverlayPermission') ??
-                    false;
-                if (!hasPerm) {
-                  // Redireciona o usuário para conceder a permissão
-                  await _overlayChannel.invokeMethod<void>(
-                      'openOverlayPermissionSettings');
-                  // Não ativa o toggle ainda — AppInitializer re-verificará no próximo start
-                  return;
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('floating_voice_enabled', true);
+                ref.read(floatingVoiceEnabledProvider.notifier).state = true;
+                try {
+                  final String? failure =
+                      await FloatingVoiceServiceManager.tryStart(
+                          requestPermissionsIfNeeded: true);
+                  if (failure == 'overlay_denied') {
+                    // Redireciona para conceder SYSTEM_ALERT_WINDOW — toggle fica desligado
+                    await _overlayChannel.invokeMethod<void>(
+                        'openOverlayPermissionSettings');
+                    await prefs.setBool('floating_voice_enabled', false);
+                    ref.read(floatingVoiceEnabledProvider.notifier).state =
+                        false;
+                  } else if (failure != null) {
+                    await prefs.setBool('floating_voice_enabled', false);
+                    ref.read(floatingVoiceEnabledProvider.notifier).state =
+                        false;
+                  }
+                } catch (_) {
+                  await prefs.setBool('floating_voice_enabled', false);
+                  ref.read(floatingVoiceEnabledProvider.notifier).state = false;
                 }
-                await _overlayChannel.invokeMethod<void>(
-                    'startFloatingVoiceService');
               } else {
-                await _overlayChannel.invokeMethod<void>(
-                    'stopFloatingVoiceService');
+                await FloatingVoiceServiceManager.stop();
+                ref.read(floatingVoiceEnabledProvider.notifier).state = false;
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setBool('floating_voice_enabled', false);
               }
-              ref.read(floatingVoiceEnabledProvider.notifier).state = v;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('floating_voice_enabled', v);
             },
           ),
 

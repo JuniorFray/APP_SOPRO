@@ -16,6 +16,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../infrastructure/geocoding/geocoding_repository.dart';
+import '../../../infrastructure/location/location_guard.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
@@ -141,13 +142,18 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
           }
         } catch (_) {}
       });
-      // Atualiza SharedPreferences com GPS fresco para garantir coords corretas na busca
-      ref.read(nativeLocationServiceProvider).getCurrentPosition().then((pos) async {
-        if (pos != null) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setDouble('last_known_lat', pos.latitude);
-          await prefs.setDouble('last_known_lon', pos.longitude);
-        }
+      // Atualiza SharedPreferences com GPS fresco para garantir coords corretas na busca.
+      // Só tenta se GPS estiver ligado — evita chamada desnecessária ao FusedProvider.
+      final locSvc = ref.read(nativeLocationServiceProvider);
+      locSvc.isLocationEnabled().then((enabled) {
+        if (!enabled) return;
+        locSvc.getCurrentPosition().then((pos) async {
+          if (pos != null) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setDouble('last_known_lat', pos.latitude);
+            await prefs.setDouble('last_known_lon', pos.longitude);
+          }
+        }).catchError((_) {});
       }).catchError((_) {});
     }
   }
@@ -837,7 +843,8 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
         return;
       }
 
-      final pos = await service.getCurrentPosition();
+      if (!mounted) return;
+      final pos = await getLocationWithGpsCheck(context, service);
       if (!mounted) return;
 
       if (pos != null) {
@@ -845,6 +852,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
         setState(() => _selectedPoint = point);
         _mapController.move(point, 16.0);
       } else {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(AppStrings.locationError),

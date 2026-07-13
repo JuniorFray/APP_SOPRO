@@ -2,12 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/navigation/app_router.dart';
 import '../../infrastructure/background/background_service_manager.dart';
+import '../../infrastructure/overlay/floating_voice_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
 import '../../infrastructure/logging/core/logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
@@ -197,24 +197,18 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     }
 
     // Restaura o botão flutuante de voz se estava ativo na sessão anterior.
-    // Verifica se a permissão SYSTEM_ALERT_WINDOW ainda é válida antes de iniciar.
-    const overlayChannel = MethodChannel('com.sopro.sopro/overlay');
-    final floatingEnabled = prefs.getBool('floating_voice_enabled') ?? false;
-    if (floatingEnabled) {
-      try {
-        final hasPerm = await overlayChannel.invokeMethod<bool>(
-              'hasOverlayPermission') ??
-            false;
-        if (hasPerm) {
-          ref.read(floatingVoiceEnabledProvider.notifier).state = true;
-          await overlayChannel.invokeMethod<void>('startFloatingVoiceService');
-        } else {
-          // Permissão foi revogada → desativa nas prefs sem atualizar o toggle
-          await prefs.setBool('floating_voice_enabled', false);
-        }
-      } catch (e, st) {
-        Logger.debug('overlay_channel_unavailable', exception: e, stackTrace: st, feature: 'init', action: 'overlay_start');
+    // FloatingVoiceServiceManager valida overlay e RECORD_AUDIO antes de iniciar.
+    try {
+      final String? failure = await FloatingVoiceServiceManager.tryStart();
+      if (failure == null) {
+        ref.read(floatingVoiceEnabledProvider.notifier).state = true;
+      } else if (failure != 'floating_voice_disabled') {
+        // Pré-requisito perdido (overlay revogada, mic negado) — desativa nas prefs
+        await prefs.setBool('floating_voice_enabled', false);
       }
+    } catch (e, st) {
+      Logger.debug('overlay_start_failed', exception: e, stackTrace: st,
+          feature: 'init', action: 'overlay_start');
     }
 
     // 8. Loga a inicialização do app após tudo estar configurado
