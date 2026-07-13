@@ -33,6 +33,7 @@ import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
 import '../../../infrastructure/location/location_guard.dart';
 import '../../../infrastructure/logging/app_logger.dart';
+import '../../widgets/device_requirements_guard.dart';
 import '../../../infrastructure/voice/voice_service.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
@@ -95,6 +96,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       Navigator.pushReplacementNamed(context, '/onboarding');
       return;
     }
+
+    // Verifica requisitos do dispositivo antes de iniciar funcionalidades
+    if (mounted) await DeviceRequirementsGuard.check(context, ref);
+    if (!mounted) return;
 
     // Onboarding concluído: inicia geofences com permissões já concedidas
     await ref.read(geofenceManagerProvider).start();

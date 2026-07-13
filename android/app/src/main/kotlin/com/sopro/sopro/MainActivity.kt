@@ -225,6 +225,16 @@ class MainActivity : FlutterActivity() {
                         Logger.info("opening_location_settings", feature = "location", action = call.method)
                         result.success(null)
                     }
+                    "openAppSettings" -> {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:$packageName")
+                            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        )
+                        Logger.info("opening_app_settings", feature = "location", action = call.method)
+                        result.success(null)
+                    }
                     else -> {
                         Logger.warn("method_channel_not_implemented", feature = "location",
                             action = call.method, payload = mapOf("channel" to LOCATION_CHANNEL))
@@ -287,6 +297,24 @@ class MainActivity : FlutterActivity() {
                         Logger.debug("ble_adapter_state", feature = "ble", action = call.method,
                             payload = mapOf("state" to state))
                         result.success(state)
+                    }
+                    "isBluetoothEnabled" -> {
+                        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+                        val enabled = btManager?.adapter?.isEnabled == true
+                        Logger.debug(
+                            if (enabled) "bluetooth_enabled" else "bluetooth_disabled",
+                            feature = "ble", action = call.method,
+                            payload = mapOf("bluetooth_enabled" to enabled.toString())
+                        )
+                        result.success(enabled)
+                    }
+                    "openBluetoothSettings" -> {
+                        startActivity(
+                            Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        )
+                        Logger.info("opening_bluetooth_settings", feature = "ble", action = call.method)
+                        result.success(null)
                     }
                     "connectAndReadCard" -> {
                         val deviceId = call.argument<String>("deviceId") ?: ""

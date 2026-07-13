@@ -32,6 +32,11 @@ class NativeLocationService {
     await _method.invokeMethod<void>('openLocationSettings');
   }
 
+  /// Abre as configurações do aplicativo (ACTION_APPLICATION_DETAILS_SETTINGS).
+  Future<void> openAppSettings() async {
+    await _method.invokeMethod<void>('openAppSettings');
+  }
+
   /// Obtém a posição atual do dispositivo (pontual — não inicia monitoramento).
   /// Retorna null se GPS não disponível ou permissão negada.
   Future<({double latitude, double longitude, double accuracy})?> getCurrentPosition() async {

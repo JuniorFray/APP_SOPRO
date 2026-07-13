@@ -169,6 +169,35 @@ class AppStrings {
   static const gpsDisabledCancel       = 'Cancelar';
   static const gpsDisabledOpenSettings = 'Abrir Configurações';
 
+  // Device requirements guard — botões compartilhados
+  static const reqDialogCancel        = 'Cancelar';
+  static const reqDialogOpenSettings  = 'Abrir Configurações';
+
+  // Permissão de localização negada
+  static const reqPermLocationTitle   = 'Permissão de localização necessária';
+  static const reqPermLocationBody    =
+      'O Sopro precisa da permissão de localização para detectar quando você '
+      'está em um local salvo. Abra as configurações do aplicativo para '
+      'conceder a permissão.';
+
+  // Permissão Bluetooth negada
+  static const reqPermBleTitle        = 'Permissão Bluetooth necessária';
+  static const reqPermBleBody         =
+      'O Sopro precisa das permissões de Bluetooth para detectar pessoas próximas. '
+      'Abra as configurações do aplicativo para conceder as permissões.';
+
+  // Bluetooth desligado
+  static const btDisabledTitle        = 'Ative o Bluetooth';
+  static const btDisabledBody         =
+      'O Bluetooth do aparelho está desligado.\n\n'
+      'Para detectar pessoas próximas é necessário ativar o Bluetooth.';
+
+  // Permissão de sobreposição negada
+  static const reqOverlayTitle        = 'Permissão de sobreposição necessária';
+  static const reqOverlayBody         =
+      'O botão flutuante de voz precisa da permissão de exibir sobre outros apps. '
+      'Abra as configurações para conceder a permissão.';
+
   // Busca de endereço por Nominatim (OpenStreetMap)
   static const searchAddressHint = 'Buscar endereço ou lugar...';
   static const searchError = 'Não foi possível buscar o endereço. Tente novamente.';

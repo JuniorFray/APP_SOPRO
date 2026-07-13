@@ -95,6 +95,20 @@ class BleService {
     }
   }
 
+  /// Retorna true se o adaptador Bluetooth do dispositivo está habilitado.
+  Future<bool> isBluetoothEnabled() async {
+    try {
+      return await _bleChannel.invokeMethod<bool>('isBluetoothEnabled') ?? false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  /// Abre as configurações de Bluetooth do Android (ACTION_BLUETOOTH_SETTINGS).
+  Future<void> openBluetoothSettings() async {
+    await _bleChannel.invokeMethod<void>('openBluetoothSettings');
+  }
+
   // ── Scan BLE (central role via EventChannel) ──────────────────────────────
 
   Future<void> startScan() async {
