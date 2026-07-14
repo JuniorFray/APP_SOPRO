@@ -278,7 +278,8 @@ class BootReceiver : BroadcastReceiver() {
                 doOutput       = true
                 setRequestProperty("apikey",        SUPABASE_KEY)
                 setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
-                setRequestProperty("Content-Type",  "application/json")
+                // HOTFIX 2 — charset explícito evita mojibake nos acentos (UTF-8 lido como Latin-1)
+                setRequestProperty("Content-Type",  "application/json; charset=utf-8")
                 setRequestProperty("Prefer",        "return=minimal")
             }
             conn.outputStream.use { it.write(body.toByteArray()) }

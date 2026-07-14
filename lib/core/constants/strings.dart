@@ -370,4 +370,26 @@ class AppStrings {
   static const voiceTriggerDeleteNotFound = 'Gatilho não encontrado. Tente outro nome.';
   // Snackbar quando o ambiente não é encontrado para exclusão
   static const voiceEnvNotFoundForDelete  = 'Ambiente não encontrado';
+
+  // ── Voz — Fase 1: sem popups, confirmação por voz, delete_all ────────────
+  // Feedback quando o SpeechRecognizer/gravação não capta fala válida.
+  // Encerra o fluxo imediatamente — não chama o Gemini, não abre sheet.
+  static const voiceNoSpeechHeard  = 'Não consegui ouvir você.';
+  // Toast curto de orientação após uma captura sem fala.
+  static const voiceHoldWhileSpeaking = 'Fale enquanto segura o botão.';
+  // Resposta natural quando há fala real mas o Gemini não entende a intenção.
+  static const voiceDidNotUnderstand = 'Não consegui entender esse comando. Pode repetir de outra forma?';
+  // Instrução dada ao usuário após uma pergunta de confirmação por voz.
+  static const voiceAnswerYesNo    = 'Segure o botão e responda sim ou não.';
+  // Operação destrutiva cancelada pelo usuário (respondeu "não").
+  static const voiceOperationCancelled = 'Tudo bem, cancelei.';
+  // Pergunta de confirmação para excluir TODOS os ambientes (delete_all_environments).
+  // Placeholder %d é substituído pela quantidade de ambientes.
+  static const voiceConfirmDeleteAllEnvs = 'Você deseja excluir todos os ambientes? Isso vai remover %d locais e seus lembretes.';
+  // Confirmação falada após remover todos os ambientes.
+  static const voiceAllEnvsDeleted = 'Todos os ambientes foram removidos.';
+  // Snackbar após remover todos os ambientes.
+  static const voiceAllEnvsDeletedSnack = 'Todos os ambientes foram excluídos';
+  // Aviso quando não há nenhum ambiente para excluir.
+  static const voiceNoEnvsToDelete = 'Você ainda não tem nenhum ambiente cadastrado.';
 }

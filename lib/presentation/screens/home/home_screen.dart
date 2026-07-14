@@ -12,6 +12,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show File; // BUG 10 — tamanho do arquivo de áudio p/ métricas
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
@@ -35,6 +36,9 @@ import '../../../infrastructure/location/location_guard.dart';
 import '../../../infrastructure/logging/app_logger.dart';
 import '../../widgets/device_requirements_guard.dart';
 import '../../../infrastructure/voice/voice_service.dart';
+import '../../../infrastructure/voice/execution_plan.dart';
+import '../../../infrastructure/voice/voice_action_executor.dart';
+import '../../../infrastructure/voice/conversation_context.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/trigger_providers.dart';
@@ -276,6 +280,15 @@ enum _FabState {
   error,      // mic_off vermelho breve após falha de permissão
 }
 
+// Fase 1 — descreve uma confirmação por voz pendente.
+// [question] é a pergunta falada; [onYes] é executado somente se o usuário
+// responder afirmativamente na gravação seguinte. Imutável e efêmero (RAM).
+class _VoiceConfirmRequest {
+  final String question;
+  final Future<void> Function() onYes;
+  const _VoiceConfirmRequest({required this.question, required this.onYes});
+}
+
 // ── Botão de voz flutuante (WhatsApp-style) ───────────────────────────────────
 //
 // - SEGURAR: inicia gravação (vermelho pulsante + contador de segundos)
@@ -301,8 +314,10 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Contador de segundos exibido durante gravação
   int    _recordingSeconds = 0;
   Timer? _recordingTimer;
-  // Segurança: FAB encerra após 30 s caso o VoiceService (10 s) não dispare
-  static const _maxSeconds = 30;
+  // Teto de SEGURANÇA (não é VAD): em hold-to-talk o dedo controla o fim, mas se
+  // o botão ficar preso encerra após 60 s para não deixar o mic aberto. Alto o
+  // suficiente para não cortar frases longas (Regra 4).
+  static const _maxSeconds = 60;
 
   // Subscription ao stream de auto-stop do VoiceService (silêncio / max duration)
   StreamSubscription<void>? _autoStopSub;
@@ -310,12 +325,26 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Momento em que o dedo pressionou o botão — usado para verificar mínimo de 500 ms
   DateTime? _pressStartTime;
 
+  // BUG 4 (temporário) — cronômetro do pipeline inteiro (captura→execução→TTS).
+  // Iniciado em _stopAndProcess, lido em _executePlan para total_duration_ms.
+  Stopwatch? _pipelineSw;
+
   // Canal de comunicação com o FloatingVoiceService (overlay nativo)
   static const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
+
+  // BUG 5 (temporário) — garante que a sonda UTF-8 seja logada uma única vez.
+  static bool _utf8Probed = false;
 
   // FIX 4: quando true, a próxima gravação captura o nome do ambiente.
   // Ativado por _handleOpenEnvironment quando Gemini não retorna environmentName.
   bool _pendingEnvCreate = false;
+
+  // Fase 1 — confirmação por voz reutilizável.
+  // Quando != null, o app fez uma pergunta de sim/não e aguarda a resposta falada.
+  // A PRÓXIMA gravação NÃO é enviada como comando ao Gemini: é interpretada como
+  // resposta de confirmação (sim → executa onYes; não/ambíguo → cancela).
+  // Mantido em RAM (não persiste) — some se a tela for descartada.
+  _VoiceConfirmRequest? _pendingConfirm;
 
   // Visual press feedback (0.96 scale) — revertido após 200 ms pelo timer
   bool   _isVisuallyPressed = false;
@@ -352,6 +381,15 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         if (json != null && mounted) _handleServicePendingIntent(json);
       }
     });
+
+    // BUG 5 (temporário) — sonda UTF-8: acentos conhecidos p/ comparar o valor
+    // salvo no banco local com o exibido no dashboard Supabase. O transporte já
+    // é UTF-8 em todos os sinks (HOTFIX 2); esta sonda só confirma a hipótese.
+    if (!_utf8Probed) {
+      _utf8Probed = true;
+      AppLogger.log('voice_utf8_probe',
+          {'surface': 'home', 'sample': 'Pão Médico Ação'});
+    }
   }
 
   @override
@@ -433,7 +471,12 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // em _onLongPressStart — este método só precisa lidar com falha de init.
   Future<void> _startRecording() async {
     final service = ref.read(voiceServiceProvider);
-    final ok      = await service.startRecording();
+    // Sprint Unificação: hold-to-talk — o dedo é o único fim de gravação (sem VAD).
+    final ok      = await service.startRecording(holdToTalk: true);
+    // LOG TEMPORÁRIO DE CALIBRAÇÃO (Sprint Unificação) — remover após validar.
+    AppLogger.log('voice_capture_started', {'surface': 'home', 'ok': ok});
+    // BUG 8 (temporário) — evento nomeado do pipeline da Home.
+    AppLogger.log('home_audio_started', {'surface': 'home', 'ok': ok});
     if (!mounted) return;
 
     if (ok) {
@@ -456,6 +499,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Para gravação e envia áudio ao Gemini para processar + auto-executar
   Future<void> _stopAndProcess() async {
     if (!_isRecording) return;
+    _pipelineSw = Stopwatch()..start(); // BUG 4 (temporário) — total do pipeline
     _recordingTimer?.cancel();
     _recordingTimer = null;
     _pulseCtrl.stop();
@@ -465,11 +509,74 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
     final service  = ref.read(voiceServiceProvider);
     final filePath = await service.stopRecording();
+    // LOG TEMPORÁRIO DE CALIBRAÇÃO (Sprint Unificação) — remover após validar.
+    final capturedMs = DateTime.now()
+        .difference(_pressStartTime ?? DateTime.now()).inMilliseconds;
+    AppLogger.log('voice_capture_stopped',
+        {'surface': 'home', 'voice_capture_duration': capturedMs});
+    // BUG 10 (temporário) — métricas do áudio capturado (Home).
+    final audioBytes = filePath != null ? await File(filePath).length() : 0;
+    AppLogger.log('home_audio_stopped', {
+      'surface':          'home',
+      'audio_duration_ms': capturedMs,
+      'audio_size_bytes':  audioBytes,
+      'codec':            'aac_lc',
+      'sample_rate':       8000,
+    });
     if (!mounted) return;
 
     if (filePath == null) {
       // Gravação falhou silenciosamente (arquivo não criado)
+      AppLogger.log('voice_capture_discarded',
+          {'surface': 'home', 'reason': 'null_file'});
+      // BUG 3/8 (temporário) — bloqueio antes do Gemini + evento nomeado.
+      AppLogger.log('voice_capture_blocked',
+          {'surface': 'home', 'reason': 'empty_audio'});
+      AppLogger.log('home_audio_discarded',
+          {'surface': 'home', 'reason': 'null_file'});
       setState(() => _fabState = _FabState.idle);
+      return;
+    }
+
+    // GATE DE ENVIO — DECISÃO ÚNICA antes de QUALQUER chamada ao Gemini (cobre
+    // comando novo, confirmação sim/não e captura de nome). Gemini só é chamado
+    // quando TODAS as condições do gate adaptativo forem verdadeiras:
+    //   speechDetected == true  E  speechFrames >= mínimo  E  noiseFloor calibrado.
+    // Caso contrário: bloqueia, encerra o fluxo e NUNCA chama o Gemini.
+    final gSpeechDetected = service.speechDetected;
+    final gSpeechFrames   = service.speechFrames;
+    final gNoiseFloor     = service.noiseFloorDb;
+    final gThreshold      = service.gateThresholdDb;
+    final gCalibrated     = service.noiseCalibrated;
+    final shouldSend = gSpeechDetected &&
+        gSpeechFrames >= VoiceService.minSpeechFramesRequired &&
+        gCalibrated;
+    // LOG TEMPORÁRIO (calibração) — decisão do gate. Remover após calibrar.
+    AppLogger.log('home_gate_decision', {
+      'speech_detected': gSpeechDetected,
+      'speech_frames':   gSpeechFrames,
+      'noise_floor':     gNoiseFloor,
+      'threshold':       gThreshold,
+      'should_send':     shouldSend,
+    });
+    if (!shouldSend) {
+      final reason = !gCalibrated
+          ? 'noise_floor_not_calibrated'
+          : !gSpeechDetected
+              ? 'speech_not_detected'
+              : 'insufficient_speech_frames';
+      // LOG TEMPORÁRIO (calibração) — motivo do bloqueio de envio.
+      AppLogger.log('home_send_blocked_reason', {'reason': reason});
+      _pendingConfirm   = null;
+      _pendingEnvCreate = false;
+      await _handleNoSpeech();
+      return;
+    }
+
+    // Fase 1 — se há uma confirmação por voz pendente, esta gravação é a
+    // resposta sim/não, não um comando novo. Desvia antes do fluxo do Gemini.
+    if (_pendingConfirm != null) {
+      await _resolveVoiceConfirmation(filePath);
       return;
     }
 
@@ -482,34 +589,92 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       // para que o modelo retorne o nome EXATO como está no banco
       final envs     = await ref.read(environmentRepositoryProvider).getAll();
       final envNames = envs.map((e) => e.name).toList();
+      // Fase 2.1 — IDs paralelos (mesma ordem) enviados ao Gemini junto do nome
+      // para ele decidir reutilizar ambiente existente vs criar novo.
+      final envIds   = envs.map((e) => e.id).toList();
 
-      final result = await service.processAudio(
-        filePath,
-        existingEnvironments: envNames,
-      );
-      if (!mounted) return;
-
-      // FIX 4: se estava aguardando nome de ambiente, trata o áudio como nome
+      // Fluxo legado "aguardando nome do ambiente" (Fase 1): a gravação é o nome
+      // ditado — transcreve (1 Gemini) e delega ao handler de criação por GPS.
       if (_pendingEnvCreate) {
         _pendingEnvCreate = false;
-        // Gemini pode ter entendido create_environment com nome, ou retornado fallback
-        // com o nome como transcript. Em ambos os casos extraímos o melhor nome disponível.
-        final envName = (result.intent == VoiceIntent.createEnvironment &&
-                (result.environmentName?.isNotEmpty ?? false))
-            ? result.environmentName!
-            : result.transcript.trim();
-        if (envName.isNotEmpty) {
+        final transcript = await service.transcribeAudio(filePath);
+        if (!mounted) return;
+        final envName = (transcript ?? '').trim();
+        if (envName.isNotEmpty && !VoiceService.isInvalidTranscript(envName)) {
           await _handleOpenEnvironment(VoiceResult(
             intent:          VoiceIntent.createEnvironment,
-            transcript:      result.transcript,
+            transcript:      envName,
             environmentName: envName,
           ));
-          return;
+        } else {
+          await _handleNoSpeech();
         }
-        // Nome ainda vazio após segunda gravação → fallback normal
+        return;
       }
 
-      await _executeResult(result);
+      // Fase 2 — assistente: UMA chamada Gemini devolve resposta natural + plano
+      // de ações + follow-up + atualizações de contexto.
+      final ctx = ref.read(conversationContextProvider);
+      // Contexto expirado (TTL) é descartado antes de reutilizar (não vaza p/ nova conversa)
+      if (ctx.isExpired && !ctx.isEmpty) {
+        ctx.clear();
+        AppLogger.log('conversation_context_cleared', {'reason': 'ttl'});
+      }
+      // LOG TEMPORÁRIO (Sprint Unificação) — áudio válido enviado ao Gemini.
+      AppLogger.log('voice_capture_sent_to_gemini', {'surface': 'home'});
+      // BUG 8 (temporário) — evento nomeado do pipeline da Home.
+      AppLogger.log('home_audio_sent', {'surface': 'home'});
+      final geminiSw = Stopwatch()..start(); // BUG 4 (temporário)
+      final planRes0 = await service.processAudioAsPlan(
+        filePath,
+        existingEnvironments: envNames,
+        existingEnvironmentIds: envIds, // Fase 2.1 — nome + ID (reutilizar vs criar)
+        contextSummary: ctx.promptSummary(),
+      );
+      // BUG 4 (temporário) — latência isolada da chamada Gemini (Home).
+      AppLogger.log('home_gemini_finished',
+          {'surface': 'home', 'gemini_duration_ms': geminiSw.elapsedMilliseconds});
+      if (!mounted) return;
+
+      // REGRA 4 / BUG 3 — 2ª PROTEÇÃO: NUNCA executa plano com transcrição
+      // inválida (vazia, só espaços, "...", "00:00", só pontuação), mesmo que o
+      // Gemini tenha alucinado ações a partir de ruído. Dupla proteção: gate de
+      // energia (antes do Gemini) + esta validação (antes do ExecutionPlan).
+      if (VoiceService.isInvalidTranscript(planRes0.transcript)) {
+        AppLogger.log('execution_plan_blocked',
+            {'surface': 'home', 'reason': 'invalid_transcript'});
+        AppLogger.log('execution_plan_invalid_transcript',
+            {'surface': 'home', 'transcript': planRes0.transcript});
+        await _handleNoSpeech();
+        return;
+      }
+
+      // BUG 12 — guarda de prioridade destrutiva (paridade com o Overlay).
+      // Se a fala pede exclusão TOTAL de ambientes, força o plano correto ANTES
+      // de qualquer ação construtiva vinda do Gemini.
+      final planRes = _applyDestructivePriority(planRes0);
+
+      // 2ª rede da guarda de vazio (o gate por amplitude já barra antes do Gemini)
+      if (planRes.hasNothing &&
+          VoiceService.isInvalidTranscript(planRes.transcript)) {
+        await _handleNoSpeech();
+        return;
+      }
+
+      // Retrocompatibilidade: resposta no schema antigo (intent) → fluxo Fase 1.
+      if (planRes.plan.isEmpty && planRes.legacyResult != null) {
+        await _executeResult(planRes.legacyResult!);
+        return;
+      }
+
+      // Sem ações: só conversa (informação faltando / resposta natural / unknown).
+      if (planRes.plan.isEmpty) {
+        await _handleConversationalReply(planRes, ctx);
+        return;
+      }
+
+      // Com ações: monta e executa o plano (confirma por voz se houver destrutiva).
+      await _runAssistantPlan(planRes, ctx);
     } catch (e) {
       debugPrint('[_VoiceFab] Erro ao processar áudio: $e');
       if (mounted) {
@@ -523,6 +688,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Cancela gravação sem processar (usuário arrastou para cima ou evento cancelado)
   void _cancelRecording() {
     if (!_isRecording) return;
+    // LOG TEMPORÁRIO (Sprint Unificação) — captura cancelada sem envio.
+    AppLogger.log('voice_capture_cancelled', {'surface': 'home'});
     _recordingTimer?.cancel();
     _recordingTimer = null;
     _pulseCtrl.stop();
@@ -556,6 +723,10 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
   // Exclui trigger, loga no Supabase, exibe snackbar e fala a confirmação.
   // Usado por _handleDeleteTrigger em qualquer variante (1 resultado ou picker).
   Future<void> _deleteTriggerDirectly(TriggerEntity t) async {
+    // Reseta o FAB (pode vir do estado "processing" da confirmação por voz)
+    if (mounted && _fabState != _FabState.idle) {
+      setState(() => _fabState = _FabState.idle);
+    }
     await ref.read(triggerRepositoryProvider).delete(t.id);
     AppLogger.log('voice_delete', {
       'intent':        'delete_trigger',
@@ -571,7 +742,459 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     await _speak('Lembrete removido.');
   }
 
-  // ── Auto-execução de intenções (zero confirmação) ─────────────────────────
+  // Fase 1 — confirmação por voz antes de remover um gatilho encontrado por
+  // COMANDO de voz (match único). Nos pickers, o toque já é a confirmação
+  // explícita, então lá seguimos chamando _deleteTriggerDirectly diretamente.
+  Future<void> _confirmDeleteTrigger(TriggerEntity t) async {
+    final label = t.title.isNotEmpty ? t.title : t.content;
+    await _confirmByVoice(
+      'Você deseja remover o lembrete $label?',
+      () => _deleteTriggerDirectly(t),
+    );
+  }
+
+  // ── Fase 1 — sem popups + confirmação por voz ─────────────────────────────
+
+  // Encerra o fluxo quando não houve fala válida.
+  // Objetivo: substituir o antigo _FallbackSheet por feedback de voz + toast,
+  // sem NENHUM popup. Não chama o Gemini (o guard já barrou antes).
+  Future<void> _handleNoSpeech() async {
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+    AppLogger.log('speech_no_match', {'surface': 'home'}); // BUG 9 — surface
+    // REGRA 3 — responder APENAS "Não consegui ouvir você." Nada além disso
+    // (snackbar extra removido nesta hotfix).
+    await _speak(AppStrings.voiceNoSpeechHeard);
+  }
+
+  // Fluxo reutilizável de confirmação por voz para operações destrutivas.
+  //
+  // Motivo: a sprint exige que TODA operação destrutiva seja confirmada por voz,
+  // sem AlertDialog nem botão. Em vez de duplicar lógica em cada handler, este
+  // método centraliza: fala a [question], arma _pendingConfirm e orienta o usuário
+  // a responder. A resposta é capturada na próxima gravação e resolvida em
+  // _resolveVoiceConfirmation, que executa [onYes] apenas se o usuário confirmar.
+  //
+  // Casos especiais: se o widget for descartado, _pendingConfirm some (RAM) e nada
+  // é executado — comportamento seguro para ação irreversível.
+  Future<void> _confirmByVoice(
+    String question,
+    Future<void> Function() onYes,
+  ) async {
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+    _pendingConfirm = _VoiceConfirmRequest(question: question, onYes: onYes);
+    AppLogger.log('voice_confirmation_started', {'surface': 'home'}); // BUG 9
+    await _speak(question);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content:  Text(AppStrings.voiceAnswerYesNo),
+      duration: Duration(seconds: 3),
+      behavior: SnackBarBehavior.floating,
+    ));
+  }
+
+  // Interpreta a gravação como resposta de confirmação (sim/não).
+  //
+  // Fluxo: transcreve o áudio (mesma infra Gemini — sem popup) e usa o parser
+  // 100% local VoiceService.parseYesNo. sim → executa onYes; não/ambíguo →
+  // cancela por segurança (ação destrutiva nunca ocorre sem "sim" explícito).
+  // O retorno antecipado em cada ramo garante que _pendingConfirm seja sempre
+  // limpo, evitando estado preso.
+  Future<void> _resolveVoiceConfirmation(String filePath) async {
+    final pending = _pendingConfirm;
+    _pendingConfirm = null; // consome o estado antes de qualquer await/erro
+    if (pending == null) return;
+
+    if (mounted) setState(() => _fabState = _FabState.processing);
+    final service    = ref.read(voiceServiceProvider);
+    // BUG 2 — transcrição PURA (prompt mínimo, sem NLU). A decisão sim/não é
+    // 100% local em parseYesNo. Nunca envia a confirmação ao classificador.
+    final transcript = await service.transcribeOnly(filePath);
+    if (!mounted) return;
+    // BUG 2 (temporário) — confirmação resolvida localmente (nunca remota).
+    AppLogger.log('voice_confirmation_local', {'surface': 'home'});
+
+    final answer = VoiceService.parseYesNo(transcript);
+    if (answer == true) {
+      AppLogger.log('voice_confirmation_yes', {'surface': 'home'}); // BUG 9
+      await pending.onYes();
+    } else {
+      // não OU ambíguo → cancela (log distingue negação explícita de ruído)
+      AppLogger.log('voice_confirmation_no',
+          {'surface': 'home', 'explicit': (answer == false)}); // BUG 9
+      if (mounted) setState(() => _fabState = _FabState.idle);
+      await _speak(AppStrings.voiceOperationCancelled);
+    }
+  }
+
+  // ── Fase 2 — assistente: plano de ações + conversa natural ────────────────
+
+  // Resposta sem ações: o Gemini só conversou (pediu um dado, respondeu algo,
+  // ou não entendeu). Fala o reply; se houver follow-up, guarda como pergunta
+  // pendente no contexto e também a fala. Sem reply → fallback natural.
+  Future<void> _handleConversationalReply(
+      VoicePlanResult planRes, ConversationContext ctx) async {
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+
+    if (planRes.reply.trim().isEmpty) {
+      await _handleFallback(
+          VoiceResult(intent: VoiceIntent.fallback, transcript: planRes.transcript));
+      return;
+    }
+
+    // Atualiza contexto (o Gemini pode ter fixado o ambiente em foco)
+    ctx.applyUpdates(planRes.contextUpdates);
+    if (planRes.followUp != null) {
+      ctx.lastQuestion = planRes.followUp;
+      ctx.state = ConversationState.awaitingInformation;
+    } else {
+      ctx.state = ConversationState.completed;
+    }
+    ctx.touch();
+    AppLogger.log('conversation_updated',
+        {'has_follow_up': planRes.followUp != null});
+
+    await _speak(planRes.reply);
+    if (planRes.followUp != null && mounted) await _speak(planRes.followUp!);
+  }
+
+  // BUG 12 — guarda de prioridade destrutiva (paridade com o Overlay
+  // applyDestructivePriority). Roda sobre a TRANSCRIÇÃO, não sobre a
+  // classificação do Gemini: se a fala tem verbo destrutivo + "todos/todas/tudo"
+  // SEM palavra de gatilho/lembrete, força [deleteAllEnvironments] e descarta
+  // qualquer ação construtiva. Impede que "apagar todos os ambientes" vire
+  // createTrigger. Exclusão de lembretes de um local é deixada ao plano do Gemini.
+  VoicePlanResult _applyDestructivePriority(VoicePlanResult res) {
+    final t = res.transcript.toLowerCase();
+    final verb = ['apag', 'remov', 'exclu', 'delet', 'limp'].any(t.contains);
+    if (!verb) return res;
+    final total = ['todos', 'todas', 'tudo'].any(t.contains);
+    final trg =
+        ['gatilho', 'lembrete', 'lembranca', 'lembrança'].any(t.contains);
+    if (total && !trg) {
+      // LOG TEMPORÁRIO (BUG 12) — prioridade destrutiva aplicada na Home.
+      AppLogger.log('intent_priority_applied',
+          {'surface': 'home', 'forced': 'delete_all_environments'});
+      return VoicePlanResult(
+        transcript:     res.transcript,
+        reply:          res.reply,
+        plan:           ExecutionPlan(
+            [VoiceAction(type: VoiceActionType.deleteAllEnvironments)]),
+        followUp:       res.followUp,
+        contextUpdates: res.contextUpdates,
+      );
+    }
+    return res;
+  }
+
+  // Recebe um plano com ações. Se houver ação destrutiva, confirma UMA vez por
+  // voz antes de executar tudo; caso contrário, fala o reply e executa direto.
+  Future<void> _runAssistantPlan(
+      VoicePlanResult planRes, ConversationContext ctx) async {
+    if (!mounted) return;
+    AppLogger.log('execution_plan_created', {
+      'count':       planRes.plan.actions.length,
+      'destructive': planRes.plan.hasDestructive,
+    });
+
+    // ── LOGS TEMPORARIOS DE CALIBRACAO (Fase 2.1) — remover apos ajustar o prompt.
+    // Auditam como o Gemini estruturou a fala: acoes cruas, agrupamento por local
+    // e contagem de create_environment vs create_trigger (detecta ambiente inventado
+    // ou reutilizacao que virou criacao).
+    AppLogger.log('execution_plan_raw', {
+      'actions': planRes.plan.actions
+          .map((a) => {'type': a.type.name, ...a.params})
+          .toList(),
+    });
+    final grouping = <String, List<String>>{};
+    for (final a in planRes.plan.actions) {
+      if (a.type == VoiceActionType.createTrigger) {
+        final env = a.str(['environment', 'name']) ?? '?';
+        (grouping[env] ??= []).add(a.str(['title']) ?? '?');
+      }
+    }
+    AppLogger.log('environment_grouping', {'groups': grouping});
+    AppLogger.log('execution_plan_validation', {
+      'create_environment': planRes.plan.actions
+          .where((a) => a.type == VoiceActionType.createEnvironment).length,
+      'create_trigger': planRes.plan.actions
+          .where((a) => a.type == VoiceActionType.createTrigger).length,
+    });
+
+    if (planRes.plan.hasDestructive) {
+      // Confirmação única cobrindo as ações destrutivas do plano.
+      ctx.state = ConversationState.awaitingConfirmation;
+      await _confirmByVoice(
+        _planDestructiveQuestion(planRes.plan),
+        () => _executePlan(planRes, ctx),
+      );
+      return;
+    }
+
+    // Não destrutivo: resposta natural imediata + execução em background.
+    if (mounted) setState(() => _fabState = _FabState.idle);
+    if (planRes.reply.trim().isNotEmpty) await _speak(planRes.reply);
+    await _executePlan(planRes, ctx);
+  }
+
+  // Executa o ExecutionPlan em sequência (falha não aborta), atualiza contexto e
+  // providers, e dá a resposta natural final (sucesso / parcial / follow-up).
+  Future<void> _executePlan(
+      VoicePlanResult planRes, ConversationContext ctx) async {
+    if (mounted) setState(() => _fabState = _FabState.processing);
+    ctx.state = ConversationState.executing;
+    // BUG 6 (temporário) — início do plano com surface/actions.
+    AppLogger.log('execution_plan_started',
+        {'surface': 'home', 'actions': planRes.plan.actions.length});
+    // BUG 8 (temporário) — evento nomeado do executor da Home.
+    AppLogger.log('home_executor_started', {'surface': 'home'});
+
+    // Resolve o GPS UMA vez se o plano criar ambientes (evita N fixes/latência).
+    ({double lat, double lng})? sharedLoc;
+    if (planRes.plan.needsLocation) sharedLoc = await _resolveSharedLocation();
+
+    final execSw   = Stopwatch()..start(); // BUG 4 (temporário) — só a execução
+    final executor = VoiceActionExecutor(_buildActionHandlers(sharedLoc));
+    final summary  = await executor.run(planRes.plan);
+    final execMs   = execSw.elapsedMilliseconds;
+
+    // Refresh das listas (mesmos providers usados no onResume)
+    ref.invalidate(environmentsProvider);
+    ref.invalidate(triggersByEnvironmentProvider);
+
+    // Atualiza memória de conversa
+    ctx.applyUpdates(planRes.contextUpdates);
+    if (planRes.followUp != null) ctx.lastQuestion = planRes.followUp;
+    ctx.state = ConversationState.completed;
+    ctx.touch();
+    AppLogger.log('conversation_updated', {'last_environment': ctx.lastEnvironment});
+
+    if (summary.partialFailure) {
+      AppLogger.log('execution_plan_partial_failure',
+          {'ok': summary.ok, 'failed': summary.failed});
+    }
+    // BUG 6 (temporário) — falha total do plano (nenhuma ação concluída).
+    if (summary.ok == 0 && summary.failed > 0) {
+      AppLogger.log('execution_plan_failed', {
+        'surface': 'home', 'actions': summary.total, 'failed': summary.failed,
+      });
+    }
+    // BUG 6 (temporário) — fim do plano com surface/actions/ok/failed/duration_ms.
+    AppLogger.log('execution_plan_finished', {
+      'surface':     'home',
+      'actions':     summary.total,
+      'ok':          summary.ok,
+      'failed':      summary.failed,
+      'duration_ms': execMs,
+    });
+    // BUG 8 (temporário) — evento nomeado do executor da Home.
+    AppLogger.log('home_executor_finished', {'surface': 'home'});
+    // BUG 4 (temporário) — latência total do pipeline (captura→execução).
+    AppLogger.log('voice_timing', {
+      'surface':           'home',
+      'execution_duration_ms': execMs,
+      'total_duration_ms': _pipelineSw?.elapsedMilliseconds,
+    });
+
+    if (!mounted) return;
+
+    // Resposta final natural conforme o resultado
+    if (summary.ok == 0 && summary.failed > 0) {
+      setState(() => _fabState = _FabState.idle);
+      await _speak('Não consegui concluir agora. Pode tentar de novo?');
+    } else if (summary.partialFailure) {
+      setState(() => _fabState = _FabState.idle);
+      await _speak('Fiz a maior parte. ${summary.failed} não deram certo.');
+    } else {
+      await _setSuccess();
+      if (planRes.followUp != null &&
+          planRes.followUp!.trim().isNotEmpty &&
+          mounted) {
+        await _speak(planRes.followUp!);
+      }
+    }
+  }
+
+  // Resolve a localização atual uma única vez (reuso pelo executor).
+  // Retorna null se GPS indisponível — create_environment então falha isolado.
+  Future<({double lat, double lng})?> _resolveSharedLocation() async {
+    try {
+      final service = ref.read(nativeLocationServiceProvider);
+      final loc = await getLocationWithGpsCheck(context, service);
+      if (loc == null) return null;
+      return (lat: loc.latitude, lng: loc.longitude);
+    } catch (e) {
+      debugPrint('[_VoiceFab] GPS do plano falhou: $e');
+      return null;
+    }
+  }
+
+  // Monta a pergunta de confirmação de um plano com ações destrutivas.
+  String _planDestructiveQuestion(ExecutionPlan plan) {
+    final destr = plan.actions.where((a) => a.isDestructive).toList();
+    if (destr.any((a) => a.type == VoiceActionType.deleteAllEnvironments)) {
+      return 'Você deseja excluir todos os ambientes e seus lembretes?';
+    }
+    if (destr.length == 1) {
+      final a = destr.first;
+      switch (a.type) {
+        case VoiceActionType.deleteEnvironment:
+          return 'Você deseja excluir o ambiente ${a.str(['environment', 'name']) ?? ''}?';
+        case VoiceActionType.deleteAllTriggers:
+          return 'Você deseja remover todos os lembretes de ${a.str(['environment']) ?? ''}?';
+        case VoiceActionType.deleteTrigger:
+          return 'Você deseja remover o lembrete ${a.str(['title']) ?? ''}?';
+        default:
+          break;
+      }
+    }
+    return 'Você confirma remover ${destr.length} itens?';
+  }
+
+  // Constrói os handlers do executor ligando cada tipo de ação à regra de negócio
+  // real (repositórios, GPS, geofence). Handlers lançam exceção em falha — o
+  // executor isola e continua. [loc] é o GPS resolvido uma vez para o plano todo.
+  Map<VoiceActionType, ActionHandler> _buildActionHandlers(
+      ({double lat, double lng})? loc) {
+    final envRepo = ref.read(environmentRepositoryProvider);
+    final trgRepo = ref.read(triggerRepositoryProvider);
+    final geofence = ref.read(nativeGeofenceServiceProvider);
+
+    return {
+      // Cria ambiente na localização atual. Reusa se já existir (não duplica).
+      VoiceActionType.createEnvironment: (a) async {
+        final name = a.str(['name', 'environment']);
+        if (name == null) throw 'nome_vazio';
+        final existing = _matchEnv(await envRepo.getAll(), name);
+        if (existing != null) {
+          // LOG TEMPORARIO CALIBRACAO (Fase 2.1) — ambiente ja existia: reutilizado.
+          AppLogger.log('existing_environment_detected',
+              {'requested': name, 'matched': existing.name});
+          return 'ja_existia';
+        }
+        // LOG TEMPORARIO CALIBRACAO (Fase 2.1) — ambiente novo sera criado.
+        AppLogger.log('new_environment_detected', {'name': name});
+        if (loc == null) throw 'sem_gps';
+        final env = EnvironmentEntity(
+          id:           const Uuid().v4(),
+          name:         _capitalize(name),
+          latitude:     loc.lat,
+          longitude:    loc.lng,
+          radiusMeters: 100,
+          createdAt:    DateTime.now(),
+        );
+        await envRepo.save(env);
+        await geofence.addSingleGeofence(env);
+        return 'ambiente_criado';
+      },
+
+      // Cria lembrete num ambiente (que pode ter sido criado antes no mesmo plano).
+      VoiceActionType.createTrigger: (a) async {
+        final envName = a.str(['environment', 'name']);
+        final title   = a.str(['title', 'trigger_title']);
+        if (title == null) throw 'titulo_vazio';
+        final env = _matchEnv(await envRepo.getAll(), envName);
+        if (env == null) throw 'ambiente_nao_encontrado';
+        await trgRepo.save(TriggerEntity(
+          id:            const Uuid().v4(),
+          environmentId: env.id,
+          title:         title,
+          content:       a.str(['content']) ?? '',
+          isActive:      true,
+          createdAt:     DateTime.now(),
+        ));
+        return 'lembrete_criado';
+      },
+
+      // Atualiza um lembrete existente (título e/ou conteúdo) por match de título.
+      VoiceActionType.updateTrigger: (a) async {
+        final title = a.str(['title']);
+        if (title == null) throw 'titulo_vazio';
+        final env = _matchEnv(await envRepo.getAll(), a.str(['environment']));
+        final triggers = env != null ? await trgRepo.getByEnvironment(env.id) : <TriggerEntity>[];
+        final lower = title.toLowerCase();
+        TriggerEntity? t;
+        for (final x in triggers) {
+          if (x.title.toLowerCase().contains(lower)) { t = x; break; }
+        }
+        if (t == null) throw 'lembrete_nao_encontrado';
+        await trgRepo.save(TriggerEntity(
+          id:            t.id, // mesmo id = upsert (atualiza)
+          environmentId: t.environmentId,
+          title:         a.str(['new_title']) ?? t.title,
+          content:       a.str(['content']) ?? t.content,
+          isActive:      t.isActive,
+          createdAt:     t.createdAt,
+        ));
+        return 'lembrete_atualizado';
+      },
+
+      // Atualiza um ambiente (por ora, o raio) e re-registra o geofence.
+      VoiceActionType.updateEnvironment: (a) async {
+        final env = _matchEnv(await envRepo.getAll(), a.str(['name', 'environment']));
+        if (env == null) throw 'ambiente_nao_encontrado';
+        final radius = (a.params['radius'] as num?)?.toDouble() ?? env.radiusMeters;
+        final updated = EnvironmentEntity(
+          id:           env.id,
+          name:         env.name,
+          latitude:     env.latitude,
+          longitude:    env.longitude,
+          radiusMeters: radius,
+          createdAt:    env.createdAt,
+        );
+        await envRepo.save(updated);
+        await geofence.addSingleGeofence(updated);
+        return 'ambiente_atualizado';
+      },
+
+      // Exclui um ambiente (cascade nos gatilhos) + remove geofence.
+      // Sem popup por item: a confirmação foi feita no nível do plano.
+      VoiceActionType.deleteEnvironment: (a) async {
+        final env = _matchEnv(await envRepo.getAll(), a.str(['environment', 'name']));
+        if (env == null) throw 'ambiente_nao_encontrado';
+        await envRepo.delete(env.id);
+        try { await geofence.removeGeofence(env.id); } catch (_) {}
+        return 'ambiente_removido';
+      },
+
+      // Exclui TODOS os ambientes + limpa geofences.
+      VoiceActionType.deleteAllEnvironments: (a) async {
+        final all = await envRepo.getAll();
+        for (final env in all) { await envRepo.delete(env.id); }
+        try { await geofence.clearGeofences(); } catch (_) {}
+        return 'todos_ambientes_removidos:${all.length}';
+      },
+
+      // Remove um lembrete por match de título no ambiente informado.
+      VoiceActionType.deleteTrigger: (a) async {
+        final title = a.str(['title']);
+        if (title == null) throw 'titulo_vazio';
+        final env = _matchEnv(await envRepo.getAll(), a.str(['environment']));
+        final triggers = env != null ? await trgRepo.getByEnvironment(env.id) : <TriggerEntity>[];
+        final lower = title.toLowerCase();
+        TriggerEntity? t;
+        for (final x in triggers) {
+          if (x.title.toLowerCase().contains(lower)) { t = x; break; }
+        }
+        if (t == null) throw 'lembrete_nao_encontrado';
+        await trgRepo.delete(t.id);
+        return 'lembrete_removido';
+      },
+
+      // Remove todos os lembretes de um ambiente.
+      VoiceActionType.deleteAllTriggers: (a) async {
+        final env = _matchEnv(await envRepo.getAll(), a.str(['environment']));
+        if (env == null) throw 'ambiente_nao_encontrado';
+        final triggers = await trgRepo.getByEnvironment(env.id);
+        for (final t in triggers) { await trgRepo.delete(t.id); }
+        return 'lembretes_removidos:${triggers.length}';
+      },
+    };
+  }
+
+  // ── Auto-execução de intenções (zero confirmação para ações não destrutivas) ─
 
   // Despacha o resultado do Gemini para o handler correto.
   // Cada handler executa a ação diretamente ou abre um sheet de continuação.
@@ -598,6 +1221,9 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         await _handleDeleteTrigger(result);
       case VoiceIntent.deleteAllTriggers:
         await _handleDeleteAllTriggers(result);
+      // Fase 1 — nova intent global, sempre confirmada por voz
+      case VoiceIntent.deleteAllEnvironments:
+        await _handleDeleteAllEnvironments(result);
       case VoiceIntent.fallback:
         await _handleFallback(result);
     }
@@ -1062,21 +1688,23 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
 
   // Intenção não reconhecida → sheet com campo de texto editável.
   // FIX 4: orienta o usuário por voz antes de abrir o sheet.
+  // Fase 1 — houve fala real, mas o Gemini não entendeu a intenção.
+  // Novo comportamento: resposta natural por voz, SEM abrir _FallbackSheet.
+  // (A guarda de transcrição vazia já tratou o caso "não ouvi nada" antes daqui.)
   Future<void> _handleFallback(VoiceResult result) async {
     if (!mounted) return;
     setState(() => _fabState = _FabState.idle);
-    await _speak('Não entendi. Pode repetir ou digitar o que precisa?'); // FIX 4
-    _showSheet(_FallbackSheet(
-      transcript: result.transcript,
-      // Re-executa a ação com a intenção re-analisada pelo usuário + Gemini
-      onResult:   (newResult) => _executeResult(newResult),
-    ));
+    AppLogger.log('voice_intent_unknown',
+        {'surface': 'home', 'transcript': result.transcript}); // BUG 9 — surface
+    await _speak(AppStrings.voiceDidNotUnderstand);
   }
 
   // ── Handlers de exclusão por voz ──────────────────────────────────────────
 
-  // "exclui o ambiente X" → deleta imediatamente + SnackBar "Desfazer" (5s).
-  // FIX 1: sem confirmação — UX mais fluido, desfazer restaura tudo.
+  // "exclui o ambiente X" → Fase 1: confirmação por voz antes de excluir.
+  // Fluxo: localiza o ambiente; se não existe, informa; se existe, pergunta
+  // "Você deseja excluir o ambiente X?" e só remove após "sim".
+  // O SnackBar "Desfazer" é mantido como segunda camada de segurança.
   Future<void> _handleDeleteEnvironment(VoiceResult result) async {
     final envs = await ref.read(environmentRepositoryProvider).getAll();
     final env  = _matchEnv(envs, result.environmentName);
@@ -1098,6 +1726,20 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       return;
     }
 
+    // Confirmação por voz — só executa a exclusão após "sim".
+    await _confirmByVoice(
+      'Você deseja excluir o ambiente ${env.name}?',
+      () => _reallyDeleteEnvironment(env),
+    );
+  }
+
+  // Exclusão efetiva do ambiente (chamada apenas após confirmação por voz).
+  // Mantém o comportamento anterior: salva os triggers antes, exclui em cascade
+  // e oferece "Desfazer" por 5 s (restaura ambiente, triggers e geofence).
+  Future<void> _reallyDeleteEnvironment(EnvironmentEntity env) async {
+    if (!mounted) return;
+    // Sai do estado "processing" da confirmação por voz antes de concluir
+    setState(() => _fabState = _FabState.idle);
     // Salva todos os triggers ANTES do delete (cascade apaga junto)
     final savedTriggers = await ref
         .read(triggerRepositoryProvider)
@@ -1182,7 +1824,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           ));
           await _speak('Nenhum lembrete em ${env.name}.'); // FIX 4
         } else if (triggers.length == 1) {
-          await _deleteTriggerDirectly(triggers.first);
+          await _confirmDeleteTrigger(triggers.first); // Fase 1 — confirma por voz
         } else {
           await _speak('Qual lembrete você quer remover? Toque em um deles.'); // FIX 4
           _showSheet(_DeleteTriggerPickerSheet(
@@ -1246,8 +1888,8 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       ));
       await _speak('Não encontrei esse lembrete.'); // FIX 4
     } else if (triggers.length == 1) {
-      // Único match → exclui sem pedir confirmação
-      await _deleteTriggerDirectly(triggers.first);
+      // Fase 1 — único match encontrado por voz → confirma por voz antes de excluir
+      await _confirmDeleteTrigger(triggers.first);
     } else {
       // Múltiplos matches → lista para o usuário escolher qual remover
       await _speak('Qual lembrete você quer remover? Toque em um deles.'); // FIX 4
@@ -1282,33 +1924,85 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       return;
     }
 
-    // Confirmação antes de remover todos os gatilhos
-    _showSheet(_DeleteAllTriggersConfirmSheet(
-      environment: env,
-      onConfirm: () async {
-        Navigator.pop(context);
-        // Busca e remove todos os triggers (ativos e inativos) do ambiente
-        final all = await ref
-            .read(triggerRepositoryProvider)
-            .getByEnvironment(env.id);
-        for (final t in all) {
-          await ref.read(triggerRepositoryProvider).delete(t.id);
-        }
-        AppLogger.log('voice_delete', {
-          'intent':        'delete_all_triggers',
-          'environment':   env.name,
-          'trigger_title': null,
-          'sucesso':       true,
-        });
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('${AppStrings.voiceAllTriggersDeleted}: ${env.name}'),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
-        ));
-        await _speak('Todos os lembretes de ${env.name} removidos.'); // FIX 4
-      },
+    // Fase 1 — confirmação por voz (substitui _DeleteAllTriggersConfirmSheet).
+    await _confirmByVoice(
+      'Você deseja remover todos os lembretes de ${env.name}?',
+      () => _reallyDeleteAllTriggers(env),
+    );
+  }
+
+  // Remoção efetiva de todos os gatilhos do ambiente (após "sim" por voz).
+  Future<void> _reallyDeleteAllTriggers(EnvironmentEntity env) async {
+    // Busca e remove todos os triggers (ativos e inativos) do ambiente
+    final all = await ref
+        .read(triggerRepositoryProvider)
+        .getByEnvironment(env.id);
+    for (final t in all) {
+      await ref.read(triggerRepositoryProvider).delete(t.id);
+    }
+    AppLogger.log('voice_delete', {
+      'intent':        'delete_all_triggers',
+      'environment':   env.name,
+      'trigger_title': null,
+      'sucesso':       true,
+    });
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('${AppStrings.voiceAllTriggersDeleted}: ${env.name}'),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
     ));
+    await _speak('Todos os lembretes de ${env.name} removidos.'); // FIX 4
+  }
+
+  // Fase 1 — "apagar todos os ambientes" / "limpar ambientes" / "apagar tudo".
+  // Operação global e irreversível: sempre confirmada por voz, informando a
+  // quantidade de ambientes afetados. Após "sim", remove todos os ambientes
+  // (cascade apaga os gatilhos) e limpa os geofences nativos.
+  Future<void> _handleDeleteAllEnvironments(VoiceResult result) async {
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+
+    if (envs.isEmpty) {
+      await _speak(AppStrings.voiceNoEnvsToDelete);
+      return;
+    }
+
+    // %d → quantidade de ambientes que serão removidos
+    final question = AppStrings.voiceConfirmDeleteAllEnvs
+        .replaceFirst('%d', envs.length.toString());
+    await _confirmByVoice(question, () => _reallyDeleteAllEnvironments(envs));
+  }
+
+  // Remoção efetiva de todos os ambientes (após "sim" por voz).
+  // Não há "Desfazer" aqui — a confirmação por voz é a barreira de segurança.
+  Future<void> _reallyDeleteAllEnvironments(List<EnvironmentEntity> envs) async {
+    for (final env in envs) {
+      // delete no repositório apaga os gatilhos por cascade
+      await ref.read(environmentRepositoryProvider).delete(env.id);
+    }
+    // Limpa todos os geofences nativos de uma vez (app morto não dispara mais)
+    try {
+      await ref.read(nativeGeofenceServiceProvider).clearGeofences();
+    } catch (e) {
+      debugPrint('[_VoiceFab] clearGeofences falhou: $e');
+    }
+    AppLogger.log('voice_delete', {
+      'intent':        'delete_all_environments',
+      'environment':   null,
+      'trigger_title': null,
+      'sucesso':       true,
+      'count':         envs.length,
+    });
+    if (!mounted) return;
+    setState(() => _fabState = _FabState.idle);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content:  Text(AppStrings.voiceAllEnvsDeletedSnack),
+      behavior: SnackBarBehavior.floating,
+    ));
+    await _speak(AppStrings.voiceAllEnvsDeleted);
   }
 
   // Busca triggers ativos em TODOS os ambientes por título ou conteúdo
@@ -1807,6 +2501,9 @@ class _TriggerListSheet extends ConsumerWidget {
 
 // Exibido quando o Gemini retorna "nao_entendido".
 // O usuário pode editar o texto e re-analisar para corrigir erros de STT.
+// Fase 1 — mantido no código para referência/rollback, mas NÃO é mais usado:
+// o fluxo "não entendi" agora responde só por voz (ver _handleFallback).
+// ignore: unused_element
 class _FallbackSheet extends ConsumerStatefulWidget {
   // Transcrição retornada pelo Gemini (pode ser vazia se STT falhou)
   final String transcript;
@@ -2090,6 +2787,9 @@ class _DeleteTriggerPickerSheet extends StatelessWidget {
 
 // ── Sheet: confirmação de exclusão de todos os gatilhos ───────────────────────
 
+// Fase 1 — substituído por confirmação de voz (ver _confirmByVoice). Mantido
+// para referência/rollback; não é mais instanciado.
+// ignore: unused_element
 class _DeleteAllTriggersConfirmSheet extends StatelessWidget {
   final EnvironmentEntity environment;
   final VoidCallback onConfirm;

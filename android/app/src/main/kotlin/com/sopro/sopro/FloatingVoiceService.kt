@@ -12,8 +12,10 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.media.AudioManager
+import android.media.MediaRecorder
 import android.media.ToneGenerator
 import android.os.*
+import android.util.Base64
 import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -49,13 +51,18 @@ import com.google.android.gms.tasks.CancellationTokenSource
 
 // FloatingVoiceService — botão circular flutuante de voz sobre todos os apps.
 //
-// Fluxo: SEGURAR (> 300 ms) → SpeechRecognizer escuta → SOLTAR → Gemini texto
-// classifica → trigger criado no SQLite ou ambiente delegado via IPC.
+// Fluxo (Sprint Unificação da Captura): SEGURAR → MediaRecorder grava M4A →
+// SOLTAR → Gemini ÁUDIO classifica → trigger/ambiente no SQLite direto.
 //
-// Etapa12: substituiu MediaRecorder + Gemini Audio por SpeechRecognizer + Gemini Texto.
-//   - Sem arquivo de áudio, sem base64, sem chamada multipart.
-//   - Transcript do STT enviado diretamente ao Gemini como texto.
-//   - Confirmação de 5 s para criar_ambiente: aguardar = confirmar, pressionar = cancelar.
+// Objetivo da Sprint: Home e Overlay usam EXATAMENTE o mesmo pipeline de captura —
+// MediaRecorder (AAC-LC, 8 kHz, 12 kbps, mesmo codec do pacote `record` no Dart) →
+// Gemini Áudio. O DEDO é o único fim de gravação: sem VAD, sem end-of-speech, sem
+// timeout de silêncio. Enquanto o botão está pressionado, o áudio continua sendo
+// gravado (pausas e silêncios NÃO interrompem — Regras 1-4).
+//
+// Etapa12 (revertida por esta Sprint): usava SpeechRecognizer + Gemini Texto.
+// SpeechRecognizer permanece no projeto, porém DESACOPLADO da captura (reservado
+// para ativação por palavra-chave/hotword futura), não participa mais dos comandos.
 //
 // FIX (mantidos das etapas anteriores):
 //   FIX 3: speak() salva timestamp → Flutter skip TTS se floating falou há < 10 s.
@@ -102,6 +109,29 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         internal const val KEY_VOICE_STATE   = "voice_state"
         internal const val VAL_AWAITING_NAME = "awaiting_env_name"
 
+        // Fase 1 — estado de confirmação por voz para operações destrutivas.
+        // Enquanto ativo, a próxima fala é interpretada como resposta sim/não
+        // (via parseYesNo), não como comando novo enviado ao Gemini.
+        internal const val VAL_AWAITING_CONFIRM = "awaiting_destructive_confirm"
+
+        // Fase 1 — transcrições "de relógio" que o STT devolve quando não houve
+        // fala real (ex.: "00:00", "0:00", "00.00"). Tratadas como ausência de fala.
+        private val CLOCK_LIKE_REGEX = Regex("""^\s*\d{1,2}[:.]\d{2}\s*$""")
+        // Detecta ao menos um caractere de fala (letra ou dígito Unicode).
+        private val WORD_CHAR_REGEX = Regex("""[\p{L}\p{N}]""")
+
+        // Fase 1 — vocabulário sim/não para confirmação por voz. O negativo tem
+        // prioridade sobre o positivo ("não pode" resolve como não).
+        private val YES_WORDS = listOf(
+            "sim", "pode", "cria", "criar", "quero", "claro", "isso", "confirma",
+            "confirmar", "positivo", "manda", "ok", "okay", "certo", "exato",
+            "exatamente", "afirmativo", "bora", "vai",
+        )
+        private val NO_WORDS = listOf(
+            "nao", "não", "cancela", "cancelar", "deixa", "para", "negativo",
+            "nunca", "jamais", "esquece", "nada",
+        )
+
         // Supabase — mesma URL/chave do AppLogger.dart (publishable key, INSERT-only RLS)
         private const val SUPABASE_URL =
             "https://zqgkfqenrljtncoecegv.supabase.co/rest/v1/app_logs"
@@ -112,6 +142,17 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         private const val GEMINI_ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/models/" +
             "gemini-2.5-flash:generateContent"
+
+        // GATE ADAPTATIVO (noise floor) — substitui os limiares FIXOS 1500/3500.
+        // MediaRecorder não expõe stream, então lemos getMaxAmplitude() (0..32767)
+        // por polling. Medimos o ruído ambiente nos primeiros ~500 ms e detectamos
+        // fala só quando a amplitude supera noiseFloor * fator. Amplitude é LINEAR,
+        // então "+8 dB" = fator 10^(8/20) ≈ 2.5 e "+12 dB" = fator ≈ 4.0.
+        private const val CALIB_SAMPLES     = 5    // ~500 ms (polls de 100 ms)
+        private const val SPEECH_FACTOR     = 2.5  // fala = ruído * 2.5 (≈ +8 dB)
+        private const val PEAK_FACTOR       = 4.0  // pico exigido = ruído * 4.0 (≈ +12 dB)
+        private const val MIN_NOISE_FLOOR   = 300  // piso: evita estouro em silêncio digital
+        private const val MIN_SPEECH_FRAMES = 3    // ≈ 300 ms (polls de 100 ms)
 
         // FIX 5: nomes genéricos que não identificam um lugar real
         // Se Gemini retornar um desses, tratamos como "sem nome" e pedimos novamente
@@ -139,11 +180,28 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     private var pressStartTime: Long = 0L
     private var recordingStartRunnable: Runnable? = null
 
-    // ── SpeechRecognizer — substitui MediaRecorder (Etapa12) ─────────────────
-    // Criado na main thread em onCreate(); destruído na main thread em onDestroy().
-    // isListening controla o estado de escuta (substitui isRecording).
+    // ── SpeechRecognizer — DESACOPLADO da captura (Sprint Unificação) ─────────
+    // Mantido no projeto para hotword futura; NÃO participa mais da captura de
+    // comandos. Criado em onCreate() e destruído em onDestroy() na main thread.
     private var speechRecognizer: SpeechRecognizer? = null
-    private var isListening = false
+
+    // ── Captura de áudio (MediaRecorder) — pipeline unificado com a Home ──────
+    // Grava M4A (AAC-LC, 8 kHz, 12 kbps) — MESMO codec/sampleRate/bitRate do Dart.
+    // isRecording é o estado de gravação; o DEDO decide o fim (sem VAD/timeout).
+    private var mediaRecorder: MediaRecorder? = null
+    private var audioFile: File? = null
+    private var isRecording = false
+    private var recordStartMs = 0L
+
+    // GATE ADAPTATIVO — estado do gate de energia (poll de getMaxAmplitude).
+    private var speechFrames = 0        // polls acima do limiar adaptativo
+    private var maxAmp = 0              // pico linear observado na sessão
+    private var noiseAccum = 0L         // soma das amplitudes na calibração
+    private var calibSamples = 0        // polls já usados p/ medir o ruído
+    private var noiseFloor = 0.0        // ruído ambiente medido (0 até calibrar)
+    private var speechThreshold = 0.0   // noiseFloor * SPEECH_FACTOR
+    private var sampleLogCounter = 0    // throttle do log voice_gate_sample
+    private var amplitudePoller: Runnable? = null
 
     // ── TTS nativo — fala resposta sem depender do app Flutter ────────────────
     private var tts: TextToSpeech? = null
@@ -399,144 +457,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         Logger.debug("speech_recognizer_created", feature = "floating_voice",
             action = "init_speech_recognizer")
 
-        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-
-            // Reconhecedor pronto — inicia animação de escuta
-            override fun onReadyForSpeech(params: Bundle?) {
-                try {
-                    Logger.debug("speech_ready", feature = "floating_voice", action = "stt",
-                        correlationId = voiceCorrelationId)
-                    startRippleAnimations()
-                } catch (e: Exception) { logException("speech_ready", e) }
-            }
-
-            // Usuário começou a falar
-            override fun onBeginningOfSpeech() {
-                try {
-                    Logger.trace("speech_began", feature = "floating_voice", action = "stt",
-                        correlationId = voiceCorrelationId)
-                } catch (e: Exception) { logException("speech_begin", e) }
-            }
-
-            // Usuário parou de falar — muda visual para "processando"
-            override fun onEndOfSpeech() {
-                try {
-                    Logger.debug("speech_end_of_speech", feature = "floating_voice", action = "stt",
-                        correlationId = voiceCorrelationId)
-                    showProcessingState()
-                } catch (e: Exception) { logException("speech_end", e) }
-            }
-
-            // Resultado final — classifica via Gemini ou usa diretamente como nome
-            override fun onResults(results: Bundle?) {
-                try { // stage: speech_results
-                isListening = false
-                val text = results
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                if (text.isNullOrBlank()) {
-                    Logger.warn("speech_no_result", feature = "floating_voice", action = "stt",
-                        correlationId = voiceCorrelationId)
-                    CorrelationManager.endOperation("voice")
-                    voiceCorrelationId = null
-                    revertButtonAppearance()
-                    speak("Não ouvi nada. Segure e tente novamente.")
-                    return
-                }
-
-                Logger.info("speech_final_result", feature = "floating_voice", action = "stt",
-                    payload = if (LoggerConfiguration.debugLogging)
-                        mapOf("speech_result" to text) else null,
-                    correlationId = voiceCorrelationId)
-
-                // Se estava aguardando nome de ambiente, usa transcript diretamente
-                // (sem Gemini) — evita chamada de rede desnecessária e latência
-                val statePrefs = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE)
-                if (statePrefs.getString(KEY_VOICE_STATE, null) == VAL_AWAITING_NAME) {
-                    val syntheticResult = FloatVoiceResult(
-                        intent         = "create_environment",
-                        environment    = null, // tratado via transcript em executeVoiceResult
-                        triggerTitle   = null,
-                        triggerContent = null,
-                        transcript     = text,
-                    )
-                    revertButtonAppearance()
-                    executeVoiceResult(syntheticResult)
-                    return
-                }
-
-                if (statePrefs.getString(KEY_VOICE_STATE, null) == "awaiting_env_confirm") {
-                    val syntheticResult = FloatVoiceResult(
-                        intent         = "awaiting_env_confirm",
-                        environment    = null,
-                        triggerTitle   = null,
-                        triggerContent = null,
-                        transcript     = text,
-                    )
-                    revertButtonAppearance()
-                    executeVoiceResult(syntheticResult)
-                    return
-                }
-
-                if (statePrefs.getString(KEY_VOICE_STATE, null) == "awaiting_env_for_trigger") {
-                    val syntheticResult = FloatVoiceResult(
-                        intent         = "awaiting_env_for_trigger",
-                        environment    = null,
-                        triggerTitle   = null,
-                        triggerContent = null,
-                        transcript     = text,
-                    )
-                    revertButtonAppearance()
-                    executeVoiceResult(syntheticResult)
-                    return
-                }
-
-                // Caso geral — envia ao Gemini para classificação em IO thread
-                serviceScope.launch { processTextWithGemini(text) }
-                } catch (e: Exception) { logException("speech_results", e) }
-            }
-
-            // Erro de reconhecimento — exibe mensagem amigável
-            override fun onError(error: Int) {
-                try { // stage: speech_error
-                isListening = false
-                val msg = when (error) {
-                    SpeechRecognizer.ERROR_NO_MATCH         -> "Não entendi. Tente novamente."
-                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT   -> "Nenhuma fala detectada."
-                    SpeechRecognizer.ERROR_NETWORK,
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT  -> "Sem conexão com a internet."
-                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Permissão de microfone negada."
-                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY  -> "Reconhecedor ocupado. Tente novamente."
-                    else                                    -> "Erro ao reconhecer voz (código $error)."
-                }
-                Logger.warn("speech_error", feature = "floating_voice", action = "stt",
-                    payload = mapOf("code" to error.toString(), "message" to msg),
-                    correlationId = voiceCorrelationId)
-                CorrelationManager.endOperation("voice")
-                voiceCorrelationId = null
-                revertButtonAppearance()
-                speak(msg)
-                } catch (e: Exception) { logException("speech_error", e) }
-            }
-
-            // Resultado parcial — registrado em trace para diagnóstico de STT
-            override fun onPartialResults(partial: Bundle?) {
-                val text = partial
-                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull()
-                if (!text.isNullOrBlank()) {
-                    Logger.trace("speech_partial", feature = "floating_voice", action = "stt",
-                        payload = if (LoggerConfiguration.debugLogging)
-                            mapOf("transcript" to text) else null,
-                        correlationId = voiceCorrelationId)
-                }
-            }
-
-            // Callbacks de sinal — não utilizados
-            override fun onRmsChanged(rmsdB: Float)           {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEvent(type: Int, params: Bundle?)  {}
-        })
+        // Sprint Unificação: SpeechRecognizer fica DESACOPLADO da captura. Nenhum
+        // RecognitionListener de comando é registrado — o reconhecedor é criado
+        // apenas para uso futuro (hotword). A captura de comandos é 100%
+        // MediaRecorder (startAudioCapture/stopAudioCaptureAndProcess).
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -693,12 +617,16 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Tratamento de toque — SEGURAR para escutar, SOLTAR para processar, ARRASTAR para mover
+    // Tratamento de toque — SEGURAR grava, SOLTAR processa, ARRASTAR move.
     //
-    // Escuta e posição são estados INDEPENDENTES:
-    //   - ACTION_MOVE SEMPRE reposiciona o botão, NUNCA cancela escuta em andamento.
-    //   - ACTION_UP processa escuta se isListening, ou cancela env pendente se tap curto.
-    //   - Apenas ACTION_CANCEL (evento de sistema) descarta escuta sem processar.
+    // Sprint Unificação: o DEDO é o único fim de gravação (igual à Home).
+    //   - ACTION_DOWN agenda o início da gravação após um hold curto (evita gravar
+    //     ao apenas encostar/arrastar). Enquanto o dedo segue pressionado, o
+    //     MediaRecorder continua gravando — silêncio e pausas NÃO interrompem.
+    //   - ACTION_MOVE reposiciona; se o gesto virar arraste ANTES de começar a
+    //     gravar, cancela o início agendado (arrastar = mover, não falar).
+    //   - ACTION_UP encerra e processa (ou dá dica se foi toque curto).
+    //   - ACTION_CANCEL (evento de sistema) descarta a gravação sem enviar.
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun handleTouch(event: MotionEvent) {
@@ -710,17 +638,26 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 initParamY     = layoutParams?.y ?: 0
                 pressStartTime = System.currentTimeMillis()
 
-                // Agenda escuta após 300 ms de hold — cancelado em ACTION_UP se soltar antes
+                // Hold curto (250 ms) antes de gravar — desambigua toque/arraste de fala
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
-                val run = Runnable { startListeningForVoice() }
+                val run = Runnable { startAudioCapture() }
                 recordingStartRunnable = run
-                mainHandler.postDelayed(run, 1000L)
+                mainHandler.postDelayed(run, 250L)
             }
 
             MotionEvent.ACTION_MOVE -> {
-                // SEMPRE reposiciona o botão, NUNCA interfere com escuta em andamento
                 val dx = (event.rawX - dragStartX).toInt()
                 val dy = (event.rawY - dragStartY).toInt()
+                // Se ainda NÃO começou a gravar e o dedo passou do slop, é arraste:
+                // cancela o início agendado para não gravar durante o reposicionamento.
+                if (!isRecording && recordingStartRunnable != null) {
+                    val slop = dpToPx(14)
+                    if (kotlin.math.abs(dx) > slop || kotlin.math.abs(dy) > slop) {
+                        recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
+                        recordingStartRunnable = null
+                    }
+                }
+                // SEMPRE reposiciona o botão (gravando ou não — arrastar não corta fala)
                 layoutParams?.let { p ->
                     p.x = initParamX + dx
                     p.y = initParamY + dy
@@ -735,7 +672,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
                 recordingStartRunnable = null
 
-                // Salva posição final — sempre, independente de ter escutado
+                // Salva posição final — sempre, independente de ter gravado
                 layoutParams?.let { p ->
                     getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
                         .edit().putInt(KEY_BTN_X, p.x).putInt(KEY_BTN_Y, p.y).apply()
@@ -743,98 +680,259 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
                 val duration = System.currentTimeMillis() - pressStartTime
                 when {
-                    // Estava escutando → encerra escuta e aguarda onResults
-                    isListening     -> stopListeningAndProcess()
-                    // Tap curto sem contexto → dica de uso
+                    // Estava gravando → encerra e envia ao Gemini
+                    isRecording     -> stopAudioCaptureAndProcess()
+                    // Toque curto sem gravação → dica de uso
                     duration < 300L -> showToast("Segure para gravar")
                 }
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                // Evento de sistema — descarta escuta sem processar
+                // Evento de sistema — descarta a gravação sem processar
                 recordingStartRunnable?.let { mainHandler.removeCallbacks(it) }
                 recordingStartRunnable = null
-                if (isListening) {
-                    isListening = false
-                    speechRecognizer?.cancel()
-                    Logger.debug("speech_cancelled", feature = "floating_voice", action = "stt",
-                        correlationId = voiceCorrelationId)
-                    CorrelationManager.endOperation("voice")
-                    voiceCorrelationId = null
-                    revertButtonAppearance()
-                }
+                if (isRecording) cancelAudioCapture()
             }
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Escuta por voz (SpeechRecognizer)
+    // Captura de áudio (MediaRecorder) — pipeline unificado com a Home
+    //
+    // Grava M4A (AAC-LC, 8 kHz, 12 kbps): MESMO codec/sampleRate/bitRate do pacote
+    // `record` no Dart. Sem VAD, sem end-of-speech, sem timeout — só o dedo encerra.
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun startListeningForVoice() {
-        if (isListening) return
+    @Suppress("DEPRECATION") // MediaRecorder() sem context é usado em SDK < 31
+    private fun startAudioCapture() {
+        if (isRecording) return
 
         if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             showToast("Permissão de microfone necessária")
             Logger.warn("microphone_permission_denied", feature = "floating_voice",
-                action = "start_listen", payload = mapOf("permission" to "RECORD_AUDIO"))
-            return
-        }
-
-        if (speechRecognizer == null) {
-            showToast("Reconhecedor de voz não disponível")
+                action = "capture", payload = mapOf("permission" to "RECORD_AUDIO"))
             return
         }
 
         voiceCorrelationId = CorrelationManager.beginOperation("voice")
+        val file = File(cacheDir, "sopro_overlay_voice.m4a")
+        try { if (file.exists()) file.delete() } catch (_: Exception) {}
 
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR")
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 500L)
+        val rec = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(this)
+            else MediaRecorder()
+        } catch (e: Exception) {
+            logException("recorder_create", e)
+            revertButtonAppearance()
+            CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+            return
         }
 
         try {
-            Logger.debug("starting_speech_listener", feature = "floating_voice", action = "start_listen",
-                correlationId = voiceCorrelationId)
-            speechRecognizer?.startListening(intent)
-            isListening = true
+            rec.setAudioSource(MediaRecorder.AudioSource.MIC)
+            rec.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4) // container .m4a
+            rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)    // AAC-LC
+            rec.setAudioSamplingRate(8000)                          // 8 kHz — igual ao Dart
+            rec.setAudioEncodingBitRate(12000)                      // 12 kbps — igual ao Dart
+            rec.setOutputFile(file.absolutePath)
+            rec.prepare()
+            rec.start()
+            mediaRecorder  = rec
+            audioFile      = file
+            isRecording    = true
+            recordStartMs  = System.currentTimeMillis()
 
-            // Beep curto (120 ms) confirma ativação do microfone ao usuário
+            // GATE ADAPTATIVO — poll de energia. Primeiros CALIB_SAMPLES medem o
+            // ruído ambiente (noiseFloor); depois só contam frames acima de
+            // noiseFloor * SPEECH_FACTOR. getMaxAmplitude() = pico desde a última leitura.
+            speechFrames = 0; maxAmp = 0; noiseAccum = 0L; calibSamples = 0
+            noiseFloor = 0.0; speechThreshold = 0.0; sampleLogCounter = 0
+            val poll = object : Runnable {
+                override fun run() {
+                    if (!isRecording) return
+                    val amp = try { mediaRecorder?.maxAmplitude ?: 0 } catch (_: Exception) { 0 }
+                    if (amp > maxAmp) maxAmp = amp
+                    if (calibSamples < CALIB_SAMPLES) {
+                        // Janela de calibração: acumula ruído, NÃO detecta fala.
+                        calibSamples++
+                        noiseAccum += amp
+                        if (calibSamples == CALIB_SAMPLES) {
+                            noiseFloor = maxOf((noiseAccum / CALIB_SAMPLES).toDouble(),
+                                MIN_NOISE_FLOOR.toDouble())
+                            speechThreshold = noiseFloor * SPEECH_FACTOR
+                            // LOG TEMPORÁRIO (calibração) — remover após ajustar margens.
+                            Logger.info("voice_noise_floor", feature = "floating_voice", action = "gate",
+                                payload = mapOf("surface" to "overlay",
+                                    "noise_floor" to noiseFloor.toInt().toString(),
+                                    "threshold" to speechThreshold.toInt().toString()),
+                                correlationId = voiceCorrelationId)
+                        }
+                    } else {
+                        // LOG TEMPORÁRIO (calibração) — amostra 1/5 polls.
+                        if (sampleLogCounter++ % 5 == 0) {
+                            Logger.info("voice_gate_sample", feature = "floating_voice", action = "gate",
+                                payload = mapOf("surface" to "overlay",
+                                    "current" to amp.toString(),
+                                    "noise_floor" to noiseFloor.toInt().toString(),
+                                    "delta" to (amp - noiseFloor).toInt().toString()),
+                                correlationId = voiceCorrelationId)
+                        }
+                        if (amp > speechThreshold) speechFrames++
+                    }
+                    mainHandler.postDelayed(this, 100L)
+                }
+            }
+            amplitudePoller = poll
+            // Início atrasado 250 ms: pula o beep de 120 ms para não sujar o ruído medido.
+            mainHandler.postDelayed(poll, 250L)
+
+            // LOG TEMPORÁRIO DE CALIBRAÇÃO (Sprint Unificação) — remover após validar.
+            Logger.info("voice_capture_started", feature = "floating_voice", action = "capture",
+                correlationId = voiceCorrelationId)
+            // LOGS TEMPORÁRIOS (BUG 1/7) — pipeline e áudio nomeados do Overlay.
+            Logger.info("overlay_pipeline_started", feature = "floating_voice", action = "capture",
+                payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
+            Logger.info("overlay_audio_started", feature = "floating_voice", action = "capture",
+                payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
+
+            // Beep curto (120 ms) confirma ativação do microfone
             try {
                 val toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 30)
                 toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
                 mainHandler.postDelayed({ toneGen.release() }, 200L)
             } catch (e: Exception) {
                 Logger.warn("tone_generator_failed", feature = "floating_voice",
-                    action = "start_listen", exception = e, correlationId = voiceCorrelationId)
+                    action = "capture", exception = e, correlationId = voiceCorrelationId)
             }
 
+            startRippleAnimations()
             animateButtonScale(from = 1.0f, to = 1.3f)
             btnView?.background = circleDrawable(0xFFFF2244.toInt())
-            Logger.info("speech_started", feature = "floating_voice", action = "start_listen",
-                correlationId = voiceCorrelationId)
         } catch (e: Exception) {
-            Logger.error("speech_start_failed", feature = "floating_voice", action = "start_listen",
+            Logger.error("voice_capture_start_failed", feature = "floating_voice", action = "capture",
                 exception = e, correlationId = voiceCorrelationId)
-            logException("speech_start", e)
+            logException("recorder_start", e)
+            try { rec.release() } catch (_: Exception) {}
+            mediaRecorder = null; audioFile = null; isRecording = false
             showToast("Erro ao acessar microfone")
-            isListening = false
-            CorrelationManager.endOperation("voice")
-            voiceCorrelationId = null
             revertButtonAppearance()
+            CorrelationManager.endOperation("voice"); voiceCorrelationId = null
         }
     }
 
-    // Encerra a captura — onEndOfSpeech → onResults ou onError disparam automaticamente
-    private fun stopListeningAndProcess() {
-        if (!isListening) return
-        speechRecognizer?.stopListening()
-        // isListening será false quando onResults ou onError disparar
-        Logger.debug("speech_stop_requested", feature = "floating_voice", action = "stt",
+    // Encerra a gravação. Regra 9: se muito curta / arquivo minúsculo (soltou
+    // imediatamente), NÃO envia ao Gemini — responde "Não consegui ouvir você.".
+    private fun stopAudioCaptureAndProcess() {
+        if (!isRecording) return
+        isRecording = false
+        // HOTFIX SILÊNCIO — encerra o poll de energia da sessão.
+        amplitudePoller?.let { mainHandler.removeCallbacks(it) }; amplitudePoller = null
+        val durationMs = System.currentTimeMillis() - recordStartMs
+        val file       = audioFile
+
+        // MediaRecorder.stop() lança IllegalStateException se a gravação foi curta
+        // demais (sem dados) — capturamos e tratamos como descarte.
+        val stopped = try { mediaRecorder?.stop(); true } catch (e: Exception) {
+            Logger.warn("voice_capture_stop_failed", feature = "floating_voice",
+                action = "capture", exception = e, correlationId = voiceCorrelationId)
+            false
+        }
+        try { mediaRecorder?.release() } catch (_: Exception) {}
+        mediaRecorder = null
+        showProcessingState()
+
+        val sizeBytes = try { file?.length() ?: 0L } catch (_: Exception) { 0L }
+        // LOG TEMPORÁRIO DE CALIBRAÇÃO (Sprint Unificação) — remover após validar.
+        Logger.info("voice_capture_stopped", feature = "floating_voice", action = "capture",
+            payload = mapOf("voice_capture_duration" to durationMs.toString(),
+                "voice_capture_size_bytes" to sizeBytes.toString()),
             correlationId = voiceCorrelationId)
+        // LOG TEMPORÁRIO (BUG 7/10) — áudio nomeado do Overlay com métricas completas.
+        Logger.info("overlay_audio_stopped", feature = "floating_voice", action = "capture",
+            payload = mapOf("surface" to "overlay",
+                "audio_duration_ms" to durationMs.toString(),
+                "audio_size_bytes" to sizeBytes.toString(),
+                "codec" to "aac_lc", "sample_rate" to "8000"),
+            correlationId = voiceCorrelationId)
+
+        // GATE ADAPTATIVO — fala = frames sustentados acima do limiar adaptativo E
+        // pico >= noiseFloor * PEAK_FACTOR. Fallbacks (não bloqueiam por energia):
+        //   - maxAmp==0 a sessão toda: device não reporta amplitude;
+        //   - gravação curta demais p/ calibrar: cai no gate de duração/tamanho.
+        val ampSupported = maxAmp > 0
+        val calibrated = calibSamples >= CALIB_SAMPLES
+        val hasSpeech = if (ampSupported && calibrated)
+            (speechFrames >= MIN_SPEECH_FRAMES && maxAmp >= noiseFloor * PEAK_FACTOR)
+        else true
+        // LOG TEMPORÁRIO (REGRA 5) — avaliação do gate no Overlay.
+        Logger.info("voice_gate_started", feature = "floating_voice", action = "capture",
+            payload = mapOf("surface" to "overlay",
+                "speech_frames" to speechFrames.toString(),
+                "max_amp" to maxAmp.toString(),
+                "noise_floor" to noiseFloor.toInt().toString()),
+            correlationId = voiceCorrelationId)
+
+        // Regra 9 + gate de energia: soltar imediato / áudio minúsculo / SEM FALA → não envia.
+        if (!stopped || file == null || durationMs < 500L || sizeBytes < 800L || !hasSpeech) {
+            Logger.info("voice_capture_discarded", feature = "floating_voice", action = "capture",
+                payload = mapOf("voice_capture_duration" to durationMs.toString(),
+                    "voice_capture_size_bytes" to sizeBytes.toString()),
+                correlationId = voiceCorrelationId)
+            // LOGS TEMPORÁRIOS (BUG 3/7/REGRA 5) — bloqueio antes do Gemini.
+            val blockReason = when {
+                durationMs < 500L -> "too_short"
+                !hasSpeech        -> "no_speech"
+                else              -> "empty_audio"
+            }
+            Logger.info("voice_capture_blocked", feature = "floating_voice", action = "capture",
+                payload = mapOf("surface" to "overlay", "reason" to blockReason),
+                correlationId = voiceCorrelationId)
+            Logger.info("overlay_audio_discarded", feature = "floating_voice", action = "capture",
+                payload = mapOf("surface" to "overlay", "reason" to blockReason),
+                correlationId = voiceCorrelationId)
+            Logger.info("voice_gate_blocked", feature = "floating_voice", action = "capture",
+                payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
+            Logger.info("voice_gate_reason", feature = "floating_voice", action = "capture",
+                payload = mapOf("surface" to "overlay", "reason" to blockReason),
+                correlationId = voiceCorrelationId)
+            try { file?.delete() } catch (_: Exception) {}
+            revertButtonAppearance()
+            // REGRA 3 — responder APENAS "Não consegui ouvir você." (toast extra removido).
+            speak("Não consegui ouvir você.")
+            CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+            return
+        }
+
+        // LOG TEMPORÁRIO (REGRA 5) — gate aprovado (fala real).
+        Logger.info("voice_gate_passed", feature = "floating_voice", action = "capture",
+            payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
+        Logger.info("voice_capture_sent_to_gemini", feature = "floating_voice", action = "capture",
+            payload = mapOf("voice_capture_size_bytes" to sizeBytes.toString()),
+            correlationId = voiceCorrelationId)
+        // LOG TEMPORÁRIO (BUG 7) — áudio nomeado do Overlay enviado ao Gemini.
+        Logger.info("overlay_audio_sent", feature = "floating_voice", action = "capture",
+            payload = mapOf("surface" to "overlay",
+                "audio_size_bytes" to sizeBytes.toString()),
+            correlationId = voiceCorrelationId)
+        serviceScope.launch { processAudioWithGemini(file) }
+    }
+
+    // Descarta a gravação atual (ACTION_CANCEL do sistema) sem enviar ao Gemini.
+    private fun cancelAudioCapture() {
+        if (!isRecording) return
+        isRecording = false
+        // HOTFIX SILÊNCIO — encerra o poll de energia.
+        amplitudePoller?.let { mainHandler.removeCallbacks(it) }; amplitudePoller = null
+        try { mediaRecorder?.stop() } catch (_: Exception) {}
+        try { mediaRecorder?.release() } catch (_: Exception) {}
+        mediaRecorder = null
+        try { audioFile?.delete() } catch (_: Exception) {}
+        // LOG TEMPORÁRIO DE CALIBRAÇÃO (Sprint Unificação) — remover após validar.
+        Logger.info("voice_capture_cancelled", feature = "floating_voice", action = "capture",
+            correlationId = voiceCorrelationId)
+        revertButtonAppearance()
+        CorrelationManager.endOperation("voice"); voiceCorrelationId = null
     }
 
     // Estado visual "processando" — acionado em onEndOfSpeech (entre escuta e resultado)
@@ -852,15 +950,18 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Gemini Texto — chamado exclusivamente de Dispatchers.IO (serviceScope)
+    // Gemini Áudio — chamado exclusivamente de Dispatchers.IO (serviceScope).
+    //
+    // Sprint Unificação: envia o M4A gravado (inline_data base64) ao MESMO endpoint
+    // do pipeline da Home. O Gemini transcreve E classifica em uma única chamada;
+    // o campo "transcricao" alimenta result.transcript (usado pelos awaiting-states
+    // e pelo fallback por regex do create_trigger).
     // ─────────────────────────────────────────────────────────────────────────
 
-    private suspend fun processTextWithGemini(transcript: String) {
+    private suspend fun processAudioWithGemini(file: File) {
         val corrId = CorrelationManager.correlationIdFor("voice")
 
         Logger.info("gemini_request_preparing", feature = "floating_voice", action = "gemini",
-            payload = if (LoggerConfiguration.debugLogging)
-                mapOf("transcript" to transcript) else null,
             correlationId = corrId)
 
         val apiKey = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
@@ -872,35 +973,101 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             withContext(Dispatchers.Main) {
                 revertButtonAppearance()
                 speak("Chave da API não configurada. Abra o Sopro uma vez.")
+                CorrelationManager.endOperation("voice"); voiceCorrelationId = null
             }
+            try { file.delete() } catch (_: Exception) {}
+            return
+        }
+
+        // Lê o áudio e codifica em base64 (MESMO formato do pipeline da Home)
+        val audioB64 = try {
+            Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
+        } catch (e: Exception) {
+            logException("audio_read", e)
+            withContext(Dispatchers.Main) {
+                revertButtonAppearance()
+                speak("Não consegui processar o áudio.")
+                CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+            }
+            try { file.delete() } catch (_: Exception) {}
             return
         }
 
         // Lê ambientes direto do SQLite — garante nomes exatos do banco no prompt
         val envNames = readEnvironmentNamesFromDb()
-        val envCtx = if (envNames.isNotEmpty()) "Ambientes: $envNames" else ""
-        val prompt = """JSON apenas, sem markdown.
-Schemas:
-create_trigger: {"intent":"create_trigger","environment":"Casa","trigger":{"title":"ligar para medico","content":""}}
-create_environment: {"intent":"create_environment","environment":{"name":"Farmacia"}}
-delete_environment: {"intent":"delete_environment","environment":"Trabalho"}
-delete_trigger: {"intent":"delete_trigger","environment":"Mercado","title":"comprar leite"}
-unknown: {"intent":"unknown"}
-Exemplos create_trigger: "me lembre de X em Y", "preciso de X em Y", "nao esquecer X em Y", "quando chegar em Y, X"
-Exemplos delete_trigger: "ja fiz X", "pode apagar X de Y", "remover X de Y"
+        // Fase 2.2 — CONTRATO ÚNICO com a Home: mesmo schema de PLANO (actions[]).
+        // O prompt espelha AppConstants.geminiAssistantPrompt (Dart). O Gemini apenas
+        // ESTRUTURA a fala como lista de ações; o app executa. Campos extras (reply,
+        // context_updates, follow_up_question, metadata futura) são aceitos e
+        // IGNORADOS pelo executor quando não usados — só "actions[].type" + params
+        // são obrigatórios para executar.
+        val envCtx = if (envNames.isNotEmpty())
+            "Ambientes existentes (reutilize pelo nome EXATO; nao recrie): " +
+                envNames.joinToString(", ")
+        else
+            "Ambientes existentes: nenhum. Todo local citado e novo."
+        // BUG 2 — em estado de espera (confirmação sim/não, nome pendente, etc.),
+        // NÃO usa o prompt de PLANO. Prompt mínimo só-transcrição; a decisão fica
+        // 100% local (parseYesNo em executeVoiceResult). Nunca classifica confirmação.
+        val awaitingState = hasActiveAwaitingState()
+        if (awaitingState) {
+            Logger.info("voice_confirmation_local", feature = "floating_voice",
+                action = "confirm", payload = mapOf("surface" to "overlay"),
+                correlationId = corrId) // LOG TEMPORÁRIO (BUG 2)
+        }
+        val fullPrompt = """Voce e o Sopro, assistente de lembretes por localizacao (pt-BR).
+A entrada e o AUDIO em anexo. Transcreva e ESTRUTURE (nao execute). Responda SO com
+JSON valido, sem markdown, neste formato:
+{"transcricao":"","reply":"","actions":[],"follow_up_question":null,"context_updates":{"last_environment":null,"last_trigger":null}}
+ACTIONS (type + campos):
+create_environment {"type":"create_environment","name":"Local"}
+create_trigger {"type":"create_trigger","environment":"Local","title":"acao","content":null}
+delete_trigger {"type":"delete_trigger","environment":"Local","title":"aprox"}
+delete_all_triggers {"type":"delete_all_triggers","environment":"Local"}
+delete_environment {"type":"delete_environment","environment":"Local"}
+delete_all_environments {"type":"delete_all_environments"}
+REGRAS:
+1) NUNCA invente ambiente. So locais ditos pelo usuario.
+2) Local ja existente = REUTILIZE: so create_trigger com o nome EXATO da lista.
+3) Local novo = create_environment e depois seus create_trigger (nessa ordem).
+4) title: SO a acao, infinitivo, max 50 chars, sem o local.
+5) PRIORIDADE DESTRUTIVA (MAXIMA): se a fala tem "todos/todas/tudo/limpar/apagar/
+   remover/excluir/deletar" referindo AMBIENTES/LOCAIS -> actions=[{"type":"delete_all_environments"}]
+   e NADA de create. Referindo GATILHOS/LEMBRETES de um local -> delete_all_triggers.
+   Nenhuma acao de criacao pode vencer uma de exclusao total.
+6) Duvida real sobre o local: actions=[] e pergunte em follow_up_question.
+7) reply curto e humano; nunca cite intent/acao.
+EXEMPLOS:
+- "medico pegar exame, mercado comprar pao e ovo" (nenhum) -> "actions":[{"type":"create_environment","name":"Medico"},{"type":"create_trigger","environment":"Medico","title":"Pegar exame"},{"type":"create_environment","name":"Mercado"},{"type":"create_trigger","environment":"Mercado","title":"Comprar pao"},{"type":"create_trigger","environment":"Mercado","title":"Comprar ovo"}]
+- "quando chegar no mercado comprar arroz" (Mercado) -> "actions":[{"type":"create_trigger","environment":"Mercado","title":"Comprar arroz"}]
+- "apagar todos os ambientes" -> "actions":[{"type":"delete_all_environments"}]
+- "excluir todos os ambientes" -> "actions":[{"type":"delete_all_environments"}]
+- "remover tudo" -> "actions":[{"type":"delete_all_environments"}]
+- "limpar todos" -> "actions":[{"type":"delete_all_environments"}]
+- "deletar tudo" -> "actions":[{"type":"delete_all_environments"}]
+- "apaga todos os lembretes do mercado" (Mercado) -> "actions":[{"type":"delete_all_triggers","environment":"Mercado"}]
 $envCtx
-Texto: $transcript""".trimIndent()
+Retorne SO o JSON.""".trimIndent()
+        // BUG 2 — seleciona o prompt final: só-transcrição em espera, plano completo caso contrário.
+        val prompt = if (awaitingState)
+            """Transcreva EXATAMENTE o audio em pt-BR. Responda SO com JSON valido, sem markdown:
+{"transcricao":"texto falado"}""".trimIndent()
+        else fullPrompt
 
         val body = JSONObject().apply {
             put("contents", JSONArray().apply {
                 put(JSONObject().apply {
                     put("parts", JSONArray().apply {
                         put(JSONObject().put("text", prompt))
+                        put(JSONObject().put("inline_data", JSONObject()
+                            .put("mime_type", "audio/m4a").put("data", audioB64)))
                     })
                 })
             })
             put("generationConfig", JSONObject().apply {
-                put("temperature", 0); put("maxOutputTokens", 1024)
+                // Fase 2.2 REGRA 5 — remove limite artificial (era 1024, truncava planos
+                // longos e causava "Unterminated string"). 2048 = mesmo teto da Home.
+                put("temperature", 0); put("maxOutputTokens", 2048)
             })
         }.toString()
 
@@ -934,19 +1101,17 @@ Texto: $transcript""".trimIndent()
                     payload = mapOf("http_code" to code.toString(),
                         "response_preview" to responseBody.take(200)),
                     correlationId = corrId)
-                FloatVoiceResult(null, null, null, null, transcript, error = "http_$code")
+                FloatVoiceResult(null, null, null, null, null, error = "http_$code")
             } else {
                 Logger.info("gemini_response_received", feature = "floating_voice", action = "gemini",
                     durationMs = geminiDuration,
                     payload = mapOf("http_code" to code.toString(),
                         "response_length" to responseBody.length.toString()),
                     correlationId = corrId)
-                try {
-                    parseGeminiResponse(responseBody, transcript)
-                } catch (e: Exception) {
-                    logException("gemini_response", e)
-                    FloatVoiceResult(null, null, null, null, transcript, error = "response_parse: ${e.message}")
-                }
+                // Fase 2.2 — NÃO parseia aqui. HTTP 200 apenas marca sucesso; o PLANO
+                // (actions[]) é interpretado por handleGeminiPlan(responseBody) na Main
+                // thread, com parser robusto + prioridade destrutiva + logs temporários.
+                FloatVoiceResult(null, null, null, null, null)
             }
         } catch (e: Exception) {
             val geminiDuration = System.currentTimeMillis() - geminiStart
@@ -956,98 +1121,31 @@ Texto: $transcript""".trimIndent()
                 payload = mapOf("response_preview" to responseBody.take(200)),
                 correlationId = corrId)
             logException("gemini_request", e)
-            FloatVoiceResult(null, null, null, null, transcript, error = e.message)
+            FloatVoiceResult(null, null, null, null, null, error = e.message)
         }
+
+        // Áudio temporário já não é necessário — remove (privacidade + espaço)
+        try { file.delete() } catch (_: Exception) {}
 
         withContext(Dispatchers.Main) {
             Logger.debug("gemini_result_dispatching", feature = "floating_voice", action = "gemini",
-                payload = mapOf("intent" to (result.intent ?: "null"),
-                    "has_error" to (result.error != null).toString()),
+                payload = mapOf("has_error" to (result.error != null).toString()),
                 correlationId = corrId)
             revertButtonAppearance()
-            executeVoiceResult(result)
+            // Fase 2.2 — dois caminhos: erro real de HTTP/rede/envelope segue o fluxo
+            // de erro legado (executeVoiceResult trata error != null); HTTP 200 vai
+            // para o novo interpretador de PLANO (paridade total com a Home).
+            if (result.error != null) executeVoiceResult(result)
+            else                      handleGeminiPlan(responseBody)
         }
     }
 
-    private fun parseGeminiResponse(raw: String, transcript: String): FloatVoiceResult {
-        val corrId = CorrelationManager.correlationIdFor("voice")
-        return try {
-            val text = JSONObject(raw)
-                .getJSONArray("candidates").getJSONObject(0)
-                .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
-                .getString("text")
-                .replace(Regex("```[a-zA-Z]*\\n?"), "").replace("```", "").trim()
-
-            val jsonStart = text.indexOf('{')
-            val jsonEnd = text.lastIndexOf('}')
-            val cleanJson = if (jsonStart >= 0 && jsonEnd > jsonStart)
-                text.substring(jsonStart, jsonEnd + 1)
-            else text
-            val parsed = JSONObject(cleanJson)
-            val intent = parsed.optString("intent", "unknown")
-
-            if (intent == "unknown") {
-                Logger.warn("intent_unknown", feature = "floating_voice", action = "parse",
-                    payload = if (LoggerConfiguration.debugLogging)
-                        mapOf("gemini_response" to cleanJson) else null,
-                    correlationId = corrId)
-            } else {
-                Logger.info("intent_detected", feature = "floating_voice", action = "parse",
-                    payload = if (LoggerConfiguration.debugLogging)
-                        mapOf("intent" to intent, "gemini_response" to cleanJson)
-                    else mapOf("intent" to intent),
-                    correlationId = corrId)
-            }
-
-            when (intent) {
-                "create_trigger" -> {
-                    val trigger = parsed.optJSONObject("trigger")
-                    FloatVoiceResult(
-                        intent         = intent,
-                        environment    = parsed.optString("environment").takeIf { it.isNotEmpty() },
-                        triggerTitle   = trigger?.optString("title")?.takeIf { it.isNotEmpty() },
-                        triggerContent = trigger?.optString("content")?.takeIf { it.isNotEmpty() },
-                        transcript     = transcript,
-                    )
-                }
-                "create_environment" -> {
-                    val env  = parsed.optJSONObject("environment")
-                    val name = env?.optString("name")?.takeIf { it.isNotEmpty() }
-                        ?: parsed.optString("environment").takeIf { it.isNotEmpty() }
-                    FloatVoiceResult(
-                        intent         = intent,
-                        environment    = name,
-                        triggerTitle   = null, triggerContent = null,
-                        transcript     = transcript,
-                    )
-                }
-                "delete_environment" -> FloatVoiceResult(
-                    intent         = intent,
-                    environment    = parsed.optString("environment").takeIf { it.isNotEmpty() },
-                    triggerTitle   = null, triggerContent = null,
-                    transcript     = transcript,
-                )
-                "delete_trigger" -> FloatVoiceResult(
-                    intent         = intent,
-                    environment    = parsed.optString("environment").takeIf { it.isNotEmpty() },
-                    triggerTitle   = parsed.optString("title").takeIf { it.isNotEmpty() },
-                    triggerContent = null,
-                    transcript     = transcript,
-                )
-                else -> FloatVoiceResult(
-                    intent         = "unknown",
-                    environment    = null,
-                    triggerTitle   = null, triggerContent = null,
-                    transcript     = transcript,
-                )
-            }
-        } catch (e: Exception) {
-            Logger.error("gemini_parse_failed", feature = "floating_voice", action = "parse",
-                exception = e, correlationId = corrId)
-            logException("intent_parser", e)
-            FloatVoiceResult(null, null, null, null, transcript, error = "parse_error: ${e.message}")
-        }
-    }
+    // Fase 2.2 — parseGeminiResponse (schema antigo single-intent, com substring
+    // indexOf('{')/lastIndexOf('}')) foi REMOVIDO. Motivo: violava a REGRA 1 (nunca
+    // interpretar JSON por substring) e era a causa do "Unterminated string" ao cortar
+    // strings truncadas. Substituído por parsePlanResponse + extractJsonObject (parser
+    // balanceado e ciente de aspas). O schema legado continua suportado via
+    // legacyIntentToAction, mantendo a compatibilidade (REGRA 10).
 
     // ─────────────────────────────────────────────────────────────────────────
     // Execução do resultado — sempre na Main thread (via withContext(Main))
@@ -1184,6 +1282,36 @@ Texto: $transcript""".trimIndent()
             return
         }
 
+        // Fase 1 — resposta de uma confirmação destrutiva pendente (sim/não).
+        // Recupera a ação armazenada e executa apenas se a resposta for afirmativa.
+        if (voiceState == VAL_AWAITING_CONFIRM && !stateExpired) {
+            val confirmIntent = statePrefs.getString("confirm_intent", null) ?: ""
+            val confirmEnv    = statePrefs.getString("confirm_env", null) ?: ""
+            val confirmTitle  = statePrefs.getString("confirm_title", null)
+            statePrefs.edit()
+                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
+                .remove("confirm_intent").remove("confirm_env").remove("confirm_title")
+                .apply()
+            val answer = parseYesNo(result.transcript ?: "")
+            if (answer == true) {
+                Logger.info("voice_confirmation_yes", feature = "floating_voice",
+                    action = "confirm", payload = mapOf("intent" to confirmIntent),
+                    correlationId = voiceCorrelationId)
+                performConfirmedDestructive(confirmIntent, confirmEnv, confirmTitle)
+            } else {
+                // não OU ambíguo → cancela (destrutivo nunca ocorre sem "sim")
+                Logger.info("voice_confirmation_no", feature = "floating_voice",
+                    action = "confirm",
+                    payload = mapOf("intent" to confirmIntent,
+                        "explicit" to (answer == false).toString()),
+                    correlationId = voiceCorrelationId)
+                speak("Tudo bem, cancelei.")
+                CorrelationManager.endOperation("voice")
+                voiceCorrelationId = null
+            }
+            return
+        }
+
         Logger.info("intent_dispatched", feature = "floating_voice", action = "execute",
             payload = mapOf("intent" to (result.intent ?: "null")),
             correlationId = voiceCorrelationId)
@@ -1311,19 +1439,9 @@ Texto: $transcript""".trimIndent()
             "delete_environment" -> {
                 val envName = result.environment ?: ""
                 if (envName.isNotEmpty()) {
-                    serviceScope.launch(Dispatchers.IO) {
-                        val ok = deleteEnvironmentFromDb(envName)
-                        withContext(Dispatchers.Main) {
-                            if (ok) {
-                                Logger.info("command_executed", feature = "floating_voice", action = "execute",
-                                    payload = mapOf("command" to "delete_environment"),
-                                    correlationId = voiceCorrelationId)
-                                speak("Ambiente $envName removido.")
-                            } else speak("Não encontrei o ambiente $envName.")
-                            CorrelationManager.endOperation("voice")
-                            voiceCorrelationId = null
-                        }
-                    }
+                    // Fase 1 — pergunta por voz antes de excluir (ação irreversível)
+                    startDestructiveConfirm("delete_environment", envName, null,
+                        "Você deseja excluir o ambiente $envName?")
                 } else {
                     speak("Qual ambiente você quer remover?")
                     CorrelationManager.endOperation("voice")
@@ -1333,28 +1451,625 @@ Texto: $transcript""".trimIndent()
             "delete_trigger" -> {
                 val envName = result.environment ?: ""
                 val title   = result.triggerTitle
-                serviceScope.launch(Dispatchers.IO) {
-                    val ok = deleteTriggerFromDb(envName, title)
-                    withContext(Dispatchers.Main) {
-                        if (ok) {
-                            Logger.info("command_executed", feature = "floating_voice", action = "execute",
-                                payload = mapOf("command" to "delete_trigger"),
-                                correlationId = voiceCorrelationId)
-                            speak("Lembrete removido.")
-                        }
-                        CorrelationManager.endOperation("voice")
-                        voiceCorrelationId = null
-                    }
+                if (envName.isEmpty()) {
+                    // Sem ambiente não há como localizar o lembrete com segurança
+                    speak("De qual ambiente devo remover o lembrete?")
+                    CorrelationManager.endOperation("voice")
+                    voiceCorrelationId = null
+                } else {
+                    // Fase 1 — confirma por voz. Título nulo = remover todos do ambiente.
+                    val question = if (title.isNullOrEmpty())
+                        "Você deseja remover todos os lembretes de $envName?"
+                    else
+                        "Você deseja remover o lembrete $title?"
+                    startDestructiveConfirm("delete_trigger", envName, title, question)
                 }
             }
+            // Fase 1 — remover todos os gatilhos de um ambiente (confirmado por voz)
+            "delete_all_triggers" -> {
+                val envName = result.environment ?: ""
+                if (envName.isEmpty()) {
+                    speak("De qual ambiente devo remover os lembretes?")
+                    CorrelationManager.endOperation("voice")
+                    voiceCorrelationId = null
+                } else {
+                    startDestructiveConfirm("delete_all_triggers", envName, null,
+                        "Você deseja remover todos os lembretes de $envName?")
+                }
+            }
+            // Fase 1 — remover TODOS os ambientes (operação global, confirmada por voz)
+            "delete_all_environments" -> {
+                startDestructiveConfirm("delete_all_environments", "", null,
+                    "Você deseja excluir todos os ambientes e seus lembretes?")
+            }
             else -> {
-                showToast("Não entendi. Abra o Sopro para comandos avançados.")
-                speak("Não entendi. Pressione novamente para tentar.")
+                // Fase 1 — fala real mas intenção não reconhecida: resposta natural.
+                speak("Não consegui entender esse comando. Pode repetir de outra forma?")
                 CorrelationManager.endOperation("voice")
                 voiceCorrelationId = null
             }
         }
         } catch (e: Exception) { logException("command_dispatch", e) }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Fase 2.2 — CONTRATO ÚNICO DE PLANO (paridade total com a Home)
+    //
+    // Todo este bloco é NOVO. Objetivo da sprint: Home e Overlay produzem EXATAMENTE
+    // o mesmo resultado a partir do mesmo schema {"transcricao","reply","actions[]",
+    // "follow_up_question","context_updates"}. O parser:
+    //   - NUNCA usa indexOf('{')/lastIndexOf('}') cru (REGRA 1) — varre chaves
+    //     respeitando aspas/escapes (extractJsonObject);
+    //   - IGNORA campos não usados (reply/context/metadata/confidence futuros) —
+    //     só actions[].type + params são obrigatórios para executar (REGRA "schema");
+    //   - loga a resposta bruta completa em falha (gemini_raw_response, REGRA 3);
+    //   - aplica prioridade destrutiva (REGRA 6/7) antes de executar;
+    //   - fala com prosódia por tipo de frase (REGRA 8).
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // Uma ação do plano — espelha VoiceAction do Dart. Guarda o JSON cru da ação;
+    // o executor lê só o que precisa (type + params). Campos extras são ignorados.
+    private data class PlanAction(val type: String, val obj: JSONObject) {
+        // Leitura tolerante de string dentre chaves alternativas (name/environment...).
+        fun str(vararg keys: String): String? {
+            for (k in keys) {
+                val v = obj.optString(k, "")
+                if (v.isNotBlank() && v.lowercase() != "null") return v.trim()
+            }
+            return null
+        }
+    }
+
+    // Resultado do parse do plano. error != null = JSON ausente/truncado/inválido.
+    private data class PlanResult(
+        val actions:    List<PlanAction>,
+        val transcript: String,
+        val reply:      String,
+        val followUp:   String?,
+        val error:      String? = null,
+    )
+
+    // Tom da fala — deriva a prosódia (REGRA 8). Android TTS usa a pontuação para
+    // entonação; garantimos '?' em perguntas e ajustamos pitch/rate por tom.
+    private enum class TtsTone { QUESTION, CONFIRM, SUCCESS, ERROR, INFO }
+
+    // Extrai o PRIMEIRO objeto JSON balanceado de [s] respeitando aspas e escapes.
+    // REGRA 1: não faz `{`..`}` ingênuo — conta chaves só FORA de strings, então um
+    // '}' dentro de um valor textual não encerra o objeto. Retorna null se o objeto
+    // não fecha (resposta truncada) — o chamador trata como erro real, sem mascarar.
+    private fun extractJsonObject(s: String): String? {
+        val start = s.indexOf('{')
+        if (start < 0) return null
+        var depth = 0; var inStr = false; var esc = false
+        for (i in start until s.length) {
+            val c = s[i]
+            if (inStr) {
+                if (esc) esc = false
+                else if (c == '\\') esc = true
+                else if (c == '"') inStr = false
+            } else {
+                when (c) {
+                    '"'  -> inStr = true
+                    '{'  -> depth++
+                    '}'  -> { depth--; if (depth == 0) return s.substring(start, i + 1) }
+                }
+            }
+        }
+        return null
+    }
+
+    // Parseia o envelope do Gemini → PlanResult. Robusto: extrai o texto do candidate,
+    // remove cercas markdown e localiza o objeto JSON balanceado. Nunca lança — falhas
+    // viram PlanResult(error=...) para tratamento natural.
+    private fun parsePlanResponse(raw: String): PlanResult {
+        val corrId = CorrelationManager.correlationIdFor("voice")
+        Logger.debug("overlay_parser_started", feature = "floating_voice", action = "parse",
+            correlationId = corrId) // LOG TEMPORÁRIO (Fase 2.2) — remover após validar
+        return try {
+            val text = JSONObject(raw)
+                .getJSONArray("candidates").getJSONObject(0)
+                .getJSONObject("content").getJSONArray("parts").getJSONObject(0)
+                .getString("text")
+            val stripped = text
+                .replace(Regex("```[a-zA-Z]*\\n?"), "").replace("```", "").trim()
+
+            val jsonStr = extractJsonObject(stripped)
+            if (jsonStr == null) {
+                // Sem objeto fechado = truncado/ausente. LOG TEMPORÁRIO com a resposta
+                // COMPLETA (não só a exceção) para diagnóstico definitivo (REGRA 3).
+                Logger.warn("gemini_raw_response", feature = "floating_voice", action = "parse",
+                    payload = mapOf("raw" to stripped), correlationId = corrId)
+                return PlanResult(emptyList(), "", "", null, error = "json_not_found_or_truncated")
+            }
+
+            val obj        = JSONObject(jsonStr)
+            val transcript = obj.optString("transcricao", obj.optString("transcript", ""))
+            val reply      = obj.optString("reply", "")
+            val followUp   = obj.optString("follow_up_question")
+                .takeIf { it.isNotBlank() && it.lowercase() != "null" }
+
+            val actions = mutableListOf<PlanAction>()
+            val arr = obj.optJSONArray("actions")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val a = arr.optJSONObject(i) ?: continue
+                    val t = a.optString("type").takeIf { it.isNotEmpty() } ?: continue
+                    actions.add(PlanAction(t, a))
+                }
+            } else if (obj.has("intent")) {
+                // Compat (REGRA 10): schema antigo single-intent → 1 ação equivalente.
+                legacyIntentToAction(obj)?.let { actions.add(it) }
+            }
+
+            Logger.debug("overlay_parser_finished", feature = "floating_voice", action = "parse",
+                payload = mapOf("action_count" to actions.size.toString()),
+                correlationId = corrId) // LOG TEMPORÁRIO (Fase 2.2)
+            PlanResult(actions, transcript, reply, followUp)
+        } catch (e: Exception) {
+            Logger.error("overlay_parser_error", feature = "floating_voice", action = "parse",
+                exception = e, payload = mapOf("raw" to raw.take(1000)),
+                correlationId = corrId) // LOG TEMPORÁRIO (Fase 2.2)
+            logException("plan_parser", e)
+            PlanResult(emptyList(), "", "", null, error = "parse_error: ${e.message}")
+        }
+    }
+
+    // Compat: converte o schema antigo {"intent":...} em uma PlanAction equivalente,
+    // para que respostas legadas continuem funcionando pelo mesmo executor (REGRA 10).
+    private fun legacyIntentToAction(o: JSONObject): PlanAction? {
+        val intent = o.optString("intent", "unknown")
+        val a = JSONObject()
+        when (intent) {
+            "create_trigger" -> {
+                a.put("type", "create_trigger")
+                a.put("environment", o.optString("environment"))
+                a.put("title", o.optJSONObject("trigger")?.optString("title") ?: "")
+                a.put("content", o.optJSONObject("trigger")?.optString("content") ?: "")
+            }
+            "create_environment" -> {
+                a.put("type", "create_environment")
+                a.put("name", o.optJSONObject("environment")?.optString("name")
+                    ?: o.optString("environment"))
+            }
+            "delete_environment"      -> { a.put("type", "delete_environment"); a.put("environment", o.optString("environment")) }
+            "delete_trigger"          -> { a.put("type", "delete_trigger"); a.put("environment", o.optString("environment")); a.put("title", o.optString("title")) }
+            "delete_all_triggers"     -> { a.put("type", "delete_all_triggers"); a.put("environment", o.optString("environment")) }
+            "delete_all_environments" -> a.put("type", "delete_all_environments")
+            else                      -> return null
+        }
+        return PlanAction(a.optString("type"), a)
+    }
+
+    // Guarda de PRIORIDADE DESTRUTIVA (REGRA 6/7). Roda sobre a TRANSCRIÇÃO, não sobre
+    // a classificação do Gemini: se a fala pede exclusão TOTAL de ambientes, nenhuma
+    // ação de criação pode vencer — força [delete_all_environments]. Corrige o BUG 2
+    // ("apagar todos os ambientes" virava createTrigger). Exclusão de lembretes de um
+    // local (com palavra gatilho/lembrete) é deixada ao plano do Gemini, que carrega
+    // o ambiente correto.
+    private fun applyDestructivePriority(plan: PlanResult): PlanResult {
+        val t = plan.transcript.lowercase(Locale("pt", "BR"))
+        val verb    = listOf("apag", "remov", "exclu", "delet", "limp").any { t.contains(it) }
+        if (!verb) return plan
+        val total   = listOf("todos", "todas", "tudo").any { t.contains(it) }
+        val trgWord = listOf("gatilho", "lembrete", "lembranca", "lembrança").any { t.contains(it) }
+        // "apagar todos os ambientes", "excluir todos", "remover tudo", "limpar todos",
+        // "deletar tudo" — total SEM palavra de gatilho → wipe de ambientes.
+        if (total && !trgWord) {
+            Logger.info("intent_priority_applied", feature = "floating_voice", action = "priority",
+                payload = mapOf("forced" to "delete_all_environments"),
+                correlationId = voiceCorrelationId) // LOG TEMPORÁRIO (Fase 2.2)
+            val a = JSONObject().put("type", "delete_all_environments")
+            return plan.copy(actions = listOf(PlanAction("delete_all_environments", a)))
+        }
+        return plan
+    }
+
+    // Interpreta o PLANO vindo do Gemini (HTTP 200). Roda na Main thread.
+    // Ordem: parse robusto → estados de espera (compat) → prioridade → executar.
+    private fun handleGeminiPlan(raw: String) {
+        val parsed = parsePlanResponse(raw)
+
+        // Falha real de parse (truncado/inválido). NÃO mascara: fala natural + encerra.
+        if (parsed.error != null) {
+            Logger.warn("voice_result_error", feature = "floating_voice", action = "execute",
+                payload = mapOf("error" to parsed.error), correlationId = voiceCorrelationId)
+            speakTyped("Não consegui entender. Pode repetir?", TtsTone.ERROR)
+            CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+            return
+        }
+
+        // Estados de espera (nome de ambiente / confirmação sim-não / etc.) continuam
+        // sendo resolvidos pelo fluxo legado, que só precisa da transcrição (REGRA 10).
+        if (hasActiveAwaitingState()) {
+            executeVoiceResult(FloatVoiceResult(
+                intent = null, environment = null, triggerTitle = null,
+                triggerContent = null, transcript = parsed.transcript))
+            return
+        }
+
+        // REGRA 4 / BUG 3 — 2ª PROTEÇÃO: NUNCA executa plano com transcrição
+        // inválida (vazia, só espaços, "...", "00:00", só pontuação), mesmo que o
+        // Gemini tenha alucinado ações. Dupla proteção: gate de energia (antes do
+        // Gemini) + esta validação (antes do ExecutionPlan).
+        if (isInvalidTranscript(parsed.transcript)) {
+            Logger.warn("execution_plan_blocked", feature = "floating_voice", action = "execute",
+                payload = mapOf("surface" to "overlay", "reason" to "invalid_transcript"),
+                correlationId = voiceCorrelationId)
+            Logger.warn("execution_plan_invalid_transcript", feature = "floating_voice",
+                action = "execute", payload = mapOf("surface" to "overlay",
+                    "transcript" to parsed.transcript),
+                correlationId = voiceCorrelationId)
+            speakTyped("Não consegui ouvir você.", TtsTone.ERROR) // REGRA 3
+            endVoice()
+            return
+        }
+
+        val plan = applyDestructivePriority(parsed)
+        // LOG TEMPORÁRIO (BUG 1) — início da execução do plano no Overlay.
+        Logger.info("overlay_execution_started", feature = "floating_voice", action = "execute",
+            payload = mapOf("surface" to "overlay", "actions" to plan.actions.size.toString()),
+            correlationId = voiceCorrelationId)
+        executePlan(plan)
+    }
+
+    // True se há um estado de espera de voz ativo e não expirado (30 s). Espelha a
+    // checagem de executeVoiceResult para decidir entre "resposta a pergunta" x "novo".
+    private fun hasActiveAwaitingState(): Boolean {
+        val p = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE)
+        val state = p.getString(KEY_VOICE_STATE, null) ?: return false
+        val setAt = p.getLong("voice_state_set_at", 0L)
+        return System.currentTimeMillis() - setAt <= 30_000L && state.isNotEmpty()
+    }
+
+    // Executa o plano em sequência (paridade com VoiceActionExecutor.run da Home):
+    //   - qualquer ação destrutiva → UMA confirmação por voz (reusa o fluxo Fase 1);
+    //   - senão → resolve GPS uma vez (se cria ambiente) e roda as ações em ordem,
+    //     tolerando falhas isoladas; fala o reply (ou um resumo natural) ao final.
+    private fun executePlan(plan: PlanResult) {
+        // Sem ações: só conversa. Pergunta (follow_up) tem prosódia interrogativa.
+        if (plan.actions.isEmpty()) {
+            when {
+                plan.followUp != null      -> speakTyped(plan.followUp, TtsTone.QUESTION)
+                plan.reply.isNotBlank()    -> speakTyped(plan.reply, TtsTone.INFO)
+                else                       -> speakTyped("Não consegui entender. Pode repetir?", TtsTone.ERROR)
+            }
+            CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+            return
+        }
+
+        // Destrutivo: confirma a PRIMEIRA ação destrutiva (a prioridade já colapsou o
+        // wipe total em uma única ação). A confirmação reusa startDestructiveConfirm.
+        val destructive = plan.actions.firstOrNull {
+            it.type == "delete_environment" || it.type == "delete_all_environments" ||
+            it.type == "delete_trigger"     || it.type == "delete_all_triggers"
+        }
+        if (destructive != null) {
+            routeDestructiveConfirm(destructive)
+            return
+        }
+
+        // Construtivo: create_environment / create_trigger em ordem, GPS uma única vez.
+        val needsLoc = plan.actions.any { it.type == "create_environment" }
+        showProcessingState()
+        // LOGS TEMPORÁRIOS (BUG 6/7) — início do plano + executor nomeado do Overlay.
+        Logger.info("execution_plan_started", feature = "floating_voice", action = "execute",
+            payload = mapOf("surface" to "overlay", "actions" to plan.actions.size.toString()),
+            correlationId = voiceCorrelationId)
+        Logger.info("overlay_executor_started", feature = "floating_voice", action = "execute",
+            payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
+        val execStart = System.currentTimeMillis() // BUG 4 (temporário)
+        serviceScope.launch(Dispatchers.IO) {
+            val loc = if (needsLoc) getLastLocationBlocking() else null
+            val lat = loc?.latitude ?: 0.0
+            val lon = loc?.longitude ?: 0.0
+            var ok = 0; var fail = 0
+            for (a in plan.actions) {
+                val done = when (a.type) {
+                    "create_environment" -> {
+                        val name = a.str("name", "environment")
+                        when {
+                            name == null || BLOCKED_ENV_NAMES.contains(name.lowercase()) -> false
+                            lat == 0.0 && lon == 0.0 -> false // sem GPS não cria
+                            else -> writeEnvironmentToDb(name, lat, lon, 100)
+                        }
+                    }
+                    "create_trigger" -> {
+                        val env   = a.str("environment", "name")
+                        val title = a.str("title")
+                        if (env != null && title != null)
+                            writeTriggerToDb(title, a.str("content") ?: "", env)
+                        else false
+                    }
+                    else -> false // tipos não suportados no overlay (ex.: update_*)
+                }
+                if (done) ok++ else fail++
+            }
+            // Sinaliza a UI para atualizar ao voltar ao foreground (mesmos providers).
+            if (ok > 0) getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("flutter.needs_refresh", true)
+                .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
+                .apply()
+
+            val execMs = System.currentTimeMillis() - execStart // BUG 4 (temporário)
+            withContext(Dispatchers.Main) {
+                revertButtonAppearance()
+                Logger.info("plan_executed", feature = "floating_voice", action = "execute",
+                    payload = mapOf("ok" to ok.toString(), "fail" to fail.toString()),
+                    correlationId = voiceCorrelationId)
+                // LOGS TEMPORÁRIOS (BUG 6) — fim/falha do plano com surface/actions/ok/failed/duration_ms.
+                if (ok == 0 && fail > 0) {
+                    Logger.warn("execution_plan_failed", feature = "floating_voice", action = "execute",
+                        payload = mapOf("surface" to "overlay",
+                            "actions" to plan.actions.size.toString(), "failed" to fail.toString()),
+                        correlationId = voiceCorrelationId)
+                }
+                Logger.info("execution_plan_finished", feature = "floating_voice", action = "execute",
+                    payload = mapOf("surface" to "overlay",
+                        "actions" to plan.actions.size.toString(),
+                        "ok" to ok.toString(), "failed" to fail.toString(),
+                        "duration_ms" to execMs.toString()),
+                    correlationId = voiceCorrelationId)
+                // LOGS TEMPORÁRIOS (BUG 1/7) — executor/execução/pipeline nomeados do Overlay.
+                Logger.info("overlay_executor_finished", feature = "floating_voice", action = "execute",
+                    payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
+                Logger.info("overlay_execution_finished", feature = "floating_voice", action = "execute",
+                    payload = mapOf("surface" to "overlay", "duration_ms" to execMs.toString()),
+                    correlationId = voiceCorrelationId)
+                Logger.info("overlay_pipeline_finished", feature = "floating_voice", action = "execute",
+                    payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
+                when {
+                    ok == 0 && fail > 0        -> speakTyped("Não consegui concluir agora. Pode tentar de novo?", TtsTone.ERROR)
+                    fail > 0                   -> speakTyped("Fiz a maior parte. $fail não deram certo.", TtsTone.INFO)
+                    plan.reply.isNotBlank()    -> speakTyped(plan.reply, TtsTone.SUCCESS)
+                    else                       -> speakTyped("Pronto!", TtsTone.SUCCESS)
+                }
+                CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+            }
+        }
+    }
+
+    // Mapeia uma ação destrutiva → pergunta de confirmação por voz (reusa Fase 1).
+    // A pergunta sempre termina com '?' e é falada com entonação interrogativa.
+    private fun routeDestructiveConfirm(a: PlanAction) {
+        when (a.type) {
+            "delete_all_environments" ->
+                startDestructiveConfirm("delete_all_environments", "", null,
+                    "Você deseja excluir todos os ambientes e seus lembretes?")
+            "delete_all_triggers" -> {
+                val env = a.str("environment", "name")
+                if (env == null) { speakTyped("De qual ambiente devo remover os lembretes?", TtsTone.QUESTION); endVoice() }
+                else startDestructiveConfirm("delete_all_triggers", env, null,
+                    "Você deseja remover todos os lembretes de $env?")
+            }
+            "delete_environment" -> {
+                val env = a.str("environment", "name")
+                if (env == null) { speakTyped("Qual ambiente você quer remover?", TtsTone.QUESTION); endVoice() }
+                else startDestructiveConfirm("delete_environment", env, null,
+                    "Você deseja excluir o ambiente $env?")
+            }
+            "delete_trigger" -> {
+                val env   = a.str("environment", "name")
+                val title = a.str("title")
+                if (env == null) { speakTyped("De qual ambiente devo remover o lembrete?", TtsTone.QUESTION); endVoice() }
+                else {
+                    val q = if (title == null) "Você deseja remover todos os lembretes de $env?"
+                            else "Você deseja remover o lembrete $title?"
+                    startDestructiveConfirm("delete_trigger", env, title, q)
+                }
+            }
+            else -> endVoice()
+        }
+    }
+
+    // Encerra o ciclo de voz atual (helper de legibilidade).
+    private fun endVoice() { CorrelationManager.endOperation("voice"); voiceCorrelationId = null }
+
+    // Fala com prosódia por tipo (REGRA 8). Reusa speak() (grava floating_spoke_at
+    // para a Home não duplicar o TTS). Perguntas ganham '?' e pitch mais alto.
+    private fun speakTyped(text: String, tone: TtsTone) {
+        val engine = tts
+        if (engine != null) {
+            when (tone) {
+                TtsTone.QUESTION -> { engine.setPitch(1.12f); engine.setSpeechRate(0.94f) }
+                TtsTone.CONFIRM  -> { engine.setPitch(1.05f); engine.setSpeechRate(0.95f) }
+                TtsTone.SUCCESS  -> { engine.setPitch(1.08f); engine.setSpeechRate(0.98f) }
+                TtsTone.ERROR    -> { engine.setPitch(1.00f); engine.setSpeechRate(0.95f) }
+                TtsTone.INFO     -> { engine.setPitch(1.05f); engine.setSpeechRate(0.95f) }
+            }
+        }
+        val phrase = if (tone == TtsTone.QUESTION && !text.trimEnd().endsWith("?")) "$text?" else text
+        Logger.debug("tts_phrase_type", feature = "floating_voice", action = "tts",
+            payload = mapOf("tone" to tone.name),
+            correlationId = voiceCorrelationId) // LOG TEMPORÁRIO (Fase 2.2)
+        speak(phrase)
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Fase 1 — guardas, confirmação por voz e exclusão global
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // true se a transcrição não representa fala real: vazia, padrão de relógio
+    // ("00:00", "0:00", "00.00") ou apenas pontuação (sem letra/dígito).
+    // Usada em onResults para encerrar sem chamar o Gemini e sem popup.
+    private fun isInvalidTranscript(text: String?): Boolean {
+        if (text == null) return true
+        val t = text.trim()
+        if (t.isEmpty()) return true
+        if (CLOCK_LIKE_REGEX.matches(t)) return true
+        if (!WORD_CHAR_REGEX.containsMatchIn(t)) return true // só pontuação
+        return false
+    }
+
+    // Interpreta resposta de confirmação: true=sim, false=não, null=ambíguo.
+    // 100% local (sem Gemini). Negativo tem prioridade sobre positivo.
+    private fun parseYesNo(text: String): Boolean? {
+        val t = text.lowercase(java.util.Locale("pt", "BR")).trim()
+        if (NO_WORDS.any { t.contains(it) })  return false
+        if (YES_WORDS.any { t.contains(it) }) return true
+        return null
+    }
+
+    // Arma o estado de confirmação por voz e faz a pergunta.
+    //
+    // Fluxo: grava intent/env/title em SharedPreferences, fala [question] e
+    // orienta o usuário a responder. Encerra o ciclo de voz atual — a resposta
+    // inicia um NOVO ciclo (o usuário segura o botão de novo). A próxima fala é
+    // roteada por onResults para executeVoiceResult como resposta sim/não.
+    // Motivo de não auto-escutar: evita o microfone captar o próprio TTS.
+    private fun startDestructiveConfirm(
+        intent: String, envName: String, title: String?, question: String,
+    ) {
+        val editor = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_VOICE_STATE, VAL_AWAITING_CONFIRM)
+            .putLong("voice_state_set_at", System.currentTimeMillis())
+            .putString("confirm_intent", intent)
+            .putString("confirm_env", envName)
+        if (title != null) editor.putString("confirm_title", title)
+        else               editor.remove("confirm_title")
+        editor.apply()
+
+        Logger.info("voice_confirmation_started", feature = "floating_voice",
+            action = "confirm", payload = mapOf("intent" to intent),
+            correlationId = voiceCorrelationId)
+        // BUG 3 / REGRA 8 — pergunta de confirmação com entonação interrogativa.
+        speakTyped(question, TtsTone.QUESTION)
+        showToast("Segure o botão e responda sim ou não.")
+        // Encerra o ciclo atual; a resposta abrirá um novo ciclo ao segurar o botão.
+        CorrelationManager.endOperation("voice")
+        voiceCorrelationId = null
+    }
+
+    // Executa a operação destrutiva já confirmada por voz. Sempre em IO thread;
+    // fala o resultado na Main. Encerra o ciclo de voz ao final de cada ramo.
+    private fun performConfirmedDestructive(intent: String, envName: String, title: String?) {
+        when (intent) {
+            "delete_environment" -> serviceScope.launch(Dispatchers.IO) {
+                val ok = deleteEnvironmentFromDb(envName)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        Logger.info("command_executed", feature = "floating_voice",
+                            action = "execute", payload = mapOf("command" to "delete_environment"),
+                            correlationId = voiceCorrelationId)
+                        speak("Ambiente $envName removido.")
+                    } else speak("Não encontrei o ambiente $envName.")
+                    CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+                }
+            }
+            // Título nulo → remover todos do ambiente; senão, remover o específico
+            "delete_trigger" -> serviceScope.launch(Dispatchers.IO) {
+                val ok = deleteTriggerFromDb(envName, title)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        Logger.info("command_executed", feature = "floating_voice",
+                            action = "execute", payload = mapOf("command" to "delete_trigger"),
+                            correlationId = voiceCorrelationId)
+                        speak(if (title.isNullOrEmpty())
+                            "Todos os lembretes de $envName foram removidos."
+                        else "Lembrete removido.")
+                    }
+                    CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+                }
+            }
+            "delete_all_triggers" -> serviceScope.launch(Dispatchers.IO) {
+                val ok = deleteTriggerFromDb(envName, null)
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        Logger.info("command_executed", feature = "floating_voice",
+                            action = "execute", payload = mapOf("command" to "delete_all_triggers"),
+                            correlationId = voiceCorrelationId)
+                        speak("Todos os lembretes de $envName foram removidos.")
+                    }
+                    CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+                }
+            }
+            "delete_all_environments" -> serviceScope.launch(Dispatchers.IO) {
+                val count = deleteAllEnvironmentsFromDb()
+                withContext(Dispatchers.Main) {
+                    if (count > 0) {
+                        Logger.info("command_executed", feature = "floating_voice",
+                            action = "execute",
+                            payload = mapOf("command" to "delete_all_environments",
+                                "count" to count.toString()),
+                            correlationId = voiceCorrelationId)
+                        speak("Todos os ambientes foram removidos.")
+                    } else speak("Você ainda não tem nenhum ambiente cadastrado.")
+                    CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+                }
+            }
+            else -> { CorrelationManager.endOperation("voice"); voiceCorrelationId = null }
+        }
+    }
+
+    // Remove TODOS os ambientes e gatilhos do banco. Retorna a quantidade de
+    // ambientes removidos (0 em erro ou banco vazio). Chamado de Dispatchers.IO.
+    // Também limpa geofences nativos e o mapa de nomes do GeofenceReceiver, e
+    // sinaliza needs_refresh para o app atualizar a UI ao voltar ao foreground.
+    private fun deleteAllEnvironmentsFromDb(): Int {
+        val corrId = CorrelationManager.correlationIdFor("voice")
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs", "op" to "delete_all_envs"),
+                correlationId = corrId)
+            return 0
+        }
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) {
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to dbPath, "op" to "delete_all_envs"),
+                correlationId = corrId)
+            return 0
+        }
+        var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            // Coleta os ids ANTES de apagar — necessários para remover geofences
+            val ids = mutableListOf<String>()
+            db.rawQuery("SELECT id FROM environments", null).use { c ->
+                while (c.moveToNext()) ids.add(c.getString(0))
+            }
+            // Apaga gatilhos primeiro (FK), depois os ambientes
+            db.execSQL("DELETE FROM triggers")
+            db.execSQL("DELETE FROM environments")
+            // Geofences exigem main thread; mapa de nomes do receiver é limpo aqui
+            if (ids.isNotEmpty()) mainHandler.post { removeGeofences(ids) }
+            getSharedPreferences(GeofenceReceiver.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().clear().apply()
+            getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("flutter.needs_refresh", true)
+                .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
+                .apply()
+            Logger.info("all_environments_deleted", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = mapOf("count" to ids.size.toString()),
+                correlationId = corrId)
+            ids.size
+        } catch (e: Exception) {
+            Logger.error("sqlite_delete_all_environments_failed", feature = "floating_voice",
+                action = "db_write", durationMs = System.currentTimeMillis() - start,
+                exception = e, correlationId = corrId)
+            logException("command_dispatch", e)
+            0
+        } finally {
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
+        }
+    }
+
+    // Remove uma lista de geofences nativos de uma vez (best-effort). Main thread.
+    private fun removeGeofences(ids: List<String>) {
+        try {
+            LocationServices.getGeofencingClient(this).removeGeofences(ids)
+                .addOnSuccessListener {
+                    Logger.debug("geofences_removed", feature = "floating_voice",
+                        action = "geofence", payload = mapOf("count" to ids.size.toString()))
+                }
+                .addOnFailureListener { e -> logException("geofence_remove", e) }
+        } catch (e: Exception) {
+            logException("geofence_remove", e)
+        }
     }
 
     // Lê nomes de ambientes direto do SQLite — garante nomes exatos no prompt Gemini.
@@ -1968,7 +2683,8 @@ Texto: $transcript""".trimIndent()
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 5_000; readTimeout = 5_000; doOutput = true
-                setRequestProperty("Content-Type",  "application/json")
+                // HOTFIX 2 — charset explícito evita mojibake nos acentos (UTF-8 lido como Latin-1)
+                setRequestProperty("Content-Type",  "application/json; charset=utf-8")
                 setRequestProperty("apikey",        SUPABASE_KEY)
                 setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
                 setRequestProperty("Prefer",        "return=minimal")

@@ -75,7 +75,9 @@ object SupabaseSink : LogSink {
                 doOutput       = true
                 setRequestProperty("apikey",        SUPABASE_KEY)
                 setRequestProperty("Authorization", "Bearer $SUPABASE_KEY")
-                setRequestProperty("Content-Type",  "application/json")
+                // HOTFIX 2 — charset explícito: sem ele o leitor pode interpretar
+                // os bytes UTF-8 como Latin-1, gerando mojibake ("NÃ£o") nos acentos.
+                setRequestProperty("Content-Type",  "application/json; charset=utf-8")
                 setRequestProperty("Prefer",        "return=minimal")
             }
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }

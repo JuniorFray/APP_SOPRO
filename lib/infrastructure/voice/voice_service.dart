@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sopro/core/constants/app_constants.dart';
 import 'package:sopro/infrastructure/logging/core/correlation_manager.dart';
 import 'package:sopro/infrastructure/logging/core/logger.dart';
+import 'package:sopro/infrastructure/voice/execution_plan.dart';
 
 // Intenções de voz que o app sabe executar.
 // Schemas Gemini correspondentes: ver AppConstants.geminiSystemPrompt.
@@ -36,6 +37,9 @@ enum VoiceIntent {
   deleteTrigger,
   // "apaga todos os gatilhos de X" — requer confirmação
   deleteAllTriggers,
+  // "apaga todos os ambientes" / "limpar ambientes" — operação global, requer confirmação
+  // (Fase 1 — assistente inteligente). Não tem environment associado: atinge tudo.
+  deleteAllEnvironments,
   // comando não classificado — fallback para texto livre
   fallback,
 }
@@ -68,6 +72,36 @@ class VoiceResult {
   });
 }
 
+// Fase 2 — resultado estruturado do assistente: resposta natural + plano de ações.
+// Substitui a lógica "1 fala = 1 intent" pelo modelo "1 fala = N ações + fala".
+// [legacyResult] só é preenchido quando o Gemini devolve o schema antigo (intent),
+// garantindo retrocompatibilidade total com a Fase 1.
+class VoicePlanResult {
+  final String transcript;               // texto falado (STT)
+  final String reply;                    // resposta natural para TTS
+  final ExecutionPlan plan;              // ações a executar em sequência
+  final String? followUp;                // pergunta final opcional
+  final Map<String, dynamic> contextUpdates; // atualizações de contexto sugeridas
+  final VoiceResult? legacyResult;       // != null se veio no schema antigo (intent)
+
+  const VoicePlanResult({
+    required this.transcript,
+    required this.reply,
+    required this.plan,
+    this.followUp,
+    this.contextUpdates = const {},
+    this.legacyResult,
+  });
+
+  // Resultado neutro (erro/rede/arquivo vazio) — o caller trata como "nada a fazer".
+  factory VoicePlanResult.empty() =>
+      const VoicePlanResult(transcript: '', reply: '', plan: ExecutionPlan([]));
+
+  // True quando não há ação, nem resposta, nem intent legado — nada para responder.
+  bool get hasNothing =>
+      plan.isEmpty && reply.trim().isEmpty && legacyResult == null;
+}
+
 // Gerencia gravação de áudio e síntese de voz (TTS) on-device.
 // Processamento de intenção via Gemini Audio API (STT + NLU em uma chamada).
 // Fallback para regex local quando Gemini não está disponível.
@@ -90,6 +124,50 @@ class VoiceService {
   StreamSubscription<Amplitude>? _amplitudeSub;
   // Evita disparar auto-stop múltiplas vezes se timers se sobrepuserem
   bool _autoStopFired = false;
+
+  // HOTFIX 1 (Fase 2) — true se alguma amplitude cruzou o limiar de fala durante
+  // a gravação atual. Objetivo: NUNCA enviar áudio sem fala ao Gemini. In-app não
+  // tem STT antes do Gemini (pipeline é áudio→Gemini), então usamos a amplitude já
+  // monitorada para detecção de silêncio como gate. Resetado a cada startRecording.
+  bool _speechDetected = false;
+
+  // Exposto para os callers gate-arem o processamento (processAudio/transcribeAudio)
+  // ANTES de qualquer chamada Gemini quando não houve fala real.
+  bool get speechDetected => _speechDetected;
+
+  // GATE DE ENVIO — leitura do estado do gate adaptativo para a DECISÃO ÚNICA de
+  // enviar (ou não) ao Gemini (home_gate_decision). Apenas getters: NÃO alteram
+  // a calibração, os limiares nem a sensibilidade.
+  int get speechFrames => _speechFrames;
+  double? get noiseFloorDb => _noiseFloorDb;
+  double? get gateThresholdDb =>
+      _noiseFloorDb == null ? null : _noiseFloorDb! + _speechMarginDb;
+  bool get noiseCalibrated => _noiseFloorDb != null;
+  // Mínimo de frames sustentados exigido — exposto para o gate de decisão.
+  static const int minSpeechFramesRequired = _minSpeechFrames;
+
+  // GATE ADAPTATIVO (noise floor) — substitui os limiares FIXOS. Motivo: cada
+  // microfone tem sensibilidade diferente, então -30/-24 dBFS fixos bloqueavam
+  // fala baixa/sussurro em uns aparelhos e vazavam ruído em outros. Agora medimos
+  // o RUÍDO AMBIENTE nos primeiros ~500 ms e detectamos fala só quando a energia
+  // supera noiseFloor + margem (estilo Alexa/Google). Fala continua exigindo
+  // SUSTENTAÇÃO (nº de frames) + um PICO — mas RELATIVOS ao ruído medido.
+  int _speechFrames = 0;         // frames acima do limiar adaptativo
+  double _maxAmplitude = -160.0; // pico de amplitude da sessão (dBFS)
+  int _warmupFrames = 0;         // frames iniciais ignorados (transiente do mic)
+  int _calibFrames = 0;          // frames já usados p/ medir o ruído ambiente
+  double _noiseAccumDb = 0.0;    // soma das energias na janela de calibração
+  double? _noiseFloorDb;         // média do ruído ambiente (null até calibrar)
+  int _sampleLogCounter = 0;     // throttle do log temporário voice_gate_sample
+  static const int    _warmupFrameCount = 2;   // ~200 ms — paridade c/ delay do Overlay
+  static const int    _calibFrameCount = 5;    // ~500 ms (frames de 100 ms)
+  static const double _speechMarginDb  = 8.0;  // fala = ruído + 8 dB (INALTERADO)
+  static const double _peakMarginDb    = 12.0; // pico exigido = ruído + 12 dB (INALTERADO)
+  static const int    _minSpeechFrames = 3;    // ≈ 300 ms de fala sustentada
+  // Piso do noiseFloor (paridade c/ MIN_NOISE_FLOOR do Overlay). Impede que um
+  // vale de silêncio degenere o threshold. Equivale a ~-41 dBFS do Overlay; -45
+  // é um pouco mais permissivo p/ não bloquear sussurro em sala silenciosa.
+  static const double _minNoiseFloorDb = -45.0;
 
   // O FAB escuta este stream e chama _stopAndProcess() ao receber o evento.
   Stream<void> get onAutoStop => _autoStopController.stream;
@@ -125,9 +203,14 @@ class VoiceService {
   // Inicia gravação em arquivo temporário (AAC/M4A, 8 kHz, 12 kbps).
   // Qualidade de voz é suficiente para STT; tamanho resultante ~1 KB/s
   // (alvo: <15 KB para comando de 10 s, vs 244 KB anteriores a 64 kbps).
-  // Encerra automaticamente após 10 s (maxDuration) ou 1500 ms de silêncio.
+  //
+  // Sprint Unificação da Captura: [holdToTalk] = true faz o DEDO ser o único fim
+  // de gravação — desliga o VAD (timer de silêncio) e o teto de duração automático.
+  // Enquanto o botão estiver pressionado o áudio continua sendo gravado, mesmo com
+  // silêncio ou pausas (Regras 1-4). O modo padrão (false) mantém o auto-stop por
+  // silêncio/tempo usado pelos campos de formulário que transcrevem trechos curtos.
   // Retorna true se a gravação iniciou com sucesso.
-  Future<bool> startRecording() async {
+  Future<bool> startRecording({bool holdToTalk = false}) async {
     try {
       // Verifica permissão antes de iniciar
       if (!await _recorder.hasPermission()) {
@@ -142,6 +225,14 @@ class VoiceService {
       if (await prev.exists()) await prev.delete();
 
       _autoStopFired = false;
+      _speechDetected = false; // HOTFIX 1 — zera detecção de fala da sessão anterior
+      _speechFrames = 0;       // zera contagem/pico da sessão
+      _maxAmplitude = -160.0;
+      _warmupFrames = 0;       // GATE ADAPTATIVO — reinicia warmup/calibração
+      _calibFrames = 0;
+      _noiseAccumDb = 0.0;
+      _noiseFloorDb = null;
+      _sampleLogCounter = 0;
 
       await _recorder.start(
         const RecordConfig(
@@ -152,30 +243,86 @@ class VoiceService {
         path: path,
       );
 
-      // Timer de duração máxima: 10 s
+      // Teto de duração automático: SOMENTE fora do modo hold-to-talk. No assistente
+      // (holdToTalk) o dedo controla o fim — nenhum timer interrompe a gravação.
       _maxDurationTimer?.cancel();
-      _maxDurationTimer = Timer(
-        const Duration(seconds: 10),
-        () => _fireAutoStop('max_duration'),
-      );
+      if (!holdToTalk) {
+        _maxDurationTimer = Timer(
+          const Duration(seconds: 10),
+          () => _fireAutoStop('max_duration'),
+        );
+      }
 
-      // Detecção de silêncio: amplitude abaixo de -35 dBFS por 1500 ms → auto-stop.
-      // Separa silêncio genuíno (fim da fala) de pausas curtas naturais.
+      // Monitora amplitude sempre (marca _speechDetected para o gate da Regra 9),
+      // mas só ARMA o timer de silêncio (VAD) fora do modo hold-to-talk. Em
+      // hold-to-talk, silêncio/pausas NUNCA encerram a gravação.
       _silenceTimer?.cancel();
       _amplitudeSub?.cancel();
       _amplitudeSub = _recorder
           .onAmplitudeChanged(const Duration(milliseconds: 100))
           .listen((amp) {
-        if (amp.current < -35.0) {
-          // Silêncio detectado — inicia (ou mantém) o timer de silêncio
-          _silenceTimer ??= Timer(
-            const Duration(milliseconds: 1500),
-            () => _fireAutoStop('silence'),
-          );
+        final cur = amp.current;
+        if (cur > _maxAmplitude) _maxAmplitude = cur;
+
+        // VAD de silêncio (só campos de formulário, !holdToTalk) — limiar -35 dBFS
+        // MANTIDO para não regredir a auto-parada por silêncio dos trechos curtos.
+        if (cur < -35.0) {
+          if (!holdToTalk) {
+            _silenceTimer ??= Timer(
+              const Duration(milliseconds: 1500),
+              () => _fireAutoStop('silence'),
+            );
+          }
         } else {
-          // Som detectado — cancela o timer de silêncio (não é fim de fala)
           _silenceTimer?.cancel();
           _silenceTimer = null;
+        }
+
+        // GATE ADAPTATIVO — ignora os primeiros frames (transiente de ativação do
+        // mic). Paridade com o atraso de 250 ms do Overlay: sem isto, o vale inicial
+        // puxa o noiseFloor para baixo e degenera o threshold (causa do falso positivo).
+        if (_warmupFrames < _warmupFrameCount) {
+          _warmupFrames++;
+          return;
+        }
+
+        // Janela de calibração (~500 ms): mede o ruído ambiente e AINDA NÃO detecta fala.
+        if (_calibFrames < _calibFrameCount) {
+          _calibFrames++;
+          _noiseAccumDb += cur;
+          if (_calibFrames == _calibFrameCount) {
+            var floor = _noiseAccumDb / _calibFrameCount;
+            // Piso (paridade Overlay): noiseFloor nunca abaixo de _minNoiseFloorDb,
+            // senão o threshold cai sob o ruído do próprio silêncio e tudo passa.
+            if (floor < _minNoiseFloorDb) floor = _minNoiseFloorDb;
+            _noiseFloorDb = floor;
+            // LOG TEMPORÁRIO (calibração) — remover após ajustar as margens.
+            Logger.info('voice_noise_floor', payload: {
+              'surface':     holdToTalk ? 'home' : 'home_field',
+              'noise_floor': _noiseFloorDb,
+              'threshold':   _noiseFloorDb! + _speechMarginDb,
+            }, feature: 'voice', action: 'gate');
+          }
+          return; // durante a calibração não há detecção de fala
+        }
+
+        // Pós-calibração: fala quando a energia supera o ruído + margem.
+        final floor     = _noiseFloorDb!;
+        final threshold = floor + _speechMarginDb;
+        // LOG TEMPORÁRIO (calibração) — amostra 1/5 frames p/ não inundar o sink.
+        if (_sampleLogCounter++ % 5 == 0) {
+          Logger.info('voice_gate_sample', payload: {
+            'surface':     holdToTalk ? 'home' : 'home_field',
+            'current':     cur,
+            'noise_floor': floor,
+            'delta':       cur - floor,
+          }, feature: 'voice', action: 'gate');
+        }
+        if (cur > threshold) _speechFrames++;
+        // Exige fala sustentada + um pico RELATIVO ao ruído (não valor fixo).
+        if (_speechFrames >= _minSpeechFrames &&
+            _maxAmplitude >= floor + _peakMarginDb) {
+          _speechDetected = true;
         }
       });
 
@@ -331,6 +478,192 @@ class VoiceService {
     return result.transcript.isNotEmpty ? result.transcript : null;
   }
 
+  // BUG 2 — transcrição PURA para respostas de confirmação (sim/não).
+  // Usa prompt MÍNIMO (só transcrever, sem NLU/plano) para NUNCA classificar
+  // intenção durante uma confirmação. A decisão continua 100% local em
+  // VoiceService.parseYesNo. O app não tem STT on-device, então a transcrição
+  // ainda passa pelo Gemini — mas sem o prompt pesado de classificação.
+  // Retorna null em erro/rede/áudio vazio (caller trata como "não ouvi").
+  Future<String?> transcribeOnly(String filePath) async {
+    final file = File(filePath);
+    if (!await file.exists()) return null;
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) return null;
+    if (AppConstants.geminiApiKey.isEmpty) return null;
+    const prompt = 'Transcreva EXATAMENTE o audio em pt-BR. '
+        'Responda SO com JSON: {"transcricao":"texto falado"}. Sem markdown.';
+    final (raw, status) = await _sendAudioRaw(base64Encode(bytes), prompt);
+    if (status != 200 || raw == null) return null;
+    try {
+      final env = jsonDecode(raw) as Map<String, dynamic>;
+      final text = (((env['candidates'] as List?)?.firstOrNull
+              as Map?)?['content'] as Map?)?['parts']?[0]?['text'] as String?;
+      if (text == null) return null;
+      final parsed = jsonDecode(_stripMarkdown(text)) as Map<String, dynamic>;
+      final t = (parsed['transcricao'] as String?) ??
+          (parsed['transcript'] as String?);
+      return (t != null && t.trim().isNotEmpty) ? t.trim() : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── Fase 2 — assistente: áudio → plano de ações + resposta natural ──────────
+
+  // Envia o áudio ao Gemini com o prompt de ASSISTENTE e devolve um VoicePlanResult
+  // (reply + actions + follow_up + context_updates). MANTÉM 1 chamada Gemini por
+  // interação (STT + estruturação juntos). [contextSummary] é o trecho de memória
+  // de conversa injetado no prompt para resolver referências implícitas.
+  // Erros/rede/arquivo vazio → VoicePlanResult.empty() (caller decide o feedback).
+  Future<VoicePlanResult> processAudioAsPlan(
+    String filePath, {
+    List<String> existingEnvironments = const [],
+    // Fase 2.1 — IDs paralelos a existingEnvironments (mesma ordem). Regra #1 da
+    // sprint: enviar nome + ID ao Gemini para ele decidir reutilizar vs criar.
+    List<String> existingEnvironmentIds = const [],
+    String contextSummary = '',
+  }) async {
+    final file = File(filePath);
+    final correlationId = CorrelationManager.beginOperation('voice');
+    try {
+      if (!await file.exists()) return VoicePlanResult.empty();
+      final audioBytes = await file.readAsBytes();
+      if (audioBytes.isEmpty) return VoicePlanResult.empty();
+      if (AppConstants.geminiApiKey.isEmpty) return VoicePlanResult.empty();
+
+      final audioBase64 = base64Encode(audioBytes);
+      // Prompt = assistente + ambientes existentes (nome+ID) + contexto de conversa.
+      // Fase 2.1: usa _buildAssistantEnvContext (foco em reutilizar) em vez do
+      // _buildEnvContext generico do fluxo antigo.
+      final prompt = AppConstants.geminiAssistantPrompt +
+          _buildAssistantEnvContext(existingEnvironments, existingEnvironmentIds) +
+          (contextSummary.isNotEmpty ? '\n$contextSummary' : '');
+
+      final sw = Stopwatch()..start();
+      final (raw, status) = await _sendAudioRaw(audioBase64, prompt);
+      Logger.info('voice_plan_debug',
+          payload: {
+            'gemini_http': status,
+            'gemini_duration_ms': sw.elapsedMilliseconds,
+            'raw_len': raw?.length ?? 0,
+          },
+          feature: 'voice', action: 'plan',
+          correlationId: correlationId, durationMs: sw.elapsedMilliseconds);
+
+      if (status != 200 || raw == null) return VoicePlanResult.empty();
+      return _parsePlanResponse(raw);
+    } catch (e, st) {
+      Logger.error('voice_plan_failed',
+          exception: e, stackTrace: st,
+          feature: 'voice', action: 'plan', correlationId: correlationId);
+      return VoicePlanResult.empty();
+    } finally {
+      CorrelationManager.endOperation('voice');
+    }
+  }
+
+  // POST do áudio ao Gemini com um prompt arbitrário; devolve (rawJson, httpStatus).
+  // maxOutputTokens elevado (2048) para acomodar planos com várias ações sem
+  // truncar. temperature 0.2 permite pequena variação natural no campo reply.
+  // CORRECAO 1 (herdada): lê todos os bytes antes de decodificar (evita truncamento).
+  Future<(String?, int?)> _sendAudioRaw(String audioBase64, String prompt) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 30);
+    try {
+      final uri = Uri.parse(
+        '${AppConstants.geminiEndpoint}?key=${AppConstants.geminiApiKey}',
+      );
+      final request = await client.postUrl(uri);
+      request.headers.contentType = ContentType.json;
+
+      final body = jsonEncode({
+        'contents': [
+          {
+            'parts': [
+              {'text': prompt},
+              {'inline_data': {'mime_type': 'audio/m4a', 'data': audioBase64}},
+            ],
+          },
+        ],
+        'generationConfig': {'temperature': 0.2, 'maxOutputTokens': 2048},
+      });
+
+      final bodyBytes = utf8.encode(body);
+      request.contentLength = bodyBytes.length;
+      request.add(bodyBytes);
+
+      final response   = await request.close();
+      final httpStatus = response.statusCode;
+      final respBytes  = await consolidateHttpClientResponseBytes(response);
+      final raw        = utf8.decode(respBytes);
+
+      if (httpStatus != 200) {
+        debugPrint('[VoiceService] plan HTTP $httpStatus: $raw');
+        return (null, httpStatus);
+      }
+      return (raw, httpStatus);
+    } finally {
+      client.close();
+    }
+  }
+
+  // Extrai o texto do envelope Gemini e o converte em VoicePlanResult.
+  // Casos especiais:
+  //   - texto vazio / JSON inválido → VoicePlanResult.empty();
+  //   - resposta no schema antigo (intent, sem actions) → legacyResult preenchido
+  //     via _mapGeminiResponse (retrocompatibilidade com a Fase 1).
+  VoicePlanResult _parsePlanResponse(String raw) {
+    final envelope = jsonDecode(raw) as Map<String, dynamic>;
+    final text = (((envelope['candidates'] as List?)?.firstOrNull
+            as Map?)?['content'] as Map?)?['parts']
+        ?[0]?['text'] as String?;
+    if (text == null || text.trim().isEmpty) return VoicePlanResult.empty();
+
+    final clean = _stripMarkdown(text);
+    final Map<String, dynamic> parsed;
+    try {
+      parsed = jsonDecode(clean) as Map<String, dynamic>;
+    } catch (e, st) {
+      Logger.warn('gemini_plan_json_invalid',
+          payload: {'preview': clean.length > 200 ? clean.substring(0, 200) : clean},
+          exception: e, stackTrace: st, feature: 'voice', action: 'plan_parse');
+      return VoicePlanResult.empty();
+    }
+
+    final transcript = (parsed['transcricao'] as String?) ??
+        (parsed['transcript'] as String?) ?? '';
+    final reply = (parsed['reply'] as String?) ?? '';
+
+    // follow_up "null"/vazio é normalizado para null (não fala pergunta vazia)
+    var followUp = parsed['follow_up_question'] as String?;
+    if (followUp != null &&
+        (followUp.trim().isEmpty || followUp.toLowerCase() == 'null')) {
+      followUp = null;
+    }
+
+    final ctxUpdates = (parsed['context_updates'] is Map)
+        ? Map<String, dynamic>.from(parsed['context_updates'] as Map)
+        : <String, dynamic>{};
+
+    final actionsRaw = parsed['actions'];
+    final plan = ExecutionPlan.fromJsonList(actionsRaw is List ? actionsRaw : null);
+
+    // Retrocompatibilidade: schema antigo (intent) sem actions → VoiceResult.
+    VoiceResult? legacy;
+    if (plan.isEmpty && parsed['intent'] != null) {
+      legacy = _mapGeminiResponse(parsed);
+    }
+
+    return VoicePlanResult(
+      transcript:     transcript,
+      reply:          reply,
+      plan:           plan,
+      followUp:       followUp,
+      contextUpdates: ctxUpdates,
+      legacyResult:   legacy,
+    );
+  }
+
   // Processa TEXTO (transcrição corrigida manualmente) via Gemini ou regex.
   // existingEnvironments: injetado no prompt para match exato com banco.
   // Usado pelo botão "Re-analisar" no fallback sheet.
@@ -480,6 +813,27 @@ class VoiceService {
     return '\nAmbientes existentes no banco do usuario: ${envs.join(', ')}.'
         '\nRetorne o nome do ambiente EXATAMENTE como aparece na lista '
         '(sem alterar maiusculas, minusculas ou acentos).';
+  }
+
+  // Fase 2.1 — contexto de ambientes para o ASSISTENTE (plano de acoes).
+  // Envia NOME + ID de cada ambiente ja cadastrado para o Gemini REUTILIZAR
+  // (gerar so create_trigger com o nome exato) em vez de recriar. Regra #1 da
+  // sprint. Os IDs sao apenas referencia de identidade: as actions continuam
+  // carregando o NOME exato (o executor casa por nome via _matchEnv).
+  // Lista vazia -> instrui explicitamente que todo local citado e novo.
+  static String _buildAssistantEnvContext(List<String> names, List<String> ids) {
+    if (names.isEmpty) {
+      return '\nAmbientes existentes: nenhum. Todo local citado e novo '
+          '(create_environment antes do create_trigger).';
+    }
+    final buf = StringBuffer('\nAmbientes existentes (reutilize pelo nome EXATO; '
+        'nao recrie os que ja estao aqui):');
+    for (var i = 0; i < names.length; i++) {
+      final id = i < ids.length ? ids[i] : '';
+      buf.write('\n- ${names[i]}${id.isNotEmpty ? ' [id:$id]' : ''}');
+    }
+    buf.write('\nSe o local dito NAO estiver nesta lista, e novo.');
+    return buf.toString();
   }
 
   // Extrai o texto gerado do envelope Gemini e o converte em VoiceResult.
@@ -665,6 +1019,15 @@ class VoiceService {
           environmentName: json['environment'] as String?,
         );
 
+      case 'delete_all_environments':
+        // {"intent":"delete_all_environments","transcricao":"texto falado"}
+        // Operação global — não carrega environment; a confirmação por voz e a
+        // contagem de ambientes são resolvidas na camada de UI (home_screen).
+        return VoiceResult(
+          intent:     VoiceIntent.deleteAllEnvironments,
+          transcript: transcricao,
+        );
+
       default: // 'unknown', 'nao_entendido' e qualquer não reconhecido
         return VoiceResult(
           intent:     VoiceIntent.fallback,
@@ -700,6 +1063,60 @@ class VoiceService {
 
   // Para a fala em andamento
   Future<void> stopSpeaking() async => _tts.stop();
+
+  // ── Guardas de Fase 1 (assistente inteligente) ──────────────────────────────
+
+  // Regex que reconhece transcrições "de relógio" que o STT às vezes devolve
+  // quando o usuário não fala nada (ex.: "00:00", "0:00", "00.00", "0.00").
+  // São tratadas como ausência de fala, nunca como comando.
+  static final _clockLikeRegex = RegExp(r'^\s*\d{1,2}[:.]\d{2}\s*$');
+
+  // Regex que verifica se a string contém ao menos uma letra ou dígito "de fala".
+  // Usada para rejeitar transcrições compostas apenas de pontuação/espaços.
+  static final _hasWordCharRegex = RegExp(r'[\p{L}\p{N}]', unicode: true);
+
+  // Decide se uma transcrição deve encerrar o fluxo por "não ouvi você".
+  //
+  // Objetivo: evitar chamar o Gemini (e evitar abrir qualquer sheet) quando não
+  // houve fala real. Retorna true para:
+  //   - string vazia ou só espaços;
+  //   - padrões de relógio ("00:00", "0:00", "00.00");
+  //   - conteúdo apenas de pontuação (sem letra/dígito).
+  // O retorno antecipado garante custo zero de rede nesses casos.
+  static bool isInvalidTranscript(String? text) {
+    if (text == null) return true;
+    final t = text.trim();
+    if (t.isEmpty) return true;
+    if (_clockLikeRegex.hasMatch(t)) return true;
+    if (!_hasWordCharRegex.hasMatch(t)) return true; // só pontuação
+    return false;
+  }
+
+  // Interpreta uma resposta falada de confirmação como sim/não.
+  //
+  // Fluxo: usado pelo fluxo reutilizável de confirmação por voz. Roda 100% local
+  // (regex), portanto NÃO consome chamadas Gemini adicionais além da transcrição.
+  // Retorna:
+  //   true  → afirmativo (sim, pode, claro, isso, confirmar, quero, manda...);
+  //   false → negativo   (não, nao, cancela, deixa, para, negativo...);
+  //   null  → ambíguo    (a UI decide re-perguntar ou cancelar por segurança).
+  static bool? parseYesNo(String? text) {
+    if (text == null) return null;
+    final t = text.toLowerCase().trim();
+    if (t.isEmpty) return null;
+    const yes = ['sim', 'pode', 'claro', 'isso', 'confirmar', 'confirma',
+      'quero', 'manda', 'positivo', 'com certeza', 'certo', 'ok', 'okay',
+      'aha', 'uhum', 'bora', 'vai', 'exato', 'exatamente', 'afirmativo'];
+    const no  = ['não', 'nao', 'cancela', 'cancelar', 'deixa', 'para',
+      'negativo', 'nunca', 'jamais', 'nada', 'esquece', 'melhor não',
+      'melhor nao'];
+    // Negativo tem prioridade: "não pode" deve resolver como não.
+    final hasNo  = no.any((w) => t.contains(w));
+    if (hasNo) return false;
+    final hasYes = yes.any((w) => t.contains(w));
+    if (hasYes) return true;
+    return null;
+  }
 
   // ── Regex fallback ────────────────────────────────────────────────────────
 

@@ -577,6 +577,8 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
       if (!mounted) return;
       setRecording(false);
       if (path == null) return;
+      // HOTFIX 1 — sem fala detectada, não chama o Gemini (evita transcrição vazia)
+      if (!service.speechDetected) return;
       final transcript = await service.transcribeAudio(path);
       if (!mounted || transcript == null || transcript.isEmpty) return;
       setState(() {

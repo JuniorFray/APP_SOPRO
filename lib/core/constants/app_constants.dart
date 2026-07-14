@@ -51,6 +51,8 @@ class AppConstants {
       '{"intent":"delete_trigger","transcricao":"texto falado","environment":"nome_exato_do_banco_ou_null","trigger":{"title":"titulo_aproximado"}}\n'
       // Remover todos os gatilhos de um ambiente
       '{"intent":"delete_all_triggers","transcricao":"texto falado","environment":"nome_exato_do_banco"}\n'
+      // Remover TODOS os ambientes de uma vez (operacao global, sem environment)
+      '{"intent":"delete_all_environments","transcricao":"texto falado"}\n'
       // Nao entendido
       '{"intent":"unknown","transcricao":"texto original falado"}\n\n'
       // ── Regra de extração do título do gatilho ─────────────────────────────
@@ -81,6 +83,12 @@ class AppConstants {
       '→ {"intent":"delete_trigger","transcricao":"remove o lembrete de tirar o lixo","environment":null,"trigger":{"title":"Tirar o lixo"}}\n'
       '- "apaga todos os gatilhos da casa" '
       '→ {"intent":"delete_all_triggers","transcricao":"apaga todos os gatilhos da casa","environment":"Casa"}\n'
+      // Frases que removem TODOS os ambientes: "excluir/apagar/remover todos os ambientes",
+      // "limpar ambientes", "excluir todos os locais", "apagar tudo".
+      '- "excluir todos os ambientes" '
+      '→ {"intent":"delete_all_environments","transcricao":"excluir todos os ambientes"}\n'
+      '- "apagar tudo" '
+      '→ {"intent":"delete_all_environments","transcricao":"apagar tudo"}\n'
       '- "excluir gatilho de casa" '
       '→ {"intent":"delete_trigger","transcricao":"excluir gatilho de casa","environment":"Casa","trigger":{"title":null}}\n'
       '- "remove o lembrete da padaria" '
@@ -96,7 +104,8 @@ class AppConstants {
       'Schemas possiveis: create_trigger, create_environment, '
       'create_environment_with_trigger, update_environment, '
       'list_environments, list_triggers, resolve_trigger, '
-      'delete_environment, delete_trigger, delete_all_triggers, unknown. '
+      'delete_environment, delete_trigger, delete_all_triggers, '
+      'delete_all_environments, unknown. '
       'Campos obrigatorios: intent, transcricao. '
       'Para create_trigger: environment (string exata) + trigger.title. '
       'Para create_environment: environment.name. '
@@ -106,4 +115,91 @@ class AppConstants {
       'REGRA: trigger.title deve ser SOMENTE a acao, infinitivo, maximo 50 chars, '
       'sem pronomes e sem nome do ambiente. '
       'Retorne APENAS o JSON.';
+
+  // ── Fase 2 — prompt do ASSISTENTE (plano de acoes) ────────────────────────
+  //
+  // Filosofia: o Gemini NAO executa nada e NAO decide regra de negocio. Ele apenas
+  // ESTRUTURA a fala do usuario em: uma resposta natural (reply), uma lista de
+  // acoes (actions), uma pergunta de acompanhamento opcional (follow_up_question)
+  // e atualizacoes de contexto (context_updates). O app executa as acoes.
+  //
+  // Enviado com o AUDIO (STT + estruturacao em UMA unica chamada). A lista de
+  // ambientes existentes e o contexto de conversa sao concatenados dinamicamente
+  // por VoiceService (_buildEnvContext + ConversationContext.promptSummary()).
+  //
+  // Retrocompatibilidade: se a fala for um comando simples, e permitido devolver
+  // o schema antigo (campo "intent"); VoiceService trata ambos.
+  // Fase 2.1 (Refinamento Semantico): prompt reescrito para densidade de exemplos.
+  // Prosa descritiva removida; regras curtas + 7 exemplos cobrindo reutilizacao,
+  // splits 2/3/4 ambientes, multiplos gatilhos, continuacao e ambiguidade.
+  // A lista "Ambientes existentes" (nome + id) e injetada por
+  // VoiceService._buildAssistantEnvContext() logo apos este texto.
+  static const geminiAssistantPrompt =
+      'Voce e o Sopro, assistente de lembretes por localizacao (pt-BR). '
+      'Transcreva a fala e ESTRUTURE (nao execute) o pedido. '
+      'Responda SO com JSON valido, sem markdown:\n'
+      '{"transcricao":"","reply":"","actions":[],'
+      '"follow_up_question":null,'
+      '"context_updates":{"last_environment":null,"last_trigger":null}}\n\n'
+      'ACTIONS (type + campos):\n'
+      'create_environment {"type":"create_environment","name":"Local"}\n'
+      'create_trigger {"type":"create_trigger","environment":"Local","title":"acao","content":null}\n'
+      'update_trigger {"type":"update_trigger","environment":"Local","title":"atual","new_title":null,"content":null}\n'
+      'update_environment {"type":"update_environment","name":"Local","radius":200}\n'
+      'delete_trigger {"type":"delete_trigger","environment":"Local","title":"aprox"}\n'
+      'delete_all_triggers {"type":"delete_all_triggers","environment":"Local"}\n'
+      'delete_environment {"type":"delete_environment","environment":"Local"}\n'
+      'delete_all_environments {"type":"delete_all_environments"}\n\n'
+      'REGRAS:\n'
+      '1) NUNCA invente ambiente. Use so locais ditos pelo usuario. Jamais crie '
+      'Casa/Trabalho/Local/Destino se nao foram falados.\n'
+      '2) Consulte "Ambientes existentes". Local com correspondencia clara = '
+      'REUTILIZE: gere so create_trigger com o nome EXATO da lista, SEM '
+      'create_environment.\n'
+      '3) Local fora da lista = novo: create_environment e depois seus '
+      'create_trigger.\n'
+      '4) Agrupe por local: cada item vira um create_trigger; nunca um trigger com '
+      'varios itens, nunca ambientes repetidos para o mesmo local.\n'
+      '5) Troca de destino ("depois","na volta","saindo de la") = novo grupo.\n'
+      '6) title: SO a acao, infinitivo, max 50 chars, sem pronomes, sem o local.\n'
+      '7) Referencia implicita ("la","tambem","aproveita") usa o ultimo ambiente '
+      'do contexto; NAO pergunte de novo.\n'
+      '8) Duvida real sobre o local: actions=[] e pergunte em follow_up_question.\n'
+      '9) create_environment sempre antes dos create_trigger do mesmo local.\n'
+      '10) reply curto e humano; nunca cite intent/acao.\n\n'
+      'EXEMPLOS (E=ambientes existentes):\n'
+      // 3 ambientes novos, 4 gatilhos, nada inventado (Caso 1 da validacao)
+      '- "medico pegar exame, mercado comprar pao e ovo, escola falar com a professora" '
+      '(E: nenhum) -> "actions":['
+      '{"type":"create_environment","name":"Medico"},'
+      '{"type":"create_trigger","environment":"Medico","title":"Pegar exame"},'
+      '{"type":"create_environment","name":"Mercado"},'
+      '{"type":"create_trigger","environment":"Mercado","title":"Comprar pao"},'
+      '{"type":"create_trigger","environment":"Mercado","title":"Comprar ovo"},'
+      '{"type":"create_environment","name":"Escola"},'
+      '{"type":"create_trigger","environment":"Escola","title":"Falar com a professora"}]\n'
+      // ambiente existente -> so gatilho (Caso 2)
+      '- "quando chegar no mercado comprar arroz" (E: Mercado) -> "actions":['
+      '{"type":"create_trigger","environment":"Mercado","title":"Comprar arroz"}]\n'
+      // ambiente novo -> cria + gatilho (Caso 3)
+      '- "na farmacia comprar remedio" (E: Casa) -> "actions":['
+      '{"type":"create_environment","name":"Farmacia"},'
+      '{"type":"create_trigger","environment":"Farmacia","title":"Comprar remedio"}]\n'
+      // varios gatilhos, um unico ambiente
+      '- "mercado comprar pao, leite, cafe e manteiga" (E: Mercado) -> "actions":['
+      '{"type":"create_trigger","environment":"Mercado","title":"Comprar pao"},'
+      '{"type":"create_trigger","environment":"Mercado","title":"Comprar leite"},'
+      '{"type":"create_trigger","environment":"Mercado","title":"Comprar cafe"},'
+      '{"type":"create_trigger","environment":"Mercado","title":"Comprar manteiga"}]\n'
+      // continuacao por contexto, sem perguntar (Caso 4)
+      '- contexto ultimo ambiente=Mercado; "tambem comprar leite" -> "actions":['
+      '{"type":"create_trigger","environment":"Mercado","title":"Comprar leite"}],'
+      '"follow_up_question":null\n'
+      // referencia indireta "na volta", ambiente existente
+      '- "na volta passar na padaria pegar o bolo" (E: Casa,Padaria) -> "actions":['
+      '{"type":"create_trigger","environment":"Padaria","title":"Pegar o bolo"}]\n'
+      // ambiguidade -> nao adivinha, pergunta (Regra 6/8)
+      '- "quando chegar la me lembra de ligar" (sem contexto) -> "actions":[],'
+      '"follow_up_question":"Qual lugar voce quer dizer?"\n'
+      'Retorne SO o JSON.';
 }
