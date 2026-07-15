@@ -33,6 +33,10 @@ class GeocodingResult {
   // consumidor depende deles ainda (foundation) — o displayName segue autoritativo.
   final String name;        // Nome do estabelecimento/local ("Assaí Atacadista")
   final String address;     // Logradouro + número ("Av. Kennedy, 1234")
+  // Bairro / distrito / suburb (Photon `properties.district` = "city district or
+  // suburb"). Discriminador de local mais fino que a cidade — é ele que casa o
+  // locationHint do QueryNormalizer ("Gonzaga"). Vazio quando a fonte não informa.
+  final String district;
   final String city;        // Município
   final String state;       // UF / estado
   final String country;     // País
@@ -53,6 +57,7 @@ class GeocodingResult {
     this.hasNumber = false,
     this.name = '',
     this.address = '',
+    this.district = '',
     this.city = '',
     this.state = '',
     this.country = '',
@@ -70,6 +75,7 @@ class GeocodingResult {
         hasNumber: hasNumber,
         name: name,
         address: address,
+        district: district,
         city: city,
         state: state,
         country: country,

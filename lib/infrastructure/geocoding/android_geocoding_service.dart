@@ -34,6 +34,14 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // Photon location_bias_scale (0.0–1.0). Peso da proximidade sobre a prominência.
   static const _locationBiasScale = '0.5';
 
+  // Zoom da location bias no Stage 2 (Photon `zoom`, default 12). 16 ≈ nível de
+  // bairro: raio pequeno em torno do ponto do locationHint resolvido no Stage 1.
+  static const _neighborhoodZoom = '16';
+
+  // Layers de LUGAR usados no Stage 1 (resolver o bairro/cidade do locationHint).
+  // Sem osm_tag → busca administrativa pura, nunca POIs.
+  static const _placeLayers = ['district', 'locality', 'city', 'county', 'state'];
+
   final GeocodingCacheDao _cacheDao;
 
   AndroidGeocodingService(this._cacheDao);
@@ -99,8 +107,15 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     final List<GeocodingResult> raw;
     switch (strategy.provider) {
       case SearchProvider.photon:
-        raw = await _searchPhoton(query, key, constraints,
-            userLat: userLat, userLon: userLon);
+        // Busca em DOIS ESTÁGIOS só quando há locationHint (estabelecimento
+        // qualificado por bairro). Sem hint → caminho simples de sempre.
+        if (normalized.locationHints.isNotEmpty) {
+          raw = await _twoStageSearch(
+              normalized, constraints, key, userLat, userLon);
+        } else {
+          raw = await _searchPhoton(query, key, constraints,
+              userLat: userLat, userLon: userLon);
+        }
       case SearchProvider.geocoder:
         raw = await _searchGeocoderThenPhoton(
             query, key, constraints, userLat, userLon);
@@ -154,6 +169,17 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       categoryHint: normalized.categoryHint,
     );
     final ranked = rr.orderedCandidates;
+    // TEMP remover após validação.
+    if (normalized.locationHints.isNotEmpty) {
+      final hints = normalized.locationHints.map((h) => h.toLowerCase()).toList();
+      for (final r in ranked) {
+        final d = r.district.toLowerCase();
+        Logger.debug('district_match', payload: {
+          'candidate': r.name.isNotEmpty ? r.name : r.displayName.split('\n').first,
+          'matched':   d.isNotEmpty && hints.any((h) => d.contains(h)),
+        }, feature: 'geocoding', action: 'district_match');
+      }
+    }
     // TEMP remover após validação do Ranker.
     Logger.debug('ranking_result', payload: {
       'query': normalized.query,
@@ -167,6 +193,90 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       'auto_selected': rr.confidence == LocationConfidence.high,
     }, feature: 'geocoding', action: 'rank');
     return ranked;
+  }
+
+  // ── Busca em dois estágios (estabelecimento + bairro) ─────────────────────
+  // Só chamada quando normalized.locationHints não é vazio. Stage 1 resolve o
+  // bairro/cidade do hint em coordenadas; Stage 2 busca a MARCA (sem o hint no
+  // q) com viés geográfico real (lat/lon do Stage 1 + zoom de bairro). Se o
+  // Stage 1 não resolver, cai no comportamento antigo (texto livre no q).
+  Future<List<GeocodingResult>> _twoStageSearch(
+      NormalizedQuery normalized, SearchConstraints c, String key,
+      double userLat, double userLon) async {
+    // TEMP remover após validação.
+    Logger.debug('two_stage_search_started', payload: {
+      'brand':        normalized.brandHint,
+      'locationHint': normalized.locationHints,
+    }, feature: 'geocoding', action: 'two_stage_start');
+
+    // Stage 1 — resolve o locationHint num lugar administrativo real.
+    final place =
+        await _resolveLocationHint(normalized.locationHints, c.countryCode);
+    if (place == null) {
+      // Não resolveu o bairro → comportamento antigo (q com o texto todo).
+      return _searchPhoton(normalized.query, key, c,
+          userLat: userLat, userLon: userLon);
+    }
+    // TEMP remover após validação.
+    Logger.debug('location_hint_resolved', payload: {
+      'hint':     place.hint,
+      'district': place.district,
+      'city':     place.city,
+      'lat':      place.lat,
+      'lon':      place.lon,
+    }, feature: 'geocoding', action: 'hint_resolved');
+
+    // Marca sem o hint: remove o sufixo do bairro do brandHint (é sufixo por
+    // construção do QueryNormalizer). "Assaí Gonzaga" − "Gonzaga" → "Assaí".
+    final brandOnly = _stripHintSuffix(normalized.brandHint, place.hint);
+
+    // Stage 2 — busca a marca com viés no ponto do Stage 1 (zoom de bairro).
+    final raw = await _searchPhoton(brandOnly, key, c,
+        userLat: place.lat, userLon: place.lon, zoom: _neighborhoodZoom);
+    // TEMP remover após validação.
+    Logger.debug('two_stage_search_finished', payload: {'candidates': raw.length},
+        feature: 'geocoding', action: 'two_stage_finish');
+    return raw;
+  }
+
+  // Stage 1: tenta cada locationHint (do mais específico ao mais curto) como
+  // busca de LUGAR (layers administrativos, sem osm_tag) e devolve o primeiro
+  // que resolver. Reusa _searchPhoton — o parser já popula district/city/coords.
+  Future<_ResolvedPlace?> _resolveLocationHint(
+      List<String> hints, String? countryCode) async {
+    final placeConstraints = SearchConstraints(
+      queryType: QueryKind.city,
+      countryCode: countryCode,
+      layers: _placeLayers,
+    );
+    for (final hint in hints) {
+      final placeKey = _normalizeKey(hint, QueryKind.city);
+      final res = await _searchPhoton(hint, placeKey, placeConstraints);
+      if (res.isNotEmpty) {
+        final f = res.first;
+        return _ResolvedPlace(
+          hint:     hint,
+          lat:      f.lat,
+          lon:      f.lon,
+          district: f.district,
+          city:     f.city,
+        );
+      }
+    }
+    return null;
+  }
+
+  // Remove o hint (sufixo) do brandHint, devolvendo só a marca. Se sobrar vazio
+  // ou o hint não for sufixo, devolve o brandHint inteiro (fallback seguro).
+  String _stripHintSuffix(String? brand, String hint) {
+    final b = (brand ?? '').trim();
+    final h = hint.trim();
+    if (b.isEmpty) return h;
+    if (b.toLowerCase().endsWith(h.toLowerCase())) {
+      final cut = b.substring(0, b.length - h.length).trim();
+      if (cut.isNotEmpty) return cut;
+    }
+    return b;
   }
 
   // Camadas 2 + 3: Geocoder nativo Android (bounding box do usuário) e, se vazio
@@ -337,7 +447,7 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // mantido como salvaguarda adicional.
   Future<List<GeocodingResult>> _searchPhoton(
       String query, String key, SearchConstraints c,
-      {double userLat = 0.0, double userLon = 0.0}) async {
+      {double userLat = 0.0, double userLon = 0.0, String? zoom}) async {
     Logger.debug('photon_called', payload: {'query': query},
         feature: 'geocoding', action: 'photon_start');
     final sw = Stopwatch()..start();
@@ -358,6 +468,9 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
         params['lat'] = userLat.toString();
         params['lon'] = userLon.toString();
         params['location_bias_scale'] = _locationBiasScale;
+        // zoom = raio da location bias (Photon api-v1, default 12). Valor maior →
+        // raio menor → viés mais forte no ponto. Usado no Stage 2 (bairro).
+        if (zoom != null) params['zoom'] = zoom;
       }
       final uri = Uri.https('photon.komoot.io', '/api/', params);
 
@@ -424,6 +537,9 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       final street  = props['street']  as String? ?? '';
       final housen  = props['housenumber'] as String? ?? '';
       final city    = props['city']    as String? ?? props['town'] as String? ?? '';
+      // Bairro/suburb — Photon devolve em `district` (doc oficial api-v1). Era
+      // descartado; agora vira insumo de matching do locationHint no Ranker.
+      final district = props['district'] as String? ?? '';
       final state   = props['state']   as String? ?? '';
       final country = props['country'] as String? ?? '';
       final postal  = props['postcode'] as String? ?? '';
@@ -460,6 +576,7 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
         // Campos enriquecidos (Etapa 1 — insumo do LocationRanker).
         name:        name,
         address:     address,
+        district:    district,
         city:        city,
         state:       state,
         country:     country,
@@ -491,4 +608,20 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // Heurística: o endereço possui número se contiver dígito precedido de vírgula/espaço
   bool _addressHasNumber(String address) =>
       RegExp(r'[,\s]\d+').hasMatch(address);
+}
+
+// Resultado do Stage 1: o lugar do locationHint resolvido em coordenadas.
+class _ResolvedPlace {
+  final String hint;      // Hint que resolveu (ex.: "Gonzaga", "Praia Grande")
+  final double lat;
+  final double lon;
+  final String district;  // Bairro, quando o Photon o classificou como district
+  final String city;      // Município do lugar resolvido
+  const _ResolvedPlace({
+    required this.hint,
+    required this.lat,
+    required this.lon,
+    required this.district,
+    required this.city,
+  });
 }

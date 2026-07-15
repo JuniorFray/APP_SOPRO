@@ -199,10 +199,14 @@ class LocationRanker {
   static bool _brandMatches(GeocodingResult r, String brandHead) =>
       brandHead.isNotEmpty && _name(r).contains(brandHead);
 
-  // Local casa quando ALGUM hint aparece em city/district/state/displayName/address.
+  // Local casa quando ALGUM hint aparece nos campos, por prioridade:
+  //   district → city → state → displayName → address.
+  // district lidera: é o bairro que o Photon agora entrega e o discriminador mais
+  // fino ("Gonzaga" casa aqui, não na cidade "Santos").
   static bool _locationMatches(GeocodingResult r, List<String> hints) {
     if (hints.isEmpty) return false;
-    final fields = [r.city, r.state, r.displayName, r.address].map(_norm).toList();
+    final fields =
+        [r.district, r.city, r.state, r.displayName, r.address].map(_norm).toList();
     for (final h in hints) {
       if (fields.any((f) => f.contains(h))) return true;
     }
