@@ -14,6 +14,7 @@ import '../../../core/theme/app_typography.dart';
 import '../../../core/utils/environment_icon_mapper.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
+import '../../../infrastructure/logging/app_logger.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/trigger_providers.dart';
@@ -42,6 +43,13 @@ class EnvironmentDetailScreen extends ConsumerWidget {
     // Observa o ambiente em tempo real; se editado, reflete o novo nome e raio
     final envLive = ref.watch(environmentByIdProvider(environment.id));
     final currentEnv = envLive.valueOrNull ?? environment;
+
+    // TEMP: remover após auditoria da resolução de localização
+    AppLogger.log('map_open_coordinates', {
+      'environment': currentEnv.name,
+      'latitude':    currentEnv.latitude,
+      'longitude':   currentEnv.longitude,
+    });
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,

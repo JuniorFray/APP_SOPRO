@@ -28,13 +28,55 @@ class GeocodingResult {
   // Indica que o resultado inclui número de rua (precisão de endereço completo)
   final bool hasNumber;
 
+  // ── Campos enriquecidos (Etapa 1 — insumo do LocationRanker) ──────────────
+  // Preenchidos quando a fonte os fornece; vazios/null caso contrário. Nenhum
+  // consumidor depende deles ainda (foundation) — o displayName segue autoritativo.
+  final String name;        // Nome do estabelecimento/local ("Assaí Atacadista")
+  final String address;     // Logradouro + número ("Av. Kennedy, 1234")
+  final String city;        // Município
+  final String state;       // UF / estado
+  final String country;     // País
+  final String postalCode;  // CEP
+  // Tipo estrutural da feature (Photon `properties.type`): house, street,
+  // locality, district, city, county, state, country, other. Vazio quando a
+  // fonte não informa (Geocoder nativo). Usado pelo CandidateFilter.
+  final String featureType;
+  // Distância em metros até o usuário. null = usuário desconhecido / sem viés.
+  // Calculada pelo LocationRanker via copyWith (não pela fonte).
+  final double? distanceToUser;
+
   const GeocodingResult({
     required this.displayName,
     required this.lat,
     required this.lon,
     required this.source,
     this.hasNumber = false,
+    this.name = '',
+    this.address = '',
+    this.city = '',
+    this.state = '',
+    this.country = '',
+    this.postalCode = '',
+    this.featureType = '',
+    this.distanceToUser,
   });
+
+  // Cópia com distância preenchida pelo Ranker (único campo que ele altera).
+  GeocodingResult copyWith({double? distanceToUser}) => GeocodingResult(
+        displayName: displayName,
+        lat: lat,
+        lon: lon,
+        source: source,
+        hasNumber: hasNumber,
+        name: name,
+        address: address,
+        city: city,
+        state: state,
+        country: country,
+        postalCode: postalCode,
+        featureType: featureType,
+        distanceToUser: distanceToUser ?? this.distanceToUser,
+      );
 
   @override
   String toString() =>

@@ -150,20 +150,19 @@ Future<void> _createTrigger(
   }
 
   final allEnvs = await EnvironmentRepository(db.environmentsDao).getAll();
-  final lower   = envName.toLowerCase();
+  // BUG 1 — normaliza (minúsculas + espaços) para comparar nomes com precisão.
+  final q = _normEnvName(envName);
 
-  // 1ª passagem: match exato case-insensitive
+  // 1ª passagem: igualdade exata (caixa/espaços normalizados)
   EnvironmentEntity? env;
   for (final e in allEnvs) {
-    if (e.name.toLowerCase() == lower) { env = e; break; }
+    if (_normEnvName(e.name) == q) { env = e; break; }
   }
-  // 2ª passagem: contains como fallback (mesmo critério do _matchEnv em home_screen)
+  // 2ª passagem: BUG 1 — similaridade > 95% (nunca contains). "Casa" ≠ "Casa da mãe".
+  // Mesmo critério do _matchEnv em home_screen.
   if (env == null) {
     for (final e in allEnvs) {
-      if (e.name.toLowerCase().contains(lower) ||
-          lower.contains(e.name.toLowerCase())) {
-        env = e; break;
-      }
+      if (_envNameSimilarity(_normEnvName(e.name), q) > 0.95) { env = e; break; }
     }
   }
 
@@ -192,4 +191,34 @@ Future<void> _createTrigger(
     'title':    title,
     'id':       trigger.id,
   }, feature: 'background', action: 'create_trigger', correlationId: correlationId);
+}
+
+// Normaliza nome para comparação: minúsculas + colapsa espaços repetidos.
+String _normEnvName(String s) =>
+    s.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
+
+// BUG 1 — similaridade de nomes (0..1) via Levenshtein: reutiliza um ambiente só
+// quando é realmente o mesmo. Sem contains/prefixo.
+double _envNameSimilarity(String a, String b) {
+  if (a == b) return 1.0;
+  if (a.isEmpty || b.isEmpty) return 0.0;
+  final maxLen = a.length > b.length ? a.length : b.length;
+  return 1.0 - _levenshteinDistance(a, b) / maxLen;
+}
+
+// Distância de edição de Levenshtein (duas linhas, O(n) de memória).
+int _levenshteinDistance(String a, String b) {
+  final n = b.length;
+  var prev = List<int>.generate(n + 1, (i) => i);
+  var cur = List<int>.filled(n + 1, 0);
+  for (var i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    for (var j = 1; j <= n; j++) {
+      final cost = a.codeUnitAt(i - 1) == b.codeUnitAt(j - 1) ? 0 : 1;
+      final del = prev[j] + 1, ins = cur[j - 1] + 1, sub = prev[j - 1] + cost;
+      cur[j] = del < ins ? (del < sub ? del : sub) : (ins < sub ? ins : sub);
+    }
+    final tmp = prev; prev = cur; cur = tmp;
+  }
+  return prev[n];
 }

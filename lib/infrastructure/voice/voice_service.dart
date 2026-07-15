@@ -158,11 +158,10 @@ class VoiceService {
   int _calibFrames = 0;          // frames já usados p/ medir o ruído ambiente
   double _noiseAccumDb = 0.0;    // soma das energias na janela de calibração
   double? _noiseFloorDb;         // média do ruído ambiente (null até calibrar)
-  int _sampleLogCounter = 0;     // throttle do log temporário voice_gate_sample
   static const int    _warmupFrameCount = 2;   // ~200 ms — paridade c/ delay do Overlay
   static const int    _calibFrameCount = 5;    // ~500 ms (frames de 100 ms)
-  static const double _speechMarginDb  = 8.0;  // fala = ruído + 8 dB (INALTERADO)
-  static const double _peakMarginDb    = 12.0; // pico exigido = ruído + 12 dB (INALTERADO)
+  static const double _speechMarginDb  = 6.8;  // fala = ruído + 6.8 dB (BUG 3: -15% p/ aceitar fala baixa/sussurro)
+  static const double _peakMarginDb    = 10.2; // pico exigido = ruído + 10.2 dB (BUG 3: -15%)
   static const int    _minSpeechFrames = 3;    // ≈ 300 ms de fala sustentada
   // Piso do noiseFloor (paridade c/ MIN_NOISE_FLOOR do Overlay). Impede que um
   // vale de silêncio degenere o threshold. Equivale a ~-41 dBFS do Overlay; -45
@@ -232,7 +231,6 @@ class VoiceService {
       _calibFrames = 0;
       _noiseAccumDb = 0.0;
       _noiseFloorDb = null;
-      _sampleLogCounter = 0;
 
       await _recorder.start(
         const RecordConfig(
@@ -296,12 +294,6 @@ class VoiceService {
             // senão o threshold cai sob o ruído do próprio silêncio e tudo passa.
             if (floor < _minNoiseFloorDb) floor = _minNoiseFloorDb;
             _noiseFloorDb = floor;
-            // LOG TEMPORÁRIO (calibração) — remover após ajustar as margens.
-            Logger.info('voice_noise_floor', payload: {
-              'surface':     holdToTalk ? 'home' : 'home_field',
-              'noise_floor': _noiseFloorDb,
-              'threshold':   _noiseFloorDb! + _speechMarginDb,
-            }, feature: 'voice', action: 'gate');
           }
           return; // durante a calibração não há detecção de fala
         }
@@ -309,15 +301,6 @@ class VoiceService {
         // Pós-calibração: fala quando a energia supera o ruído + margem.
         final floor     = _noiseFloorDb!;
         final threshold = floor + _speechMarginDb;
-        // LOG TEMPORÁRIO (calibração) — amostra 1/5 frames p/ não inundar o sink.
-        if (_sampleLogCounter++ % 5 == 0) {
-          Logger.info('voice_gate_sample', payload: {
-            'surface':     holdToTalk ? 'home' : 'home_field',
-            'current':     cur,
-            'noise_floor': floor,
-            'delta':       cur - floor,
-          }, feature: 'voice', action: 'gate');
-        }
         if (cur > threshold) _speechFrames++;
         // Exige fala sustentada + um pico RELATIVO ao ruído (não valor fixo).
         if (_speechFrames >= _minSpeechFrames &&

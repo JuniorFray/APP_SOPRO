@@ -9,6 +9,10 @@ import 'package:uuid/uuid.dart';
 
 import '../../data/database/daos/geocoding_cache_dao.dart';
 import 'geocoding_platform_interface.dart';
+import 'query_normalizer.dart';
+import 'search_strategy.dart';
+import 'candidate_filter.dart';
+import 'location_ranker.dart';
 
 // Busca em cascata para Android:
 //   CAMADA 1 — Cache local SQLite (zero custo, zero latência)
@@ -17,9 +21,18 @@ import 'geocoding_platform_interface.dart';
 //
 // Cada resultado bem-sucedido é salvo no cache antes de ser retornado,
 // garantindo que chamadas futuras com a mesma query sejam servidas localmente.
+//
+// Etapa 1 — nova arquitetura de resolução de localização:
+//   QueryNormalizer classifica → SearchStrategy escolhe provedor/viés → esta
+//   classe executa → LocationRanker ordena. A classificação e a estratégia,
+//   antes internas (enum SearchType + _classifyQuery), viraram componentes puros.
+
 class AndroidGeocodingService implements GeocodingPlatformInterface {
   static const _channel = MethodChannel('com.sopro.sopro/geocoder');
   static const _uuid = Uuid();
+
+  // Photon location_bias_scale (0.0–1.0). Peso da proximidade sobre a prominência.
+  static const _locationBiasScale = '0.5';
 
   final GeocodingCacheDao _cacheDao;
 
@@ -29,39 +42,138 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
 
   @override
   Future<List<GeocodingResult>> search(String query) async {
-    final key = _normalizeKey(query);
+    // 1. Normalização — só classifica (QueryNormalizer, componente puro).
+    final normalized = QueryNormalizer.normalize(query);
+    // TEMP remover após validação do Ranker.
+    Logger.debug('query_normalized',
+        payload: {'query': normalized.query, 'kind': normalized.kind.name},
+        feature: 'geocoding', action: 'normalize');
+    // TEMP remover após validação do DecisionEngine
+    Logger.debug('query_hints_detected', payload: {
+      'brand':     normalized.brandHint,
+      'locations': normalized.locationHints,
+      'category':  normalized.categoryHint,
+    }, feature: 'geocoding', action: 'hints');
 
-    // Camada 1: cache local (apenas resultados com qualidade suficiente)
-    final cached = await _cacheDao.findByKey(key);
-    final qualityCached = cached.where((row) =>
-        _isQualityResult(GeocodingResult(
-          displayName: row.displayName,
-          lat: row.lat,
-          lon: row.lon,
-          source: row.source,
-        ))).toList();
-    if (qualityCached.isNotEmpty) {
-      return qualityCached
-          .map((row) => GeocodingResult(
-                displayName: row.displayName,
-                lat: row.lat,
-                lon: row.lon,
-                source: row.source,
-                hasNumber: _addressHasNumber(row.displayName),
-              ))
-          .toList();
-    }
+    // Chave de cache PREFIXADA pelo tipo → não reutiliza entradas do algoritmo
+    // antigo (ex.: "piracicaba" vs "city:piracicaba"). Cache não é apagado.
+    final key = _normalizeKey(normalized.query, normalized.kind);
 
-    // Lê localização do usuário antes do try — necessário no fallback Photon também
+    // Lê localização do usuário (viés/distância) — usada conforme a estratégia.
     final prefs   = await SharedPreferences.getInstance();
     final userLat = await _readCoord(prefs, 'last_known_lat');
     final userLon = await _readCoord(prefs, 'last_known_lon');
-    // Estabelecimentos (sem palavra de rua ou número) vão direto ao Photon
-    if (_looksLikeEstablishment(query)) {
-      return _searchPhoton(query, key, userLat: userLat, userLon: userLon);
+
+    // 2. Estratégia — provedor + constraints (SearchStrategy, componente puro).
+    //    Computada antes do cache para orientar também o CandidateFilter.
+    final strategy = SearchStrategy.plan(normalized.kind);
+    final constraints = strategy.constraints;
+    // TEMP remover após validação.
+    Logger.debug('search_constraints', payload: {
+      'provider':    strategy.provider.name,
+      'constraints': constraints.toLog(),
+    }, feature: 'geocoding', action: 'constraints');
+
+    // Camada 1: cache local (apenas resultados com qualidade suficiente).
+    final cached = await _cacheDao.findByKey(key);
+    final qualityCached = cached
+        .where((row) => _isQualityResult(GeocodingResult(
+              displayName: row.displayName,
+              lat: row.lat,
+              lon: row.lon,
+              source: row.source,
+            )))
+        .map((row) => GeocodingResult(
+              displayName: row.displayName,
+              lat: row.lat,
+              lon: row.lon,
+              source: row.source,
+              hasNumber: _addressHasNumber(row.displayName),
+            ))
+        .toList();
+    if (qualityCached.isNotEmpty) {
+      return _filterAndRank(normalized, constraints, qualityCached, userLat, userLon);
     }
 
-    // Camada 2: Geocoder nativo Android com bounding box do usuário
+    // 3. Execução — Photon (constraints) ou Geocoder nativo (fallback Photon).
+    final List<GeocodingResult> raw;
+    switch (strategy.provider) {
+      case SearchProvider.photon:
+        raw = await _searchPhoton(query, key, constraints,
+            userLat: userLat, userLon: userLon);
+      case SearchProvider.geocoder:
+        raw = await _searchGeocoderThenPhoton(
+            query, key, constraints, userLat, userLon);
+    }
+
+    // 4. CandidateFilter → LocationRanker.
+    return _filterAndRank(normalized, constraints, raw, userLat, userLon);
+  }
+
+  // Estágio B: filtra candidatos inválidos e emite os logs temporários; depois
+  // rankeia apenas os sobreviventes. Cache e busca fresca passam pelo mesmo caminho.
+  List<GeocodingResult> _filterAndRank(
+      NormalizedQuery normalized, SearchConstraints c,
+      List<GeocodingResult> raw, double userLat, double userLon) {
+    // TEMP remover após validação.
+    Logger.debug('candidate_filter_started', payload: {'received': raw.length},
+        feature: 'geocoding', action: 'filter');
+    final filtered = CandidateFilter.filter(
+      raw,
+      queryType: c.queryType,
+      countryCode: c.countryCode,
+      radiusKm: c.radiusKm,
+      userLat: userLat == 0.0 ? null : userLat,
+      userLon: userLon == 0.0 ? null : userLon,
+    );
+    for (final rem in filtered.removed) {
+      // TEMP remover após validação.
+      Logger.debug('candidate_filter_removed', payload: {
+        'candidate': rem.candidate.displayName.split('\n').first,
+        'reason':    rem.reason,
+      }, feature: 'geocoding', action: 'filter');
+    }
+    // TEMP remover após validação.
+    Logger.debug('candidate_filter_finished', payload: {
+      'kept':    filtered.kept.length,
+      'removed': filtered.removed.length,
+    }, feature: 'geocoding', action: 'filter');
+    return _rankAndLog(normalized, filtered.kept, userLat, userLon);
+  }
+
+  // Aplica o LocationRanker e emite os logs temporários de auditoria do Ranker.
+  List<GeocodingResult> _rankAndLog(
+      NormalizedQuery normalized, List<GeocodingResult> raw,
+      double userLat, double userLon) {
+    final rr = LocationRanker.rank(
+      normalized.query, raw,
+      userLat: userLat == 0.0 ? null : userLat,
+      userLon: userLon == 0.0 ? null : userLon,
+      brandHint: normalized.brandHint,
+      locationHints: normalized.locationHints,
+      categoryHint: normalized.categoryHint,
+    );
+    final ranked = rr.orderedCandidates;
+    // TEMP remover após validação do Ranker.
+    Logger.debug('ranking_result', payload: {
+      'query': normalized.query,
+      'ordered_candidates':
+          ranked.map((r) => r.displayName.split('\n').first).toList(),
+    }, feature: 'geocoding', action: 'rank');
+    // TEMP remover após validação do Ranker.
+    Logger.debug('ranking_selected', payload: {
+      'first':  ranked.isNotEmpty ? ranked.first.displayName.split('\n').first : '',
+      'second': ranked.length > 1 ? ranked[1].displayName.split('\n').first : '',
+      'auto_selected': rr.confidence == LocationConfidence.high,
+    }, feature: 'geocoding', action: 'rank');
+    return ranked;
+  }
+
+  // Camadas 2 + 3: Geocoder nativo Android (bounding box do usuário) e, se vazio
+  // ou indisponível, fallback Photon. Comportamento idêntico ao fluxo anterior.
+  Future<List<GeocodingResult>> _searchGeocoderThenPhoton(
+      String query, String key, SearchConstraints constraints,
+      double userLat, double userLon) async {
     try {
       final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
           'searchAddress', {
@@ -84,6 +196,11 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
                 lon:       (item['lon'] as num?)?.toDouble() ?? 0.0,
                 source:    'geocoder_native',
                 hasNumber: item['has_number'] as bool? ?? false,
+                // Campos enriquecidos (Etapa 1 — insumo do LocationRanker).
+                name:    name,
+                address: address,
+                city:    city,
+                state:   state,
               );
             })
             .where((r) => r.displayName.isNotEmpty && r.lat != 0.0)
@@ -99,9 +216,9 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       Logger.debug('geocoder_native_failed', payload: {'query': query},
           exception: e, stackTrace: st, feature: 'geocoding', action: 'native');
     }
-
-    // Camada 3: Photon fallback
-    return _searchPhoton(query, key, userLat: userLat, userLon: userLon);
+    // Fallback Photon (endereço é local → mantém viés de lat/lon + constraints).
+    return _searchPhoton(query, key, constraints,
+        userLat: userLat, userLon: userLon);
   }
 
   // ── Reverse geocoding ─────────────────────────────────────────────────────
@@ -163,17 +280,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     return 0.0;
   }
 
-  // Queries sem palavra de rua e sem número são tratadas como estabelecimento —
-  // o Photon (OSM) é mais preciso que o Geocoder nativo para esses casos
-  bool _looksLikeEstablishment(String query) {
-    final q = query.toLowerCase();
-    const streetWords = ['rua', 'av.', 'avenida', 'travessa',
-                         'alameda', 'estrada', 'rodovia', 'praca'];
-    final hasStreetWord = streetWords.any((w) => q.contains(w));
-    final hasNumber     = RegExp(r'\d+').hasMatch(q);
-    return !hasStreetWord && !hasNumber;
-  }
-
   // Rejeita resultados que contêm apenas cidade/estado/país sem rua ou estabelecimento
   bool _isQualityResult(GeocodingResult r) {
     final d = r.displayName.toLowerCase();
@@ -184,26 +290,53 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     return !cityOnlyPatterns.any((p) => p.hasMatch(d));
   }
 
-  // Normaliza a chave de cache: lowercase + remove acentos + trim
-  String _normalizeKey(String query) => query
-      .toLowerCase()
-      .trim()
-      .replaceAll(RegExp(r'[áàãâä]'), 'a')
-      .replaceAll(RegExp(r'[éèêë]'), 'e')
-      .replaceAll(RegExp(r'[íìîï]'), 'i')
-      .replaceAll(RegExp(r'[óòõôö]'), 'o')
-      .replaceAll(RegExp(r'[úùûü]'), 'u')
-      .replaceAll(RegExp(r'[ç]'), 'c');
-
-  // Monta o displayName preferindo o endereço completo; fallback para partes disponíveis
-  String _buildDisplayName(
-      String address, String name, String city, String state) {
-    if (address.isNotEmpty) return address;
-    return [name, city, state].where((s) => s.isNotEmpty).join(', ');
+  // Normaliza a chave de cache: "{tipo}:{query sem acento, minúscula}". O prefixo
+  // de tipo separa entradas do algoritmo antigo (sem prefixo) das novas — evita
+  // reutilizar resultados incorretos criados antes da classificação.
+  String _normalizeKey(String query, QueryKind kind) {
+    final normalized = query
+        .toLowerCase()
+        .trim()
+        .replaceAll(RegExp(r'[áàãâä]'), 'a')
+        .replaceAll(RegExp(r'[éèêë]'), 'e')
+        .replaceAll(RegExp(r'[íìîï]'), 'i')
+        .replaceAll(RegExp(r'[óòõôö]'), 'o')
+        .replaceAll(RegExp(r'[úùûü]'), 'u')
+        .replaceAll(RegExp(r'[ç]'), 'c');
+    return '${kind.name}:$normalized';
   }
 
-  // Chama a API Photon (OSM) com bounding box do Brasil
-  Future<List<GeocodingResult>> _searchPhoton(String query, String key,
+  // Monta o displayName. Quando há nome de estabelecimento (featureName) e ele
+  // não é redundante com o endereço, prefixa o nome numa linha acima:
+  //   "Assaí Atacadista\nAv. Presidente Kennedy, 1234"
+  // Endereço residencial (sem nome real) mantém só o endereço.
+  String _buildDisplayName(
+      String address, String name, String city, String state) {
+    // Sem endereço: usa nome + cidade + estado (comportamento original)
+    if (address.isEmpty) {
+      return [name, city, state].where((s) => s.isNotEmpty).join(', ');
+    }
+    // Com endereço: prefixa o nome quando existir e não for redundante
+    if (name.isNotEmpty && !_nameIsRedundant(name, address)) {
+      return '$name\n$address';
+    }
+    return address;
+  }
+
+  // Nome é redundante quando vazio, igual ao endereço ou já contido nele
+  // (ex.: featureName = número da rua "1234" já presente em "Rua X, 1234").
+  bool _nameIsRedundant(String name, String address) {
+    final n = name.toLowerCase().trim();
+    final a = address.toLowerCase();
+    return n.isEmpty || n == a || a.contains(n);
+  }
+
+  // Chama a API Photon (OSM) aplicando os SearchConstraints como parâmetros
+  // OFICIAIS: countrycode (filtro de país), layer (tipo de feature), osm_tag
+  // (restringe a POIs), lat/lon + location_bias_scale (viés). bbox do Brasil é
+  // mantido como salvaguarda adicional.
+  Future<List<GeocodingResult>> _searchPhoton(
+      String query, String key, SearchConstraints c,
       {double userLat = 0.0, double userLon = 0.0}) async {
     Logger.debug('photon_called', payload: {'query': query},
         feature: 'geocoding', action: 'photon_start');
@@ -211,14 +344,20 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     try {
       // Remove sufixos numéricos do debounce (ex: ", 52") e monta URL com encoding correto
       final cleanQuery = query.replaceAll(RegExp(r'\s*,\s*\d+\s*$'), '').trim();
-      final params = <String, String>{
+      // Map<String, dynamic>: valores List<String> viram chaves repetidas na URL
+      // (ex.: layer=city&layer=locality) — exatamente como o Photon espera.
+      final params = <String, dynamic>{
         'q':     cleanQuery,
         'limit': '5',
         'bbox':  '-73.9,-33.7,-34.7,5.3',
       };
-      if (userLat != 0.0 && userLon != 0.0) {
+      if (c.countryCode != null) params['countrycode'] = c.countryCode!;
+      if (c.layers.isNotEmpty) params['layer'] = c.layers;
+      if (c.osmTags.isNotEmpty) params['osm_tag'] = c.osmTags;
+      if (c.useBias && userLat != 0.0 && userLon != 0.0) {
         params['lat'] = userLat.toString();
         params['lon'] = userLon.toString();
+        params['location_bias_scale'] = _locationBiasScale;
       }
       final uri = Uri.https('photon.komoot.io', '/api/', params);
 
@@ -286,18 +425,30 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       final housen  = props['housenumber'] as String? ?? '';
       final city    = props['city']    as String? ?? props['town'] as String? ?? '';
       final state   = props['state']   as String? ?? '';
+      final country = props['country'] as String? ?? '';
+      final postal  = props['postcode'] as String? ?? '';
+      final type    = props['type']    as String? ?? ''; // house/street/city/...
 
-      // Monta nome exibível priorizando rua + número
-      final parts = <String>[];
+      // Monta a linha de endereço (rua + número, cidade, estado)
+      final addrParts = <String>[];
       if (street.isNotEmpty) {
-        parts.add(housen.isNotEmpty ? '$street, $housen' : street);
-      } else if (name.isNotEmpty) {
-        parts.add(name);
+        addrParts.add(housen.isNotEmpty ? '$street, $housen' : street);
       }
-      if (city.isNotEmpty) parts.add(city);
-      if (state.isNotEmpty) parts.add(state);
+      if (city.isNotEmpty) addrParts.add(city);
+      if (state.isNotEmpty) addrParts.add(state);
+      final address = addrParts.join(' — ');
 
-      final displayName = parts.isNotEmpty ? parts.join(' — ') : name;
+      // Prefixa o nome do estabelecimento quando existir e não for redundante;
+      // nunca perde o name (sem endereço, o próprio name vira o displayName)
+      final String displayName;
+      if (name.isNotEmpty && address.isNotEmpty &&
+          !_nameIsRedundant(name, address)) {
+        displayName = '$name\n$address';
+      } else if (address.isNotEmpty) {
+        displayName = address;
+      } else {
+        displayName = name;
+      }
       if (displayName.isEmpty) return null;
 
       return GeocodingResult(
@@ -306,6 +457,14 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
         lon: lon,
         source: 'photon',
         hasNumber: housen.isNotEmpty,
+        // Campos enriquecidos (Etapa 1 — insumo do LocationRanker).
+        name:        name,
+        address:     address,
+        city:        city,
+        state:       state,
+        country:     country,
+        postalCode:  postal,
+        featureType: type,
       );
     } catch (e, st) {
       Logger.debug('photon_feature_parse_failed',

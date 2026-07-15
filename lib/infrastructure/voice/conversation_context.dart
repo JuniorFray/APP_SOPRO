@@ -41,6 +41,13 @@ class ConversationContext {
   String? lastIntent;      // última intenção principal (diagnóstico)
   String? lastQuestion;    // última pergunta feita pelo assistente (follow-up)
 
+  // Resolução Inteligente de Localização — controle da conversa de criação de
+  // ambiente. Enquanto preenchidos, o assistente está descobrindo a localização
+  // (confirmar GPS / pedir endereço / escolher estabelecimento) antes de criar.
+  String? pendingEnvName;      // nome do ambiente sendo criado
+  String? pendingLocationStage; // etapa atual: confirm_gps | await_address |
+                                //   await_specifier | choose_place | confirm_place
+
   // Marca de tempo do último toque — base do TTL.
   DateTime _updatedAt = DateTime.now();
 
@@ -77,6 +84,8 @@ class ConversationContext {
     lastTrigger = null;
     lastIntent = null;
     lastQuestion = null;
+    pendingEnvName = null;
+    pendingLocationStage = null;
     touch();
   }
 

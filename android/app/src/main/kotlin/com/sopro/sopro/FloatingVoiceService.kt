@@ -114,6 +114,11 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         // (via parseYesNo), não como comando novo enviado ao Gemini.
         internal const val VAL_AWAITING_CONFIRM = "awaiting_destructive_confirm"
 
+        // Resolução Inteligente de Localização (paridade com a Home) — enquanto
+        // ativo, a próxima fala é a resposta sim/não para usar o GPS atual ao
+        // criar um ambiente. Impede create_environment antes da resolução.
+        internal const val VAL_AWAITING_LOCATION_CONFIRM = "awaiting_location_confirm"
+
         // Fase 1 — transcrições "de relógio" que o STT devolve quando não houve
         // fala real (ex.: "00:00", "0:00", "00.00"). Tratadas como ausência de fala.
         private val CLOCK_LIKE_REGEX = Regex("""^\s*\d{1,2}[:.]\d{2}\s*$""")
@@ -149,8 +154,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         // fala só quando a amplitude supera noiseFloor * fator. Amplitude é LINEAR,
         // então "+8 dB" = fator 10^(8/20) ≈ 2.5 e "+12 dB" = fator ≈ 4.0.
         private const val CALIB_SAMPLES     = 5    // ~500 ms (polls de 100 ms)
-        private const val SPEECH_FACTOR     = 2.5  // fala = ruído * 2.5 (≈ +8 dB)
-        private const val PEAK_FACTOR       = 4.0  // pico exigido = ruído * 4.0 (≈ +12 dB)
+        private const val SPEECH_FACTOR     = 2.19 // fala = ruído * 2.19 (≈ +6.8 dB) (BUG 3: -15% p/ sussurro)
+        private const val PEAK_FACTOR       = 3.24 // pico exigido = ruído * 3.24 (≈ +10.2 dB) (BUG 3: -15%)
         private const val MIN_NOISE_FLOOR   = 300  // piso: evita estouro em silêncio digital
         private const val MIN_SPEECH_FRAMES = 3    // ≈ 300 ms (polls de 100 ms)
 
@@ -200,7 +205,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     private var calibSamples = 0        // polls já usados p/ medir o ruído
     private var noiseFloor = 0.0        // ruído ambiente medido (0 até calibrar)
     private var speechThreshold = 0.0   // noiseFloor * SPEECH_FACTOR
-    private var sampleLogCounter = 0    // throttle do log voice_gate_sample
     private var amplitudePoller: Runnable? = null
 
     // ── TTS nativo — fala resposta sem depender do app Flutter ────────────────
@@ -747,7 +751,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             // ruído ambiente (noiseFloor); depois só contam frames acima de
             // noiseFloor * SPEECH_FACTOR. getMaxAmplitude() = pico desde a última leitura.
             speechFrames = 0; maxAmp = 0; noiseAccum = 0L; calibSamples = 0
-            noiseFloor = 0.0; speechThreshold = 0.0; sampleLogCounter = 0
+            noiseFloor = 0.0; speechThreshold = 0.0
             val poll = object : Runnable {
                 override fun run() {
                     if (!isRecording) return
@@ -761,23 +765,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                             noiseFloor = maxOf((noiseAccum / CALIB_SAMPLES).toDouble(),
                                 MIN_NOISE_FLOOR.toDouble())
                             speechThreshold = noiseFloor * SPEECH_FACTOR
-                            // LOG TEMPORÁRIO (calibração) — remover após ajustar margens.
-                            Logger.info("voice_noise_floor", feature = "floating_voice", action = "gate",
-                                payload = mapOf("surface" to "overlay",
-                                    "noise_floor" to noiseFloor.toInt().toString(),
-                                    "threshold" to speechThreshold.toInt().toString()),
-                                correlationId = voiceCorrelationId)
                         }
                     } else {
-                        // LOG TEMPORÁRIO (calibração) — amostra 1/5 polls.
-                        if (sampleLogCounter++ % 5 == 0) {
-                            Logger.info("voice_gate_sample", feature = "floating_voice", action = "gate",
-                                payload = mapOf("surface" to "overlay",
-                                    "current" to amp.toString(),
-                                    "noise_floor" to noiseFloor.toInt().toString(),
-                                    "delta" to (amp - noiseFloor).toInt().toString()),
-                                correlationId = voiceCorrelationId)
-                        }
                         if (amp > speechThreshold) speechFrames++
                     }
                     mainHandler.postDelayed(this, 100L)
@@ -786,15 +775,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             amplitudePoller = poll
             // Início atrasado 250 ms: pula o beep de 120 ms para não sujar o ruído medido.
             mainHandler.postDelayed(poll, 250L)
-
-            // LOG TEMPORÁRIO DE CALIBRAÇÃO (Sprint Unificação) — remover após validar.
-            Logger.info("voice_capture_started", feature = "floating_voice", action = "capture",
-                correlationId = voiceCorrelationId)
-            // LOGS TEMPORÁRIOS (BUG 1/7) — pipeline e áudio nomeados do Overlay.
-            Logger.info("overlay_pipeline_started", feature = "floating_voice", action = "capture",
-                payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
-            Logger.info("overlay_audio_started", feature = "floating_voice", action = "capture",
-                payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
 
             // Beep curto (120 ms) confirma ativação do microfone
             try {
@@ -843,18 +823,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         showProcessingState()
 
         val sizeBytes = try { file?.length() ?: 0L } catch (_: Exception) { 0L }
-        // LOG TEMPORÁRIO DE CALIBRAÇÃO (Sprint Unificação) — remover após validar.
-        Logger.info("voice_capture_stopped", feature = "floating_voice", action = "capture",
-            payload = mapOf("voice_capture_duration" to durationMs.toString(),
-                "voice_capture_size_bytes" to sizeBytes.toString()),
-            correlationId = voiceCorrelationId)
-        // LOG TEMPORÁRIO (BUG 7/10) — áudio nomeado do Overlay com métricas completas.
-        Logger.info("overlay_audio_stopped", feature = "floating_voice", action = "capture",
-            payload = mapOf("surface" to "overlay",
-                "audio_duration_ms" to durationMs.toString(),
-                "audio_size_bytes" to sizeBytes.toString(),
-                "codec" to "aac_lc", "sample_rate" to "8000"),
-            correlationId = voiceCorrelationId)
 
         // GATE ADAPTATIVO — fala = frames sustentados acima do limiar adaptativo E
         // pico >= noiseFloor * PEAK_FACTOR. Fallbacks (não bloqueiam por energia):
@@ -865,37 +833,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         val hasSpeech = if (ampSupported && calibrated)
             (speechFrames >= MIN_SPEECH_FRAMES && maxAmp >= noiseFloor * PEAK_FACTOR)
         else true
-        // LOG TEMPORÁRIO (REGRA 5) — avaliação do gate no Overlay.
-        Logger.info("voice_gate_started", feature = "floating_voice", action = "capture",
-            payload = mapOf("surface" to "overlay",
-                "speech_frames" to speechFrames.toString(),
-                "max_amp" to maxAmp.toString(),
-                "noise_floor" to noiseFloor.toInt().toString()),
-            correlationId = voiceCorrelationId)
-
         // Regra 9 + gate de energia: soltar imediato / áudio minúsculo / SEM FALA → não envia.
         if (!stopped || file == null || durationMs < 500L || sizeBytes < 800L || !hasSpeech) {
-            Logger.info("voice_capture_discarded", feature = "floating_voice", action = "capture",
-                payload = mapOf("voice_capture_duration" to durationMs.toString(),
-                    "voice_capture_size_bytes" to sizeBytes.toString()),
-                correlationId = voiceCorrelationId)
-            // LOGS TEMPORÁRIOS (BUG 3/7/REGRA 5) — bloqueio antes do Gemini.
-            val blockReason = when {
-                durationMs < 500L -> "too_short"
-                !hasSpeech        -> "no_speech"
-                else              -> "empty_audio"
-            }
-            Logger.info("voice_capture_blocked", feature = "floating_voice", action = "capture",
-                payload = mapOf("surface" to "overlay", "reason" to blockReason),
-                correlationId = voiceCorrelationId)
-            Logger.info("overlay_audio_discarded", feature = "floating_voice", action = "capture",
-                payload = mapOf("surface" to "overlay", "reason" to blockReason),
-                correlationId = voiceCorrelationId)
-            Logger.info("voice_gate_blocked", feature = "floating_voice", action = "capture",
-                payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
-            Logger.info("voice_gate_reason", feature = "floating_voice", action = "capture",
-                payload = mapOf("surface" to "overlay", "reason" to blockReason),
-                correlationId = voiceCorrelationId)
             try { file?.delete() } catch (_: Exception) {}
             revertButtonAppearance()
             // REGRA 3 — responder APENAS "Não consegui ouvir você." (toast extra removido).
@@ -904,17 +843,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             return
         }
 
-        // LOG TEMPORÁRIO (REGRA 5) — gate aprovado (fala real).
-        Logger.info("voice_gate_passed", feature = "floating_voice", action = "capture",
-            payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
-        Logger.info("voice_capture_sent_to_gemini", feature = "floating_voice", action = "capture",
-            payload = mapOf("voice_capture_size_bytes" to sizeBytes.toString()),
-            correlationId = voiceCorrelationId)
-        // LOG TEMPORÁRIO (BUG 7) — áudio nomeado do Overlay enviado ao Gemini.
-        Logger.info("overlay_audio_sent", feature = "floating_voice", action = "capture",
-            payload = mapOf("surface" to "overlay",
-                "audio_size_bytes" to sizeBytes.toString()),
-            correlationId = voiceCorrelationId)
         serviceScope.launch { processAudioWithGemini(file) }
     }
 
@@ -928,9 +856,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         try { mediaRecorder?.release() } catch (_: Exception) {}
         mediaRecorder = null
         try { audioFile?.delete() } catch (_: Exception) {}
-        // LOG TEMPORÁRIO DE CALIBRAÇÃO (Sprint Unificação) — remover após validar.
-        Logger.info("voice_capture_cancelled", feature = "floating_voice", action = "capture",
-            correlationId = voiceCorrelationId)
         revertButtonAppearance()
         CorrelationManager.endOperation("voice"); voiceCorrelationId = null
     }
@@ -1312,6 +1237,26 @@ Retorne SO o JSON.""".trimIndent()
             return
         }
 
+        // Resolução Inteligente de Localização — resposta sim/não para usar o GPS
+        // atual ao criar o ambiente pendente (paridade com o confirm_gps da Home).
+        if (voiceState == VAL_AWAITING_LOCATION_CONFIRM && !stateExpired) {
+            val pendingName = statePrefs.getString("pending_env_name", null) ?: ""
+            statePrefs.edit()
+                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
+                .remove("pending_env_name").apply()
+            val answer = parseYesNo(result.transcript ?: "")
+            if (answer == true && pendingName.isNotEmpty()) {
+                // SIM → cria na localização atual (mesmo caminho GPS de sempre).
+                createEnvironmentWithGps(pendingName)
+            } else {
+                // NÃO/ambíguo → NÃO usa GPS; o endereço/local é resolvido no app
+                // (overlay não possui geocoder). Orienta a abrir o Sopro.
+                speak("Tudo bem. Abra o app Sopro para escolher o endereço de $pendingName.")
+                endVoice()
+            }
+            return
+        }
+
         Logger.info("intent_dispatched", feature = "floating_voice", action = "execute",
             payload = mapOf("intent" to (result.intent ?: "null")),
             correlationId = voiceCorrelationId)
@@ -1404,36 +1349,9 @@ Retorne SO o JSON.""".trimIndent()
                         payload = if (LoggerConfiguration.debugLogging)
                             mapOf("environment_name" to envName) else null,
                         correlationId = voiceCorrelationId)
-                    // Nome válido → cria ambiente diretamente no SQLite + registra geofence
-                    showToast("Criando '$envName'...")
-                    serviceScope.launch(Dispatchers.IO) {
-                        val loc = getLastLocationBlocking()
-                        val lat = loc?.latitude ?: 0.0
-                        val lon = loc?.longitude ?: 0.0
-                        val ok = if (lat != 0.0 && lon != 0.0) {
-                            writeEnvironmentToDb(envName, lat, lon, 100)
-                        } else {
-                            Logger.warn("gps_unavailable", feature = "floating_voice",
-                                action = "location",
-                                payload = if (LoggerConfiguration.debugLogging)
-                                    mapOf("environment_name" to envName) else null,
-                                correlationId = CorrelationManager.correlationIdFor("voice"))
-                            withContext(Dispatchers.Main) {
-                                speak("Não foi possível obter sua localização. Abra o app e defina manualmente.")
-                            }
-                            false
-                        }
-                        withContext(Dispatchers.Main) {
-                            if (ok) {
-                                Logger.info("command_executed", feature = "floating_voice", action = "execute",
-                                    payload = mapOf("command" to "create_environment"),
-                                    correlationId = voiceCorrelationId)
-                                speak("Pronto! Ambiente $envName criado.")
-                            } else if (lat != 0.0 || lon != 0.0) speak("Não consegui criar o ambiente. Tente novamente.")
-                            CorrelationManager.endOperation("voice")
-                            voiceCorrelationId = null
-                        }
-                    }
+                    // BUG 1 — não cria imediatamente: passa pela resolução de
+                    // localização (paridade com a Home), que confirma o GPS antes.
+                    resolveEnvironmentLocation(envName)
                 }
             }
             "delete_environment" -> {
@@ -1748,6 +1666,18 @@ Retorne SO o JSON.""".trimIndent()
             return
         }
 
+        // Resolução Inteligente de Localização — plano que APENAS cria um ambiente
+        // (sem gatilhos/outras ações) não usa GPS cego: confirma a localização
+        // antes (paridade com a Home). Planos mistos seguem o fluxo GPS atual.
+        if (plan.actions.size == 1 && plan.actions[0].type == "create_environment") {
+            val singleName = plan.actions[0].str("name", "environment")
+            if (singleName != null && singleName.isNotBlank() &&
+                !BLOCKED_ENV_NAMES.contains(singleName.lowercase())) {
+                resolveEnvironmentLocation(singleName.trim())
+                return
+            }
+        }
+
         // Construtivo: create_environment / create_trigger em ordem, GPS uma única vez.
         val needsLoc = plan.actions.any { it.type == "create_environment" }
         showProcessingState()
@@ -1907,6 +1837,93 @@ Retorne SO o JSON.""".trimIndent()
         if (NO_WORDS.any { t.contains(it) })  return false
         if (YES_WORDS.any { t.contains(it) }) return true
         return null
+    }
+
+    // Resolução Inteligente de Localização (paridade com resolveEnvironmentLocation
+    // da Home). Classifica a origem e NUNCA cria o ambiente imediatamente:
+    //   - local atual / nome personalizado → confirma o uso do GPS;
+    //   - categoria genérica / endereço possessivo → resolve no app (overlay
+    //     não possui geocoder, ao contrário da Home).
+    private fun resolveEnvironmentLocation(name: String) {
+        // LOG TEMPORÁRIO — início da resolução de localização.
+        Logger.info("location_resolution_started", feature = "floating_voice",
+            action = "location", payload = mapOf("name" to name),
+            correlationId = voiceCorrelationId)
+        when (classifyLocationSource(name)) {
+            "gps" -> askLocationConfirm(name)
+            else -> {
+                // LOG TEMPORÁRIO — aguardando resolução no app (sem geocoder aqui).
+                Logger.info("location_resolution_waiting", feature = "floating_voice",
+                    action = "location",
+                    payload = mapOf("name" to name, "reason" to "needs_app_geocoder"),
+                    correlationId = voiceCorrelationId)
+                speak("Para criar $name preciso do endereço. Abra o app Sopro para escolher o local.")
+                endVoice()
+            }
+        }
+    }
+
+    // Classifica a origem da localização (espelha o LocationSourceResolver da Home).
+    // Overlay só resolve GPS localmente: retorna "gps" para local atual/personalizado
+    // e "app" para o que exige geocoder (categoria genérica ou endereço possessivo).
+    private fun classifyLocationSource(name: String): String {
+        val lower = name.trim().lowercase(java.util.Locale("pt", "BR"))
+        if (lower.isEmpty()) return "app"
+        // Possessivo ("Casa da mãe") → endereço (precisa de geocoder → app).
+        if (Regex("""(^|\s)(da|do|de|das|dos)\s""").containsMatchIn(lower)) return "app"
+        // Categoria genérica pura ("Mercado", "Farmácia") → NUNCA GPS → app.
+        val generic = setOf(
+            "mercado", "supermercado", "farmacia", "farmácia", "hospital",
+            "academia", "escola", "shopping", "restaurante", "correios", "banco",
+            "loja", "posto", "padaria", "lanchonete", "clinica", "clínica",
+        )
+        if (generic.contains(lower)) return "app"
+        // Local atual (residencial) ou nome personalizado → GPS com confirmação.
+        return "gps"
+    }
+
+    // Pergunta se pode usar a localização atual e arma o estado de espera. A resposta
+    // sim/não chega na PRÓXIMA gravação (o usuário segura o botão de novo) — mesmo
+    // padrão de startDestructiveConfirm (evita o mic captar o próprio TTS e mantém a
+    // máquina de estados TTS → WAITING_USER_RESPONSE → IDLE).
+    private fun askLocationConfirm(name: String) {
+        getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_VOICE_STATE, VAL_AWAITING_LOCATION_CONFIRM)
+            .putString("pending_env_name", name)
+            .putLong("voice_state_set_at", System.currentTimeMillis())
+            .apply()
+        // LOGS TEMPORÁRIOS — aguardando resposta do usuário (paridade com a Home).
+        Logger.info("location_resolution_waiting", feature = "floating_voice",
+            action = "location", payload = mapOf("name" to name, "stage" to "confirm_gps"),
+            correlationId = voiceCorrelationId)
+        Logger.info("waiting_user_response", feature = "floating_voice", action = "location",
+            payload = mapOf("surface" to "overlay", "state" to VAL_AWAITING_LOCATION_CONFIRM),
+            correlationId = voiceCorrelationId)
+        speakTyped("Você deseja usar sua localização atual para criar $name?", TtsTone.QUESTION)
+        showToast("Segure o botão e responda sim ou não.")
+        // Encerra o ciclo atual; a resposta abre um novo ciclo ao segurar o botão.
+        endVoice()
+    }
+
+    // Cria o ambiente na localização atual (GPS) — caminho reutilizado pela resposta
+    // "sim" da confirmação; equivale ao create_environment antigo do overlay.
+    private fun createEnvironmentWithGps(name: String) {
+        showToast("Criando '$name'...")
+        serviceScope.launch(Dispatchers.IO) {
+            val loc = getLastLocationBlocking()
+            val lat = loc?.latitude ?: 0.0
+            val lon = loc?.longitude ?: 0.0
+            val ok = if (lat != 0.0 && lon != 0.0) writeEnvironmentToDb(name, lat, lon, 100) else false
+            // LOG TEMPORÁRIO — fim da resolução de localização.
+            Logger.info("location_resolution_finished", feature = "floating_voice",
+                action = "location", payload = mapOf("name" to name, "created" to ok.toString()),
+                correlationId = voiceCorrelationId)
+            withContext(Dispatchers.Main) {
+                if (ok) speak("Pronto! Ambiente $name criado.")
+                else speak("Não foi possível obter sua localização. Abra o app e defina manualmente.")
+                endVoice()
+            }
+        }
     }
 
     // Arma o estado de confirmação por voz e faz a pergunta.
@@ -2164,6 +2181,11 @@ Retorne SO o JSON.""".trimIndent()
                 "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 arrayOf(id, envNameCapitalized, lat, lon, radius.toDouble(), now)
             )
+            // TEMP: remover após calibração da resolução de localização
+            Logger.info("environment_location_assigned", feature = "floating_voice", action = "db_write",
+                payload = mapOf("environment" to envNameCapitalized, "lat" to lat.toString(),
+                    "lng" to lon.toString(), "radius" to radius.toString()),
+                correlationId = corrId)
             // GMS addGeofences exige main thread
             mainHandler.post { registerGeofence(id, envNameCapitalized, lat, lon, radius.toDouble()) }
             Logger.info("environment_created", feature = "floating_voice", action = "db_write",
@@ -2434,6 +2456,10 @@ Retorne SO o JSON.""".trimIndent()
     // mas os callbacks do addGeofences são entregues na main thread).
     @SuppressLint("MissingPermission") // permissão verificada em getLastLocationBlocking()
     private fun registerGeofence(id: String, name: String, lat: Double, lon: Double, radius: Double) {
+        // TEMP: remover após calibração da resolução de localização
+        Logger.info("geofence_registration_request", feature = "floating_voice", action = "geofence",
+            payload = mapOf("environment" to name, "lat" to lat.toString(),
+                "lng" to lon.toString(), "radius" to radius.toString()))
         getSharedPreferences(GeofenceReceiver.PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putString(id, name).apply()
 
@@ -2467,6 +2493,10 @@ Retorne SO o JSON.""".trimIndent()
                     Logger.info("geofence_registered", feature = "floating_voice", action = "geofence",
                         payload = if (LoggerConfiguration.debugLogging)
                             mapOf("name" to name, "id" to id) else mapOf("id" to id))
+                    // TEMP: remover após calibração da resolução de localização
+                    Logger.info("geofence_registration_success", feature = "floating_voice", action = "geofence",
+                        payload = mapOf("environment" to name, "lat" to lat.toString(),
+                            "lng" to lon.toString()))
                 }
                 .addOnFailureListener { e ->
                     Logger.error("geofence_registration_failed", feature = "floating_voice",

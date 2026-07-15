@@ -1,3 +1,6 @@
+==============================================================
+FILE: lib/presentation/screens/home/home_screen.dart
+==============================================================
 // HomeScreen — Tela principal do Sopro.
 //
 // Responsabilidades:
@@ -41,8 +44,6 @@ import '../../../infrastructure/voice/conversation_context.dart';
 import '../../../infrastructure/voice/location_source_resolver.dart';
 import '../../../infrastructure/geocoding/geocoding_repository.dart';
 import '../../../infrastructure/geocoding/geocoding_platform_interface.dart';
-import '../../../infrastructure/geocoding/location_ranker.dart';
-import '../../../infrastructure/geocoding/query_normalizer.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/trigger_providers.dart';
@@ -1214,71 +1215,21 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           ? results.first.displayName.split('\n').sublist(1).join(', ')
           : '',
     });
-    // Etapa 2 — classifica a confiança sobre a lista já retornada (determinístico,
-    // puro). Reaproveita o QueryNormalizer p/ os mesmos hints da camada de busca.
-    final norm = QueryNormalizer.normalize(query);
-    final rank = LocationRanker.rank(
-      query, results,
-      userLat: lastCoord('last_known_lat'),
-      userLon: lastCoord('last_known_lon'),
-      brandHint: norm.brandHint,
-      locationHints: norm.locationHints,
-      categoryHint: norm.categoryHint,
-    );
-    // TEMP remover após validação da Etapa 2.
-    AppLogger.log('ranking_confidence', {
-      'confidence': rank.confidence.name,
-      'reason':     rank.reason,
-    });
-    await _presentPlaceResults(name, rank);
+    await _presentPlaceResults(name, results);
   }
 
-  // DecisionEngine (Etapa 2) — roteia pela CONFIANÇA do RankResult, sem score:
-  //   HIGH     → cria automaticamente o primeiro candidato;
-  //   MEDIUM   → confirma apenas o primeiro ("Você quis dizer …?");
-  //   LOW      → lista os candidatos e pede a escolha;
-  //   no_match → pede um endereço mais específico.
-  Future<void> _presentPlaceResults(String name, RankResult rank) async {
+  // Apresenta o resultado da busca: nada → pede endereço; 1 forte → confirma;
+  // vários → lista e pede a escolha.
+  Future<void> _presentPlaceResults(
+      String name, List<GeocodingResult> results) async {
     final ctx = ref.read(conversationContextProvider);
-    final results = rank.orderedCandidates;
-
-    // Sem resultados / sem casamento → pede endereço.
-    if (results.isEmpty || rank.reason == 'no_match') {
+    if (results.isEmpty) {
       ctx.pendingLocationStage = 'await_address';
       _envLocationPending = _EnvLocationPending(name: name, turn: _EnvTurn.askAddress);
       await _askAndWait('Não encontrei $name. Qual o endereço?');
       return;
     }
-
-    // Regra de decisão a partir da confiança.
-    final String rule;
-    final bool autoSelected;
-    switch (rank.confidence) {
-      case LocationConfidence.high:
-        rule = 'high_auto';
-        autoSelected = true;
-      case LocationConfidence.medium:
-        rule = 'medium_confirm';
-        autoSelected = false;
-      case LocationConfidence.low:
-        rule = 'low_list';
-        autoSelected = false;
-    }
-    // TEMP remover após validação da Etapa 2.
-    AppLogger.log('decision_rule', {
-      'rule':          rule,
-      'auto_selected': autoSelected,
-    });
-
-    // HIGH → cria automaticamente o primeiro.
-    if (rank.confidence == LocationConfidence.high) {
-      final r = results.first;
-      await _createEnvironmentAtCoords(name, r.lat, r.lon, ctx);
-      return;
-    }
-
-    // MEDIUM → confirma apenas o primeiro candidato (fluxo confirm_place).
-    if (rank.confidence == LocationConfidence.medium) {
+    if (results.length == 1) {
       final r = results.first;
       ctx.pendingLocationStage = 'confirm_place';
       _envLocationPending = _EnvLocationPending(
@@ -1289,8 +1240,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       await _askAndWait('Você quis dizer ${_spoken(r.displayName)}?');
       return;
     }
-
-    // LOW → lista os primeiros e pede a escolha (fluxo choose_place).
+    // Vários resultados → lista os primeiros e pede a escolha.
     final top = results.take(3).toList();
     ctx.pendingLocationStage = 'choose_place';
     _envLocationPending = _EnvLocationPending(
@@ -3592,4 +3542,1983 @@ class _EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+
+==============================================================
+FILE: lib/infrastructure/geocoding/android_geocoding_service.dart
+==============================================================
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+
+import '../logging/core/logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+import '../../data/database/daos/geocoding_cache_dao.dart';
+import 'geocoding_platform_interface.dart';
+
+// Busca em cascata para Android:
+//   CAMADA 1 — Cache local SQLite (zero custo, zero latência)
+//   CAMADA 2 — Geocoder nativo Android via MethodChannel (grátis, sem cota)
+//   CAMADA 3 — Photon/OSM via HTTP (grátis, sem API key)
+//
+// Cada resultado bem-sucedido é salvo no cache antes de ser retornado,
+// garantindo que chamadas futuras com a mesma query sejam servidas localmente.
+// Tipo da consulta de busca — decide o mecanismo e se aplica viés de lat/lon.
+// city/state → Photon global; zipcode/address → Geocoder; establishment → Photon
+// com viés de proximidade. Classificação simples e determinística (sem rede).
+enum SearchType { city, state, zipcode, address, establishment }
+
+class AndroidGeocodingService implements GeocodingPlatformInterface {
+  static const _channel = MethodChannel('com.sopro.sopro/geocoder');
+  static const _uuid = Uuid();
+
+  // Palavras de logradouro → classificam a consulta como endereço (Geocoder).
+  static const _streetWords = [
+    'rua', 'av.', 'avenida', 'travessa', 'alameda', 'estrada',
+    'rodovia', 'praca', 'praça', 'largo',
+  ];
+
+  // Categorias/marcas de estabelecimento → Photon COM viés de proximidade.
+  static const _establishmentWords = [
+    'shopping', 'plaza', 'mercado', 'supermercado', 'hipermercado',
+    'atacad', 'atacadista', 'farmacia', 'farmácia', 'drogaria',
+    'hospital', 'clinica', 'clínica', 'posto', 'restaurante',
+    'lanchonete', 'padaria', 'academia', 'banco', 'loja',
+    'mcdonald', 'burger', 'assai', 'assaí', 'carrefour',
+    'santa casa', 'pao de acucar', 'pão de açúcar',
+  ];
+
+  // Nomes de UF por extenso → busca GLOBAL (sem viés). Match exato (== q).
+  static const _stateNames = {
+    'acre', 'alagoas', 'amapa', 'amapá', 'amazonas', 'bahia', 'ceara', 'ceará',
+    'distrito federal', 'espirito santo', 'espírito santo', 'goias', 'goiás',
+    'maranhao', 'maranhão', 'mato grosso', 'mato grosso do sul', 'minas gerais',
+    'para', 'pará', 'paraiba', 'paraíba', 'parana', 'paraná', 'pernambuco',
+    'piaui', 'piauí', 'rio de janeiro', 'rio grande do norte',
+    'rio grande do sul', 'rondonia', 'rondônia', 'roraima', 'santa catarina',
+    'sao paulo', 'são paulo', 'sergipe', 'tocantins',
+  };
+
+  final GeocodingCacheDao _cacheDao;
+
+  AndroidGeocodingService(this._cacheDao);
+
+  // ── Forward geocoding ─────────────────────────────────────────────────────
+
+  @override
+  Future<List<GeocodingResult>> search(String query) async {
+    final type = _classifyQuery(query);
+    // TEMP: remover após validação da classificação.
+    Logger.debug('search_type_detected',
+        payload: {'query': query, 'type': type.name},
+        feature: 'geocoding', action: 'classify');
+
+    // Chave de cache PREFIXADA pelo tipo → não reutiliza entradas do algoritmo
+    // antigo (ex.: "piracicaba" vs "city:piracicaba"). Cache não é apagado.
+    final key = _normalizeKey(query, type);
+
+    // Camada 1: cache local (apenas resultados com qualidade suficiente)
+    final cached = await _cacheDao.findByKey(key);
+    final qualityCached = cached.where((row) =>
+        _isQualityResult(GeocodingResult(
+          displayName: row.displayName,
+          lat: row.lat,
+          lon: row.lon,
+          source: row.source,
+        ))).toList();
+    if (qualityCached.isNotEmpty) {
+      return qualityCached
+          .map((row) => GeocodingResult(
+                displayName: row.displayName,
+                lat: row.lat,
+                lon: row.lon,
+                source: row.source,
+                hasNumber: _addressHasNumber(row.displayName),
+              ))
+          .toList();
+    }
+
+    // Lê localização do usuário (viés) — usada só quando o tipo permite.
+    final prefs   = await SharedPreferences.getInstance();
+    final userLat = await _readCoord(prefs, 'last_known_lat');
+    final userLon = await _readCoord(prefs, 'last_known_lon');
+
+    switch (type) {
+      // Cidade/Estado → busca GLOBAL, SEM viés. Sem isto, uma rua homônima
+      // próxima ("Rua Piracicaba", Vila Sônia) venceria a cidade de Piracicaba.
+      case SearchType.city:
+      case SearchType.state:
+        // TEMP: remover após validação da classificação.
+        Logger.debug('search_bias_applied',
+            payload: {'query': query, 'bias': false},
+            feature: 'geocoding', action: 'bias');
+        return _searchPhoton(query, key); // sem lat/lon
+      // Estabelecimento → Photon COM viés de proximidade da localização atual.
+      case SearchType.establishment:
+        // TEMP: remover após validação da classificação.
+        Logger.debug('search_bias_applied',
+            payload: {'query': query, 'bias': true},
+            feature: 'geocoding', action: 'bias');
+        return _searchPhoton(query, key, userLat: userLat, userLon: userLon);
+      // CEP/Endereço → Geocoder nativo (com fallback Photon).
+      case SearchType.zipcode:
+      case SearchType.address:
+        // TEMP: remover após validação da classificação.
+        Logger.debug('search_bias_applied',
+            payload: {'query': query, 'bias': true},
+            feature: 'geocoding', action: 'bias');
+        return _searchGeocoderThenPhoton(query, key, userLat, userLon);
+    }
+  }
+
+  // Classifica a consulta em SearchType (determinístico, sem rede). Ordem importa:
+  // CEP → estabelecimento (categoria/marca) → endereço (logradouro/número) →
+  // estado (UF por extenso) → cidade (padrão).
+  SearchType _classifyQuery(String query) {
+    final q = query.toLowerCase().trim();
+    if (RegExp(r'^\d{5}-?\d{3}$').hasMatch(q)) return SearchType.zipcode;
+    if (_establishmentWords.any((w) => q.contains(w))) {
+      return SearchType.establishment;
+    }
+    final hasStreetWord = _streetWords.any((w) => q.contains(w));
+    final hasNumber     = RegExp(r'\d').hasMatch(q);
+    if (hasStreetWord || hasNumber) return SearchType.address;
+    if (_stateNames.contains(q)) return SearchType.state;
+    return SearchType.city;
+  }
+
+  // Camadas 2 + 3: Geocoder nativo Android (bounding box do usuário) e, se vazio
+  // ou indisponível, fallback Photon. Comportamento idêntico ao fluxo anterior.
+  Future<List<GeocodingResult>> _searchGeocoderThenPhoton(
+      String query, String key, double userLat, double userLon) async {
+    try {
+      final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
+          'searchAddress', {
+            'query':   query,
+            'userLat': userLat,
+            'userLon': userLon,
+          });
+      if (raw != null && raw['found'] == true) {
+        final rawList = raw['results'] as List<Object?>? ?? [];
+        final results = rawList
+            .whereType<Map<Object?, Object?>>()
+            .map((item) {
+              final address = item['returned_address'] as String? ?? '';
+              final name    = item['name']  as String? ?? '';
+              final city    = item['city']  as String? ?? '';
+              final state   = item['state'] as String? ?? '';
+              return GeocodingResult(
+                displayName: _buildDisplayName(address, name, city, state),
+                lat:       (item['lat'] as num?)?.toDouble() ?? 0.0,
+                lon:       (item['lon'] as num?)?.toDouble() ?? 0.0,
+                source:    'geocoder_native',
+                hasNumber: item['has_number'] as bool? ?? false,
+              );
+            })
+            .where((r) => r.displayName.isNotEmpty && r.lat != 0.0)
+            .toList();
+        final qualityResults = results.where(_isQualityResult).toList();
+        if (qualityResults.isNotEmpty) {
+          await _saveToCache(qualityResults, key);
+          return qualityResults;
+        }
+      }
+    } catch (e, st) {
+      // Geocoder indisponível (emulador sem Google Play) — cai para Photon
+      Logger.debug('geocoder_native_failed', payload: {'query': query},
+          exception: e, stackTrace: st, feature: 'geocoding', action: 'native');
+    }
+    // Fallback Photon (endereço é local → mantém viés de lat/lon).
+    return _searchPhoton(query, key, userLat: userLat, userLon: userLon);
+  }
+
+  // ── Reverse geocoding ─────────────────────────────────────────────────────
+
+  @override
+  Future<GeocodingResult?> reverse(double lat, double lon) async {
+    // Chave de cache para reverse: "rev:{lat5d}:{lon5d}"
+    final key =
+        'rev:${lat.toStringAsFixed(5)}:${lon.toStringAsFixed(5)}';
+
+    // Cache local
+    final cached = await _cacheDao.findByKey(key);
+    if (cached.isNotEmpty) {
+      final row = cached.first;
+      return GeocodingResult(
+        displayName: row.displayName,
+        lat: row.lat,
+        lon: row.lon,
+        source: row.source,
+      );
+    }
+
+    // Geocoder nativo Android via reverseGeocode
+    try {
+      final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
+          'reverseGeocode', {'lat': lat, 'lon': lon});
+      if (raw != null) {
+        final found = raw['found'] as bool? ?? false;
+        if (found) {
+          final displayName = raw['display_name'] as String? ??
+              raw['returned_address'] as String? ??
+              'Local desconhecido';
+          final result = GeocodingResult(
+            displayName: displayName,
+            lat: lat,
+            lon: lon,
+            source: 'geocoder_native',
+          );
+          await _saveToCache([result], key);
+          return result;
+        }
+      }
+    } catch (e, st) {
+      Logger.debug('geocoder_reverse_failed',
+          exception: e, stackTrace: st, feature: 'geocoding', action: 'reverse');
+    }
+
+    return null;
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  // Lê coordenada com fallback: Double → String → 0.0
+  Future<double> _readCoord(SharedPreferences prefs, String key) async {
+    final d = prefs.getDouble(key);
+    if (d != null && d != 0.0) return d;
+    final s = prefs.getString(key);
+    if (s != null) return double.tryParse(s) ?? 0.0;
+    return 0.0;
+  }
+
+  // Rejeita resultados que contêm apenas cidade/estado/país sem rua ou estabelecimento
+  bool _isQualityResult(GeocodingResult r) {
+    final d = r.displayName.toLowerCase();
+    final cityOnlyPatterns = [
+      RegExp(r'^[^,]+,\s*(SP|RJ|MG|RS|PR|SC|BA|CE|PE|GO|AM|PA|MT|MS|DF|ES|MA|PB|PI|RN|AL|SE|RO|AC|AP|RR|TO)\s*,?\s*brasil\s*$', caseSensitive: false),
+      RegExp(r'^[^,]+,\s*(SP|RJ|MG|RS|PR|SC|BA|CE|PE|GO|AM|PA|MT|MS|DF|ES|MA|PB|PI|RN|AL|SE|RO|AC|AP|RR|TO)\s*,?\s*(brasil)?\s*$', caseSensitive: false),
+    ];
+    return !cityOnlyPatterns.any((p) => p.hasMatch(d));
+  }
+
+  // Normaliza a chave de cache: "{tipo}:{query sem acento, minúscula}". O prefixo
+  // de tipo separa entradas do algoritmo antigo (sem prefixo) das novas — evita
+  // reutilizar resultados incorretos criados antes da classificação.
+  String _normalizeKey(String query, SearchType type) {
+    final normalized = query
+        .toLowerCase()
+        .trim()
+        .replaceAll(RegExp(r'[áàãâä]'), 'a')
+        .replaceAll(RegExp(r'[éèêë]'), 'e')
+        .replaceAll(RegExp(r'[íìîï]'), 'i')
+        .replaceAll(RegExp(r'[óòõôö]'), 'o')
+        .replaceAll(RegExp(r'[úùûü]'), 'u')
+        .replaceAll(RegExp(r'[ç]'), 'c');
+    return '${type.name}:$normalized';
+  }
+
+  // Monta o displayName. Quando há nome de estabelecimento (featureName) e ele
+  // não é redundante com o endereço, prefixa o nome numa linha acima:
+  //   "Assaí Atacadista\nAv. Presidente Kennedy, 1234"
+  // Endereço residencial (sem nome real) mantém só o endereço.
+  String _buildDisplayName(
+      String address, String name, String city, String state) {
+    // Sem endereço: usa nome + cidade + estado (comportamento original)
+    if (address.isEmpty) {
+      return [name, city, state].where((s) => s.isNotEmpty).join(', ');
+    }
+    // Com endereço: prefixa o nome quando existir e não for redundante
+    if (name.isNotEmpty && !_nameIsRedundant(name, address)) {
+      return '$name\n$address';
+    }
+    return address;
+  }
+
+  // Nome é redundante quando vazio, igual ao endereço ou já contido nele
+  // (ex.: featureName = número da rua "1234" já presente em "Rua X, 1234").
+  bool _nameIsRedundant(String name, String address) {
+    final n = name.toLowerCase().trim();
+    final a = address.toLowerCase();
+    return n.isEmpty || n == a || a.contains(n);
+  }
+
+  // Chama a API Photon (OSM) com bounding box do Brasil
+  Future<List<GeocodingResult>> _searchPhoton(String query, String key,
+      {double userLat = 0.0, double userLon = 0.0}) async {
+    Logger.debug('photon_called', payload: {'query': query},
+        feature: 'geocoding', action: 'photon_start');
+    final sw = Stopwatch()..start();
+    try {
+      // Remove sufixos numéricos do debounce (ex: ", 52") e monta URL com encoding correto
+      final cleanQuery = query.replaceAll(RegExp(r'\s*,\s*\d+\s*$'), '').trim();
+      final params = <String, String>{
+        'q':     cleanQuery,
+        'limit': '5',
+        'bbox':  '-73.9,-33.7,-34.7,5.3',
+      };
+      if (userLat != 0.0 && userLon != 0.0) {
+        params['lat'] = userLat.toString();
+        params['lon'] = userLon.toString();
+      }
+      final uri = Uri.https('photon.komoot.io', '/api/', params);
+
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 8);
+
+      final request = await client.getUrl(uri);
+      request.headers.set('Accept', 'application/json');
+      request.headers.set('User-Agent', 'Sopro/1.0 (Android; komoot-photon-client)');
+      final response = await request.close();
+
+      if (response.statusCode != 200) {
+        Logger.warn('photon_http_error', payload: {
+          'query':  query,
+          'status': response.statusCode,
+        }, feature: 'geocoding', action: 'photon_http', durationMs: sw.elapsedMilliseconds);
+        return [];
+      }
+
+      final body = await response.transform(const Utf8Decoder()).join();
+      client.close();
+
+      final json = jsonDecode(body) as Map<String, dynamic>;
+      final features = json['features'] as List<dynamic>? ?? [];
+
+      final results = features
+          .map((f) => _parsePhotonFeature(f as Map<String, dynamic>))
+          .whereType<GeocodingResult>()
+          .toList();
+
+      Logger.debug('photon_result', payload: {
+        'query':          query,
+        'features_raw':   features.length,
+        'results_parsed': results.length,
+        'first_parsed':   results.isNotEmpty ? results.first.displayName : 'nenhum',
+      }, feature: 'geocoding', action: 'photon_parse', durationMs: sw.elapsedMilliseconds);
+
+      if (results.isNotEmpty) {
+        await _saveToCache(results, key);
+      }
+
+      return results;
+    } catch (e, st) {
+      Logger.error('photon_error', payload: {'query': query},
+          exception: e, stackTrace: st,
+          feature: 'geocoding', action: 'photon_call',
+          durationMs: sw.elapsedMilliseconds);
+      return [];
+    }
+  }
+
+  // Converte uma feature GeoJSON do Photon em GeocodingResult
+  GeocodingResult? _parsePhotonFeature(Map<String, dynamic> feature) {
+    try {
+      final geometry = feature['geometry'] as Map<String, dynamic>?;
+      final coords = geometry?['coordinates'] as List<dynamic>?;
+      if (coords == null || coords.length < 2) return null;
+
+      final lon = (coords[0] as num).toDouble();
+      final lat = (coords[1] as num).toDouble();
+
+      final props = feature['properties'] as Map<String, dynamic>? ?? {};
+      final name    = props['name']    as String? ?? '';
+      final street  = props['street']  as String? ?? '';
+      final housen  = props['housenumber'] as String? ?? '';
+      final city    = props['city']    as String? ?? props['town'] as String? ?? '';
+      final state   = props['state']   as String? ?? '';
+
+      // Monta a linha de endereço (rua + número, cidade, estado)
+      final addrParts = <String>[];
+      if (street.isNotEmpty) {
+        addrParts.add(housen.isNotEmpty ? '$street, $housen' : street);
+      }
+      if (city.isNotEmpty) addrParts.add(city);
+      if (state.isNotEmpty) addrParts.add(state);
+      final address = addrParts.join(' — ');
+
+      // Prefixa o nome do estabelecimento quando existir e não for redundante;
+      // nunca perde o name (sem endereço, o próprio name vira o displayName)
+      final String displayName;
+      if (name.isNotEmpty && address.isNotEmpty &&
+          !_nameIsRedundant(name, address)) {
+        displayName = '$name\n$address';
+      } else if (address.isNotEmpty) {
+        displayName = address;
+      } else {
+        displayName = name;
+      }
+      if (displayName.isEmpty) return null;
+
+      return GeocodingResult(
+        displayName: displayName,
+        lat: lat,
+        lon: lon,
+        source: 'photon',
+        hasNumber: housen.isNotEmpty,
+      );
+    } catch (e, st) {
+      Logger.debug('photon_feature_parse_failed',
+          exception: e, stackTrace: st, feature: 'geocoding', action: 'photon_parse');
+      return null;
+    }
+  }
+
+  // Persiste lista de resultados no cache com a chave normalizada
+  Future<void> _saveToCache(List<GeocodingResult> results, String key) async {
+    final entries = results
+        .map((r) => _cacheDao.buildEntry(
+              id: _uuid.v4(),
+              queryKey: key,
+              displayName: r.displayName,
+              lat: r.lat,
+              lon: r.lon,
+              source: r.source,
+            ))
+        .toList();
+    await _cacheDao.saveAll(entries);
+  }
+
+  // Heurística: o endereço possui número se contiver dígito precedido de vírgula/espaço
+  bool _addressHasNumber(String address) =>
+      RegExp(r'[,\s]\d+').hasMatch(address);
+}
+
+
+==============================================================
+FILE: lib/infrastructure/geocoding/geocoding_platform_interface.dart
+==============================================================
+// Contrato de geocoding — permite trocar implementação por plataforma sem
+// alterar os chamadores.
+//
+// Android: AndroidGeocodingService (Geocoder nativo + Photon fallback).
+// iOS futuro: IOSGeocodingService via MKLocalSearch + CLGeocoder.
+// Premium futuro: PremiumGeocodingService (HERE / Google Places).
+abstract class GeocodingPlatformInterface {
+  // Busca forward: nome de local ou endereço → lista de resultados ordenada por confiança.
+  // Retorna lista vazia se nenhum resultado for encontrado.
+  Future<List<GeocodingResult>> search(String query);
+
+  // Geocoding reverso: coordenadas → nome do local mais próximo.
+  // Retorna null se nenhum resultado for encontrado.
+  Future<GeocodingResult?> reverse(double lat, double lon);
+}
+
+// Resultado de geocoding normalizado — independente da fonte.
+class GeocodingResult {
+  // Nome exibível do local (ex: "Av. Paulista, 1578 — São Paulo, SP")
+  final String displayName;
+
+  final double lat;
+  final double lon;
+
+  // Fonte que gerou o resultado: 'geocoder_native', 'photon' ou 'premium'
+  final String source;
+
+  // Indica que o resultado inclui número de rua (precisão de endereço completo)
+  final bool hasNumber;
+
+  const GeocodingResult({
+    required this.displayName,
+    required this.lat,
+    required this.lon,
+    required this.source,
+    this.hasNumber = false,
+  });
+
+  @override
+  String toString() =>
+      'GeocodingResult(displayName: $displayName, lat: $lat, lon: $lon, source: $source)';
+}
+
+
+==============================================================
+FILE: android/app/src/main/kotlin/**/MainActivity.kt
+==============================================================
+package com.sopro.sopro
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.app.PendingIntent
+import android.bluetooth.*
+import android.bluetooth.le.*
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.ParcelUuid
+import android.provider.Settings
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.google.android.gms.location.*
+import com.sopro.sopro.logging.CorrelationManager
+import com.sopro.sopro.logging.Logger
+import com.sopro.sopro.logging.LoggerConfiguration
+import com.sopro.sopro.logging.SessionManager
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
+import java.util.UUID
+
+// MainActivity expõe GPS, BLE Social e Geofencing nativo ao Flutter via canais nativos.
+//
+// ── GPS (Sprint 5) ──────────────────────────────────────────────────────────
+// MethodChannel "com.sopro.sopro/location":
+//   checkPermission / requestPermission / getCurrentPosition
+// EventChannel "com.sopro.sopro/location_stream":
+//   Stream de posição a cada 2s / 10m
+//
+// ── BLE Social (Sprint 7) ───────────────────────────────────────────────────
+// MethodChannel "com.sopro.sopro/ble":
+//   checkPermissions / requestPermissions
+//   startAdvertising({cardJson}) / stopAdvertising
+//   getAdapterState → "on" | "off" | "unavailable"
+//   connectAndReadCard({deviceId}) → String (cardJson) ou erro
+//
+// EventChannel "com.sopro.sopro/ble_scan":
+//   onListen  → inicia scan filtrado pelo SERVICE_UUID Sopro
+//   Eventos   → Map {deviceId, deviceName, rssi}
+//   onCancel  → para scan
+//
+// ── Geofencing nativo (Sprint 13) ───────────────────────────────────────────
+// MethodChannel "com.sopro.sopro/native_geofence":
+//   addGeofence({id, lat, lng, radius, name}) — registra no GeofencingClient
+//   removeGeofence({id})                      — remove pelo ID do ambiente
+//   clearGeofences()                          — remove todos os geofences
+//   hasBackgroundLocationPermission()         — bool (Android 10+)
+//   requestBackgroundLocationPermission()     — bool (abre dialog/Configurações)
+//
+// O GeofencingClient do Android gerencia as zonas mesmo com o app fechado:
+// ao entrar num geofence, o sistema aciona o GeofenceReceiver que envia
+// a notificação via NotificationManager sem depender do app estar vivo.
+//
+// Peripheral role: BluetoothLeAdvertiser + BluetoothGattServer
+// Central role:    BluetoothLeScanner + BluetoothGatt (GATT client)
+class MainActivity : FlutterActivity() {
+
+    companion object {
+        // ── GPS ───────────────────────────────────────────────────────────────
+        private const val LOCATION_CHANNEL  = "com.sopro.sopro/location"
+        private const val STREAM_CHANNEL    = "com.sopro.sopro/location_stream"
+        private const val PERM_REQUEST_LOC  = 1001
+
+        // ── BLE ───────────────────────────────────────────────────────────────
+        private const val BLE_CHANNEL       = "com.sopro.sopro/ble"
+        private const val BLE_SCAN_CHANNEL  = "com.sopro.sopro/ble_scan"
+        private const val PERM_REQUEST_BLE  = 1002
+
+        // ── Geofencing nativo ─────────────────────────────────────────────────
+        private const val GEOFENCE_CHANNEL      = "com.sopro.sopro/native_geofence"
+        private const val PERM_REQUEST_BG_LOC   = 1003
+        // SharedPreferences compartilhadas com GeofenceReceiver: {envId → envName}
+        private const val PREFS_GEOFENCE_NAMES  = GeofenceReceiver.PREFS_NAME
+
+        // ── Overlay (botão flutuante de voz) ──────────────────────────────────
+        private const val OVERLAY_CHANNEL  = "com.sopro.sopro/overlay"
+        private const val PERM_REQUEST_MIC = 1004
+        private const val TAG              = "MainActivity"
+
+        // UUIDs Sopro — FIXOS (nunca alterar; identificam o app na rede BLE)
+        private val SERVICE_UUID           = ParcelUuid.fromString("550e8400-e29b-41d4-a716-446655440000")
+        private val CONTEXT_CARD_CHAR_UUID = UUID.fromString("550e8401-e29b-41d4-a716-446655440000")
+
+        // Timeout para conexão GATT ao buscar ContextCard de outro dispositivo
+        private const val GATT_TIMEOUT_MS  = 10_000L
+    }
+
+    // ── GPS ───────────────────────────────────────────────────────────────────
+    private var fusedClient: FusedLocationProviderClient? = null
+    private var locationCallback: LocationCallback? = null
+    private var locationEventSink: EventChannel.EventSink? = null
+    private var pendingLocPermResult: MethodChannel.Result? = null
+
+    // ── Geofencing nativo ─────────────────────────────────────────────────────
+    private lateinit var geofencingClient: GeofencingClient
+    // PendingIntent que aponta para GeofenceReceiver; reutilizado em todas as chamadas
+    private var geofencePendingIntent: PendingIntent? = null
+    private var pendingBgLocResult: MethodChannel.Result? = null
+
+    // ── BLE peripheral (advertising + GATT server) ────────────────────────────
+    private var advertiser: BluetoothLeAdvertiser? = null
+    private var gattServer: BluetoothGattServer? = null
+    private var currentCardJson: String = "{}"
+    private var pendingBlePermResult: MethodChannel.Result? = null
+
+    // ── BLE central (scan + GATT client) ─────────────────────────────────────
+    private var scanner: BluetoothLeScanner? = null
+    private var scanCallback: ScanCallback? = null
+    private var scanEventSink: EventChannel.EventSink? = null
+    private val activeGatts = mutableListOf<BluetoothGatt>()
+
+    // Handler da main thread usado em callbacks GATT (que chegam em threads de fundo)
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    // Canal de overlay — armazenado para invocar métodos Dart a partir do onNewIntent
+    private var overlayChannel: MethodChannel? = null
+
+    // Promise pendente de requestMicrophonePermission() — resolvida em onRequestPermissionsResult
+    private var pendingMicPermResult: MethodChannel.Result? = null
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Ciclo de vida da Activity
+    // ═════════════════════════════════════════════════════════════════════════
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        val startTime = System.currentTimeMillis()
+        super.onCreate(savedInstanceState)
+        SessionManager.init(this)
+        if (savedInstanceState != null) {
+            Logger.info("activity_recreated", feature = "main_activity", action = "onCreate",
+                payload = mapOf("reason" to "system_recreation"),
+                durationMs = System.currentTimeMillis() - startTime)
+        } else {
+            Logger.info("activity_created", feature = "main_activity", action = "onCreate",
+                durationMs = System.currentTimeMillis() - startTime)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        Logger.debug("activity_started", feature = "main_activity", action = "onStart")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Logger.debug("activity_resumed", feature = "main_activity", action = "onResume")
+    }
+
+    override fun onPause() {
+        Logger.debug("activity_paused", feature = "main_activity", action = "onPause")
+        super.onPause()
+    }
+
+    override fun onStop() {
+        Logger.debug("activity_stopped", feature = "main_activity", action = "onStop")
+        super.onStop()
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Inicialização dos canais Flutter ↔ Native
+    // ═════════════════════════════════════════════════════════════════════════
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        val engineStart = System.currentTimeMillis()
+        Logger.info("flutter_engine_configuring", feature = "main_activity",
+            action = "configureFlutterEngine")
+        super.configureFlutterEngine(flutterEngine)
+
+        fusedClient       = LocationServices.getFusedLocationProviderClient(this)
+        geofencingClient  = LocationServices.getGeofencingClient(this)
+
+        // ── GPS: MethodChannel ────────────────────────────────────────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LOCATION_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                Logger.debug("method_channel_call", feature = "location", action = call.method,
+                    payload = mapOf("channel" to LOCATION_CHANNEL))
+                when (call.method) {
+                    "checkPermission" -> {
+                        val granted = hasLocationPermission()
+                        Logger.debug("permission_check", feature = "location", action = call.method,
+                            payload = mapOf("granted" to granted.toString()))
+                        result.success(granted)
+                    }
+                    "requestPermission" -> {
+                        Logger.info("permission_requested", feature = "location", action = call.method,
+                            payload = mapOf("permission" to "ACCESS_FINE_LOCATION"))
+                        requestLocationPermission(result)
+                    }
+                    "getCurrentPosition" -> {
+                        Logger.debug("location_fetch_start", feature = "location", action = call.method)
+                        getCurrentPosition(result)
+                    }
+                    "isLocationEnabled" -> {
+                        Logger.debug("gps_check_started", feature = "location", action = call.method)
+                        val lm = getSystemService(LOCATION_SERVICE) as LocationManager
+                        val enabled = lm.isLocationEnabled
+                        val providerGps     = lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                        val providerNetwork = lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+                        Logger.debug(
+                            if (enabled) "gps_enabled" else "gps_disabled",
+                            feature = "location",
+                            action  = call.method,
+                            payload = mapOf(
+                                "gps_enabled"      to enabled.toString(),
+                                "provider_gps"     to providerGps.toString(),
+                                "provider_network" to providerNetwork.toString()
+                            )
+                        )
+                        result.success(enabled)
+                    }
+                    "openLocationSettings" -> {
+                        startActivity(
+                            Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
+                                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        )
+                        Logger.info("opening_location_settings", feature = "location", action = call.method)
+                        result.success(null)
+                    }
+                    "openAppSettings" -> {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:$packageName")
+                            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        )
+                        Logger.info("opening_app_settings", feature = "location", action = call.method)
+                        result.success(null)
+                    }
+                    else -> {
+                        Logger.warn("method_channel_not_implemented", feature = "location",
+                            action = call.method, payload = mapOf("channel" to LOCATION_CHANNEL))
+                        result.notImplemented()
+                    }
+                }
+            }
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to LOCATION_CHANNEL))
+
+        // ── GPS: EventChannel (stream contínuo de posição) ────────────────────
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, STREAM_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, events: EventChannel.EventSink?) {
+                    Logger.info("location_stream_started", feature = "location", action = "stream")
+                    locationEventSink = events
+                    startLocationStream()
+                }
+                override fun onCancel(args: Any?) {
+                    Logger.info("location_stream_cancelled", feature = "location", action = "stream")
+                    stopLocationStream()
+                    locationEventSink = null
+                }
+            })
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to STREAM_CHANNEL))
+
+        // ── BLE: MethodChannel ────────────────────────────────────────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                Logger.debug("method_channel_call", feature = "ble", action = call.method,
+                    payload = mapOf("channel" to BLE_CHANNEL))
+                when (call.method) {
+                    "checkPermissions" -> {
+                        val granted = hasBluetoothPermissions()
+                        Logger.debug("permission_check", feature = "ble", action = call.method,
+                            payload = mapOf("granted" to granted.toString()))
+                        result.success(granted)
+                    }
+                    "requestPermissions" -> {
+                        Logger.info("permission_requested", feature = "ble", action = call.method,
+                            payload = mapOf("permissions" to "BLE_SCAN,BLE_CONNECT,BLE_ADVERTISE"))
+                        requestBluetoothPermissions(result)
+                    }
+                    "startAdvertising" -> {
+                        val cardJson = call.argument<String>("cardJson") ?: "{}"
+                        // txPower: 0=ULTRA_LOW, 1=LOW (padrão), 2=MEDIUM, 3=HIGH
+                        val txPower = call.argument<Int>("txPower") ?: 1
+                        Logger.info("ble_advertising_request", feature = "ble", action = call.method,
+                            payload = mapOf("tx_power" to txPower.toString()))
+                        startBleAdvertising(cardJson, txPower, result)
+                    }
+                    "stopAdvertising" -> {
+                        Logger.info("ble_advertising_stop_request", feature = "ble", action = call.method)
+                        stopBleAdvertising()
+                        result.success(null)
+                    }
+                    "getAdapterState" -> {
+                        val state = getAdapterState()
+                        Logger.debug("ble_adapter_state", feature = "ble", action = call.method,
+                            payload = mapOf("state" to state))
+                        result.success(state)
+                    }
+                    "isBluetoothEnabled" -> {
+                        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+                        val enabled = btManager?.adapter?.isEnabled == true
+                        Logger.debug(
+                            if (enabled) "bluetooth_enabled" else "bluetooth_disabled",
+                            feature = "ble", action = call.method,
+                            payload = mapOf("bluetooth_enabled" to enabled.toString())
+                        )
+                        result.success(enabled)
+                    }
+                    "openBluetoothSettings" -> {
+                        startActivity(
+                            Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        )
+                        Logger.info("opening_bluetooth_settings", feature = "ble", action = call.method)
+                        result.success(null)
+                    }
+                    "connectAndReadCard" -> {
+                        val deviceId = call.argument<String>("deviceId") ?: ""
+                        if (deviceId.isEmpty()) {
+                            Logger.warn("method_channel_invalid_args", feature = "ble",
+                                action = call.method, payload = mapOf("missing_arg" to "deviceId"))
+                            result.error("INVALID_ARGS", "deviceId is required", null)
+                            return@setMethodCallHandler
+                        }
+                        Logger.info("ble_gatt_connect_request", feature = "ble", action = call.method,
+                            payload = mapOf("device_id" to deviceId))
+                        connectAndReadCard(deviceId, result)
+                    }
+                    else -> {
+                        Logger.warn("method_channel_not_implemented", feature = "ble",
+                            action = call.method, payload = mapOf("channel" to BLE_CHANNEL))
+                        result.notImplemented()
+                    }
+                }
+            }
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to BLE_CHANNEL))
+
+        // ── BLE: EventChannel (stream de resultados do scan) ──────────────────
+        // Padrão espelhando o GPS stream: onListen inicia o scan, onCancel o para.
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, BLE_SCAN_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(args: Any?, events: EventChannel.EventSink?) {
+                    Logger.info("ble_scan_started", feature = "ble", action = "scan")
+                    scanEventSink = events
+                    startBleScan()
+                }
+                override fun onCancel(args: Any?) {
+                    Logger.info("ble_scan_cancelled", feature = "ble", action = "scan")
+                    stopBleScan()
+                    scanEventSink = null
+                }
+            })
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to BLE_SCAN_CHANNEL))
+
+        // ── Overlay (botão flutuante de voz): MethodChannel ──────────────────
+        overlayChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, OVERLAY_CHANNEL
+        ).also { ch ->
+            ch.setMethodCallHandler { call, result ->
+                Logger.debug("method_channel_call", feature = "overlay", action = call.method,
+                    payload = mapOf("channel" to OVERLAY_CHANNEL))
+                when (call.method) {
+                    "hasOverlayPermission" -> {
+                        val hasPermission = Settings.canDrawOverlays(this)
+                        Logger.debug("overlay_permission_check", feature = "overlay",
+                            action = call.method, payload = mapOf("granted" to hasPermission.toString()))
+                        result.success(hasPermission)
+                    }
+
+                    // Verifica se RECORD_AUDIO foi concedido — chamado pelo Dart antes de ativar o botão
+                    "hasMicrophonePermission" -> {
+                        result.success(hasMicrophonePermission())
+                    }
+
+                    // Solicita RECORD_AUDIO ao usuário — retorna bool via MethodChannel.Result
+                    // pendingMicPermResult guarda a promise até onRequestPermissionsResult()
+                    "requestMicrophonePermission" -> {
+                        requestMicrophonePermission(result)
+                    }
+
+                    "startFloatingVoiceService" -> {
+                        val svcIntent = Intent(this, FloatingVoiceService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(svcIntent)
+                        } else {
+                            startService(svcIntent)
+                        }
+                        Logger.info("service_started", feature = "overlay", action = call.method,
+                            payload = mapOf("service" to "FloatingVoiceService"))
+                        result.success(null)
+                    }
+
+                    "stopFloatingVoiceService" -> {
+                        stopService(Intent(this, FloatingVoiceService::class.java))
+                        Logger.info("service_stopped", feature = "overlay", action = call.method,
+                            payload = mapOf("service" to "FloatingVoiceService"))
+                        result.success(null)
+                    }
+
+                    "openOverlayPermissionSettings" -> {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        startActivity(intent)
+                        Logger.info("overlay_permission_settings_opened", feature = "overlay",
+                            action = call.method)
+                        result.success(null)
+                    }
+
+                    else -> {
+                        Logger.warn("method_channel_not_implemented", feature = "overlay",
+                            action = call.method, payload = mapOf("channel" to OVERLAY_CHANNEL))
+                        result.notImplemented()
+                    }
+                }
+            }
+        }
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to OVERLAY_CHANNEL))
+
+        // ── Geofencing nativo: MethodChannel ──────────────────────────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, GEOFENCE_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                Logger.debug("method_channel_call", feature = "geofence", action = call.method,
+                    payload = mapOf("channel" to GEOFENCE_CHANNEL))
+                when (call.method) {
+                    "addGeofence" -> {
+                        val id     = call.argument<String>("id") ?: run {
+                            Logger.warn("method_channel_invalid_args", feature = "geofence",
+                                action = call.method, payload = mapOf("missing_arg" to "id"))
+                            return@setMethodCallHandler
+                        }
+                        val lat    = call.argument<Double>("lat") ?: run {
+                            Logger.warn("method_channel_invalid_args", feature = "geofence",
+                                action = call.method, payload = mapOf("missing_arg" to "lat"))
+                            return@setMethodCallHandler
+                        }
+                        val lng    = call.argument<Double>("lng") ?: run {
+                            Logger.warn("method_channel_invalid_args", feature = "geofence",
+                                action = call.method, payload = mapOf("missing_arg" to "lng"))
+                            return@setMethodCallHandler
+                        }
+                        val radius = call.argument<Double>("radius") ?: run {
+                            Logger.warn("method_channel_invalid_args", feature = "geofence",
+                                action = call.method, payload = mapOf("missing_arg" to "radius"))
+                            return@setMethodCallHandler
+                        }
+                        val name   = call.argument<String>("name") ?: id
+                        addNativeGeofence(id, lat, lng, radius.toFloat(), name, result)
+                    }
+                    "removeGeofence" -> {
+                        val id = call.argument<String>("id") ?: run {
+                            Logger.warn("method_channel_invalid_args", feature = "geofence",
+                                action = call.method, payload = mapOf("missing_arg" to "id"))
+                            return@setMethodCallHandler
+                        }
+                        Logger.info("geofence_remove_request", feature = "geofence",
+                            action = call.method, payload = mapOf("id" to id))
+                        geofencingClient.removeGeofences(listOf(id))
+                            .addOnSuccessListener {
+                                // Remove também o nome salvo nas prefs
+                                getSharedPreferences(PREFS_GEOFENCE_NAMES, MODE_PRIVATE)
+                                    .edit().remove(id).apply()
+                                Logger.info("geofence_removed", feature = "geofence",
+                                    action = call.method, payload = mapOf("id" to id))
+                                result.success(null)
+                            }
+                            .addOnFailureListener { e ->
+                                Logger.error("geofence_remove_failed", feature = "geofence",
+                                    action = call.method, exception = e,
+                                    payload = mapOf("id" to id))
+                                result.error("REMOVE_FAILED", e.message, null)
+                            }
+                    }
+                    "clearGeofences" -> {
+                        val pi = geofencePendingIntent
+                        if (pi != null) {
+                            Logger.info("geofences_clear_request", feature = "geofence",
+                                action = call.method)
+                            geofencingClient.removeGeofences(pi)
+                                .addOnSuccessListener {
+                                    getSharedPreferences(PREFS_GEOFENCE_NAMES, MODE_PRIVATE)
+                                        .edit().clear().apply()
+                                    Logger.info("geofences_cleared", feature = "geofence",
+                                        action = call.method)
+                                    result.success(null)
+                                }
+                                .addOnFailureListener { e ->
+                                    Logger.error("geofences_clear_failed", feature = "geofence",
+                                        action = call.method, exception = e)
+                                    result.error("CLEAR_FAILED", e.message, null)
+                                }
+                        } else {
+                            Logger.debug("geofences_clear_noop", feature = "geofence",
+                                action = call.method,
+                                payload = mapOf("reason" to "no_pending_intent"))
+                            result.success(null) // nenhum geofence registrado ainda
+                        }
+                    }
+                    "hasBackgroundLocationPermission" -> {
+                        val granted = hasBackgroundLocationPermission()
+                        Logger.debug("permission_check", feature = "geofence", action = call.method,
+                            payload = mapOf("permission" to "ACCESS_BACKGROUND_LOCATION",
+                                "granted" to granted.toString()))
+                        result.success(granted)
+                    }
+                    "requestBackgroundLocationPermission" -> {
+                        Logger.info("permission_requested", feature = "geofence", action = call.method,
+                            payload = mapOf("permission" to "ACCESS_BACKGROUND_LOCATION"))
+                        requestBackgroundLocationPermission(result)
+                    }
+                    else -> {
+                        Logger.warn("method_channel_not_implemented", feature = "geofence",
+                            action = call.method, payload = mapOf("channel" to GEOFENCE_CHANNEL))
+                        result.notImplemented()
+                    }
+                }
+            }
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to GEOFENCE_CHANNEL))
+
+        // ── Geocoder Benchmark Channel ────────────────────────────────────────
+        // Canal temporário para testar o Geocoder nativo do Android.
+        // Remove a entrada do menu após os testes — o código pode permanecer inerte.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.sopro.sopro/geocoder")
+            .setMethodCallHandler { call, result ->
+                Logger.debug("method_channel_call", feature = "geocoder", action = call.method)
+                when (call.method) {
+
+                    // Busca até 5 endereços com bounding box opcional centrada no usuário (~55 km)
+                    "searchAddress" -> {
+                        val query   = call.argument<String>("query")  ?: ""
+                        val userLat = call.argument<Double>("userLat") ?: 0.0
+                        val userLon = call.argument<Double>("userLon") ?: 0.0
+                        val startTime = System.currentTimeMillis()
+                        Logger.debug("geocoder_search_start", feature = "geocoder", action = call.method,
+                            payload = if (LoggerConfiguration.debugLogging)
+                                mapOf("query" to query) else null)
+                        try {
+                            @Suppress("DEPRECATION")
+                            val geocoder = android.location.Geocoder(
+                                this, java.util.Locale("pt", "BR"))
+
+                            // delta ~0.5° ≈ 55 km; limita resultados à região do usuário
+                            val delta = 0.5
+                            val addresses = if (userLat != 0.0 && userLon != 0.0) {
+                                geocoder.getFromLocationName(
+                                    query, 5,
+                                    userLat - delta, userLon - delta,
+                                    userLat + delta, userLon + delta
+                                )
+                            } else {
+                                geocoder.getFromLocationName(query, 5)
+                            }
+
+                            val duration = (System.currentTimeMillis() - startTime).toInt()
+
+                            if (!addresses.isNullOrEmpty()) {
+                                val resultList = addresses.map { addr ->
+                                    mapOf(
+                                        "lat"              to addr.latitude,
+                                        "lon"              to addr.longitude,
+                                        "returned_address" to (addr.getAddressLine(0) ?: ""),
+                                        "has_number"       to (!addr.subThoroughfare.isNullOrEmpty()),
+                                        "name"             to (addr.featureName ?: ""),
+                                        "city"             to (addr.locality ?: addr.subAdminArea ?: ""),
+                                        "state"            to (addr.adminArea ?: "")
+                                    )
+                                }
+                                Logger.debug("geocoder_search_result", feature = "geocoder",
+                                    action = call.method,
+                                    durationMs = duration.toLong(),
+                                    payload = mapOf("found" to "true",
+                                        "count" to addresses.size.toString()))
+                                result.success(mapOf(
+                                    "found"       to true,
+                                    "results"     to resultList,
+                                    "duration_ms" to duration
+                                ))
+                            } else {
+                                Logger.debug("geocoder_search_result", feature = "geocoder",
+                                    action = call.method,
+                                    durationMs = duration.toLong(),
+                                    payload = mapOf("found" to "false"))
+                                result.success(mapOf(
+                                    "found"       to false,
+                                    "results"     to emptyList<Map<String, Any>>(),
+                                    "duration_ms" to duration
+                                ))
+                            }
+                        } catch (e: Exception) {
+                            Logger.warn("geocoder_search_failed", feature = "geocoder",
+                                action = call.method, exception = e,
+                                durationMs = System.currentTimeMillis() - startTime)
+                            result.success(mapOf(
+                                "found"       to false,
+                                "results"     to emptyList<Map<String, Any>>(),
+                                "duration_ms" to 0
+                            ))
+                        }
+                    }
+                    // Geocoding reverso: lat/lon → nome do local mais próximo
+                    "reverseGeocode" -> {
+                        val lat = call.argument<Double>("lat") ?: 0.0
+                        val lon = call.argument<Double>("lon") ?: 0.0
+                        val startTime = System.currentTimeMillis()
+                        Logger.debug("geocoder_reverse_start", feature = "geocoder", action = call.method)
+                        try {
+                            @Suppress("DEPRECATION")
+                            val geocoder = android.location.Geocoder(
+                                this, java.util.Locale("pt", "BR"))
+                            val addresses = geocoder.getFromLocation(lat, lon, 1)
+                            if (!addresses.isNullOrEmpty()) {
+                                val addr = addresses[0]
+                                // Prefere featureName, cai para thoroughfare, bairro ou cidade
+                                val displayName = addr.featureName
+                                    ?: addr.thoroughfare
+                                    ?: addr.subLocality
+                                    ?: addr.locality
+                                    ?: "Local desconhecido"
+                                Logger.debug("geocoder_reverse_result", feature = "geocoder",
+                                    action = call.method,
+                                    durationMs = System.currentTimeMillis() - startTime,
+                                    payload = mapOf("found" to "true"))
+                                result.success(mapOf(
+                                    "found"            to true,
+                                    "display_name"     to displayName,
+                                    "returned_address" to (addr.getAddressLine(0) ?: ""),
+                                    "lat"              to lat,
+                                    "lon"              to lon
+                                ))
+                            } else {
+                                Logger.debug("geocoder_reverse_result", feature = "geocoder",
+                                    action = call.method,
+                                    durationMs = System.currentTimeMillis() - startTime,
+                                    payload = mapOf("found" to "false"))
+                                result.success(mapOf("found" to false))
+                            }
+                        } catch (e: Exception) {
+                            Logger.warn("geocoder_reverse_failed", feature = "geocoder",
+                                action = call.method, exception = e,
+                                durationMs = System.currentTimeMillis() - startTime)
+                            result.success(mapOf("found" to false))
+                        }
+                    }
+
+                    else -> {
+                        Logger.warn("method_channel_not_implemented", feature = "geocoder",
+                            action = call.method)
+                        result.notImplemented()
+                    }
+                }
+            }
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to "com.sopro.sopro/geocoder"))
+
+        Logger.info("flutter_engine_configured", feature = "main_activity",
+            action = "configureFlutterEngine",
+            durationMs = System.currentTimeMillis() - engineStart,
+            payload = mapOf("channels_count" to "6"))
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // GPS — permissão + posição pontual + stream
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun requestLocationPermission(result: MethodChannel.Result) {
+        if (hasLocationPermission()) {
+            Logger.debug("permission_already_granted", feature = "location",
+                action = "requestLocationPermission",
+                payload = mapOf("permission" to "ACCESS_FINE_LOCATION"))
+            result.success(true); return
+        }
+        pendingLocPermResult = result
+        ActivityCompat.requestPermissions(
+            this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), PERM_REQUEST_LOC
+        )
+    }
+
+    private fun getCurrentPosition(result: MethodChannel.Result) {
+        if (!hasLocationPermission()) {
+            Logger.warn("location_permission_denied", feature = "location",
+                action = "getCurrentPosition")
+            result.error("PERMISSION_DENIED", "Location permission not granted", null); return
+        }
+        fusedClient?.lastLocation
+            ?.addOnSuccessListener { loc ->
+                if (loc != null) {
+                    Logger.debug("location_obtained", feature = "location",
+                        action = "getCurrentPosition",
+                        payload = mapOf("source" to "last_known"))
+                    result.success(locationMap(loc))
+                } else {
+                    Logger.debug("location_null_requesting_fresh", feature = "location",
+                        action = "getCurrentPosition")
+                    requestFreshLocation(result)
+                }
+            }
+            ?.addOnFailureListener { e ->
+                Logger.error("location_fetch_failed", feature = "location",
+                    action = "getCurrentPosition", exception = e)
+                result.error("LOCATION_ERROR", e.message, null)
+            }
+    }
+
+    private fun requestFreshLocation(result: MethodChannel.Result) {
+        Logger.debug("location_fresh_request", feature = "location", action = "requestFreshLocation")
+        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 0L)
+            .setMaxUpdates(1).build()
+        var done = false
+        fusedClient?.requestLocationUpdates(req, object : LocationCallback() {
+            override fun onLocationResult(lr: LocationResult) {
+                if (done) return
+                done = true
+                fusedClient?.removeLocationUpdates(this)
+                val loc = lr.lastLocation
+                if (loc != null) {
+                    Logger.debug("location_obtained", feature = "location",
+                        action = "requestFreshLocation", payload = mapOf("source" to "fresh"))
+                    result.success(locationMap(loc))
+                } else {
+                    Logger.warn("location_null_fresh", feature = "location",
+                        action = "requestFreshLocation")
+                    result.error("NULL_LOCATION", "Could not obtain location", null)
+                }
+            }
+        }, Looper.getMainLooper())
+    }
+
+    private fun startLocationStream() {
+        if (!hasLocationPermission()) {
+            Logger.warn("location_stream_permission_denied", feature = "location",
+                action = "startLocationStream")
+            return
+        }
+        Logger.debug("location_stream_starting", feature = "location", action = "startLocationStream")
+        val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2_000L)
+            .setMinUpdateDistanceMeters(10f).build()
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(lr: LocationResult) {
+                lr.lastLocation?.let { loc ->
+                    Logger.trace("location_update", feature = "location", action = "stream")
+                    locationEventSink?.success(locationMap(loc))
+                }
+            }
+        }
+        fusedClient?.requestLocationUpdates(req, locationCallback!!, Looper.getMainLooper())
+    }
+
+    private fun stopLocationStream() {
+        Logger.debug("location_stream_stopping", feature = "location", action = "stopLocationStream")
+        locationCallback?.let { fusedClient?.removeLocationUpdates(it) }
+        locationCallback = null
+    }
+
+    private fun locationMap(loc: android.location.Location) = mapOf(
+        "latitude"  to loc.latitude,
+        "longitude" to loc.longitude,
+        "accuracy"  to loc.accuracy.toDouble()
+    )
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Geofencing nativo — GeofencingClient + PendingIntent → GeofenceReceiver
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // Cria (ou reutiliza) o PendingIntent que aponta para o GeofenceReceiver.
+    // FLAG_MUTABLE é obrigatório no Android 12+ para o GeofencingClient injetar
+    // os dados da transição no Intent antes de entregá-lo ao receiver.
+    private fun getGeofencePendingIntent(): PendingIntent {
+        geofencePendingIntent?.let { return it }
+        val intent = Intent(this, GeofenceReceiver::class.java)
+        val flags  = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        else
+            PendingIntent.FLAG_UPDATE_CURRENT
+        return PendingIntent.getBroadcast(this, 0, intent, flags)
+            .also { geofencePendingIntent = it }
+    }
+
+    // Registra um geofence circular no GeofencingClient do Android.
+    // O sistema Android monitorará o geofence mesmo após o app ser fechado.
+    // [name] é salvo nas SharedPreferences para que o GeofenceReceiver possa
+    // exibi-lo na notificação sem precisar acessar o banco de dados do app.
+    @SuppressLint("MissingPermission") // permissão verificada em hasLocationPermission()
+    private fun addNativeGeofence(
+        id: String, lat: Double, lng: Double, radius: Float, name: String,
+        result: MethodChannel.Result
+    ) {
+        val corrId = CorrelationManager.beginOperation("geofence_add")
+        if (!hasLocationPermission()) {
+            Logger.warn("geofence_permission_denied", feature = "geofence",
+                action = "addNativeGeofence",
+                payload = mapOf("permission" to "ACCESS_FINE_LOCATION"),
+                correlationId = corrId)
+            CorrelationManager.endOperation("geofence_add")
+            result.error("PERMISSION_DENIED", "ACCESS_FINE_LOCATION required", null)
+            return
+        }
+
+        Logger.info("geofence_add_request", feature = "geofence", action = "addNativeGeofence",
+            payload = if (LoggerConfiguration.debugLogging)
+                mapOf("name" to name, "id" to id,
+                    "radius" to radius.toString())
+            else mapOf("id" to id),
+            correlationId = corrId)
+
+        val geofence = Geofence.Builder()
+            .setRequestId(id)                       // ID único = ID do ambiente no banco
+            .setCircularRegion(lat, lng, radius)    // centro e raio em metros
+            .setExpirationDuration(Geofence.NEVER_EXPIRE)   // permanente até removeGeofence()
+            .setTransitionTypes(
+                Geofence.GEOFENCE_TRANSITION_ENTER or
+                Geofence.GEOFENCE_TRANSITION_EXIT
+            )
+            .build()
+
+        val request = GeofencingRequest.Builder()
+            // Não dispara ao registrar caso o usuário já esteja dentro do geofence;
+            // o disparo acontece na próxima entrada detectada pelo sistema.
+            .setInitialTrigger(0)
+            .addGeofence(geofence)
+            .build()
+
+        geofencingClient.addGeofences(request, getGeofencePendingIntent())
+            .addOnSuccessListener {
+                // Persiste o nome do ambiente para uso offline pelo GeofenceReceiver
+                getSharedPreferences(PREFS_GEOFENCE_NAMES, MODE_PRIVATE)
+                    .edit().putString(id, name).apply()
+                Logger.info("geofence_registered", feature = "geofence",
+                    action = "addNativeGeofence",
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("name" to name, "id" to id) else mapOf("id" to id),
+                    correlationId = corrId)
+                CorrelationManager.endOperation("geofence_add")
+                result.success(null)
+            }
+            .addOnFailureListener { e ->
+                Logger.error("geofence_registration_failed", feature = "geofence",
+                    action = "addNativeGeofence",
+                    exception = e,
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("name" to name, "id" to id) else mapOf("id" to id),
+                    correlationId = corrId)
+                CorrelationManager.endOperation("geofence_add")
+                result.error("ADD_FAILED", e.message ?: "Unknown error", null)
+            }
+    }
+
+    // Verifica se ACCESS_BACKGROUND_LOCATION foi concedido.
+    // Necessário no Android 10+ para que o GeofenceReceiver seja acionado
+    // quando o app não está em primeiro plano.
+    private fun hasBackgroundLocationPermission(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            // Android 9 e anteriores: ACCESS_FINE_LOCATION já cobre background
+            hasLocationPermission()
+        }
+
+    // Solicita ACCESS_BACKGROUND_LOCATION ao usuário.
+    // No Android 11+ o sistema exige que o usuário conceda manualmente via
+    // Configurações > Apps > Sopro > Permissões > Localização > "Sempre".
+    private fun requestBackgroundLocationPermission(result: MethodChannel.Result) {
+        if (hasBackgroundLocationPermission()) {
+            Logger.debug("permission_already_granted", feature = "geofence",
+                action = "requestBackgroundLocationPermission",
+                payload = mapOf("permission" to "ACCESS_BACKGROUND_LOCATION"))
+            result.success(true); return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            pendingBgLocResult = result
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+                PERM_REQUEST_BG_LOC
+            )
+        } else {
+            result.success(true) // versões anteriores ao Android 10 não precisam
+        }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Microfone — permissão para FloatingVoiceService
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // Retorna true se RECORD_AUDIO foi concedido pelo usuário.
+    private fun hasMicrophonePermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    // Solicita RECORD_AUDIO ao usuário; result é resolvida em onRequestPermissionsResult().
+    // Se já concedida, resolve imediatamente com true sem exibir dialog.
+    private fun requestMicrophonePermission(result: MethodChannel.Result) {
+        if (hasMicrophonePermission()) {
+            Logger.debug("permission_already_granted", feature = "overlay",
+                action = "requestMicrophonePermission",
+                payload = mapOf("permission" to "RECORD_AUDIO"))
+            result.success(true); return
+        }
+        pendingMicPermResult = result
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.RECORD_AUDIO),
+            PERM_REQUEST_MIC
+        )
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // BLE — permissões + estado do adaptador
+    // ═════════════════════════════════════════════════════════════════════════
+
+    private fun hasBluetoothPermissions(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)      == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)   == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
+        } else {
+            hasLocationPermission()
+        }
+
+    private fun requestBluetoothPermissions(result: MethodChannel.Result) {
+        if (hasBluetoothPermissions()) {
+            Logger.debug("permission_already_granted", feature = "ble",
+                action = "requestBluetoothPermissions",
+                payload = mapOf("permissions" to "BLE_SCAN,BLE_CONNECT,BLE_ADVERTISE"))
+            result.success(true); return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            pendingBlePermResult = result
+            ActivityCompat.requestPermissions(this, arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.BLUETOOTH_ADVERTISE
+            ), PERM_REQUEST_BLE)
+        } else {
+            requestLocationPermission(result)
+        }
+    }
+
+    // Retorna estado legível do adaptador Bluetooth para o Dart
+    private fun getAdapterState(): String {
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = btManager?.adapter ?: return "unavailable"
+        return if (adapter.isEnabled) "on" else "off"
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // BLE Peripheral — advertising + GATT server (expõe ContextCard)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // [txPower]: 0=ULTRA_LOW (~2m), 1=LOW (~5m), 2=MEDIUM (~10m), 3=HIGH (~20m+)
+    // Mapeado diretamente para AdvertiseSettings.ADVERTISE_TX_POWER_* (mesmos valores).
+    private fun startBleAdvertising(cardJson: String, txPower: Int, result: MethodChannel.Result) {
+        val corrId = CorrelationManager.beginOperation("ble_advertising")
+        if (!hasBluetoothPermissions()) {
+            Logger.warn("ble_advertising_permission_denied", feature = "ble",
+                action = "startBleAdvertising", correlationId = corrId)
+            CorrelationManager.endOperation("ble_advertising")
+            result.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null); return
+        }
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val btAdapter = btManager?.adapter
+        if (btAdapter == null || !btAdapter.isEnabled) {
+            Logger.warn("ble_adapter_disabled", feature = "ble", action = "startBleAdvertising",
+                correlationId = corrId)
+            CorrelationManager.endOperation("ble_advertising")
+            result.error("BT_DISABLED", "Bluetooth is not enabled", null); return
+        }
+
+        currentCardJson = cardJson
+        setupGattServer(btManager)
+
+        advertiser = btAdapter.bluetoothLeAdvertiser
+        if (advertiser == null) {
+            Logger.warn("ble_advertiser_unavailable", feature = "ble", action = "startBleAdvertising",
+                correlationId = corrId)
+            CorrelationManager.endOperation("ble_advertising")
+            result.error("NO_ADVERTISER", "Device does not support BLE advertising", null); return
+        }
+
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+            .setConnectable(true)
+            .setTimeout(0)
+            // Nível de potência configurado pelo usuário nas Configurações do app
+            .setTxPowerLevel(txPower.coerceIn(0, 3))
+            .build()
+
+        val data = AdvertiseData.Builder()
+            .addServiceUuid(SERVICE_UUID)
+            .setIncludeDeviceName(false)
+            .build()
+
+        var responded = false
+        advertiser?.startAdvertising(settings, data, object : AdvertiseCallback() {
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+                Logger.info("ble_advertising_started", feature = "ble",
+                    action = "startBleAdvertising",
+                    payload = mapOf("tx_power" to txPower.toString()),
+                    correlationId = corrId)
+                CorrelationManager.endOperation("ble_advertising")
+                if (!responded) { responded = true; result.success(true) }
+            }
+            override fun onStartFailure(errorCode: Int) {
+                Logger.error("ble_advertising_failed", feature = "ble",
+                    action = "startBleAdvertising",
+                    payload = mapOf("error_code" to errorCode.toString()),
+                    correlationId = corrId)
+                CorrelationManager.endOperation("ble_advertising")
+                if (!responded) { responded = true
+                    result.error("ADVERTISE_FAILED", "Error code: $errorCode", null)
+                }
+            }
+        })
+    }
+
+    private fun stopBleAdvertising() {
+        try { advertiser?.stopAdvertising(object : AdvertiseCallback() {}) } catch (e: Exception) {
+            Logger.warn("ble_stop_advertise_failed", feature = "ble",
+                action = "stopBleAdvertising", exception = e)
+        }
+        advertiser = null
+        try { gattServer?.close() } catch (e: Exception) {
+            Logger.warn("gatt_server_close_failed", feature = "ble",
+                action = "stopBleAdvertising", exception = e)
+        }
+        gattServer = null
+    }
+
+    // GATT server: responde leituras da characteristic de ContextCard.
+    // Suporta Long Read (offset incremental) para payloads maiores que o MTU negociado.
+    private fun setupGattServer(btManager: BluetoothManager) {
+        try { gattServer?.close() } catch (e: Exception) {
+            Logger.warn("gatt_server_close_failed", feature = "ble",
+                action = "setupGattServer", exception = e)
+        }
+
+        gattServer = btManager.openGattServer(this, object : BluetoothGattServerCallback() {
+            override fun onCharacteristicReadRequest(
+                device: BluetoothDevice, requestId: Int, offset: Int,
+                characteristic: BluetoothGattCharacteristic
+            ) {
+                if (characteristic.uuid != CONTEXT_CARD_CHAR_UUID) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null)
+                    return
+                }
+                val bytes = currentCardJson.toByteArray(Charsets.UTF_8)
+                if (offset > bytes.size) {
+                    gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_INVALID_OFFSET, 0, null)
+                    return
+                }
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS,
+                    offset, bytes.copyOfRange(offset, bytes.size))
+            }
+            override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {}
+        })
+
+        val service = BluetoothGattService(
+            UUID.fromString("550e8400-e29b-41d4-a716-446655440000"),
+            BluetoothGattService.SERVICE_TYPE_PRIMARY
+        )
+        val char = BluetoothGattCharacteristic(
+            CONTEXT_CARD_CHAR_UUID,
+            BluetoothGattCharacteristic.PROPERTY_READ,
+            BluetoothGattCharacteristic.PERMISSION_READ
+        )
+        service.addCharacteristic(char)
+        gattServer?.addService(service)
+        Logger.debug("gatt_server_initialized", feature = "ble", action = "setupGattServer")
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // BLE Central — scan (EventChannel) + GATT client (connectAndReadCard)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // Inicia scan BLE filtrando apenas dispositivos com o SERVICE_UUID Sopro.
+    // Resultados são emitidos via scanEventSink (EventChannel) para o Dart.
+    private fun startBleScan() {
+        if (!hasBluetoothPermissions()) {
+            Logger.warn("ble_scan_permission_denied", feature = "ble", action = "startBleScan")
+            scanEventSink?.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null)
+            return
+        }
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val btAdapter = btManager?.adapter
+        if (btAdapter == null || !btAdapter.isEnabled) {
+            Logger.warn("ble_adapter_disabled", feature = "ble", action = "startBleScan")
+            scanEventSink?.error("BT_DISABLED", "Bluetooth is not enabled", null)
+            return
+        }
+
+        scanner = btAdapter.bluetoothLeScanner
+        if (scanner == null) {
+            Logger.warn("ble_scanner_unavailable", feature = "ble", action = "startBleScan")
+            scanEventSink?.error("NO_SCANNER", "BLE scanner unavailable", null)
+            return
+        }
+
+        val filter = ScanFilter.Builder()
+            .setServiceUuid(SERVICE_UUID)
+            .build()
+
+        // SCAN_MODE_BALANCED: reduz frequência de callbacks vs LOW_LATENCY,
+        // diminuindo detecções duplicadas do mesmo dispositivo em burst.
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
+            .build()
+
+        scanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                // Nome preferido: scanRecord contém o nome do advertisement
+                val name = result.scanRecord?.deviceName
+                    ?: result.device.name
+                    ?: ""
+                val info = mapOf(
+                    "deviceId"   to result.device.address,
+                    "deviceName" to name,
+                    "rssi"       to result.rssi
+                )
+                Logger.trace("ble_scan_result", feature = "ble", action = "scan",
+                    payload = mapOf("device_id" to result.device.address,
+                        "rssi" to result.rssi.toString()))
+                // ScanCallback pode ser chamado de thread de fundo — garante main thread
+                mainHandler.post { scanEventSink?.success(info) }
+            }
+            override fun onScanFailed(errorCode: Int) {
+                Logger.error("ble_scan_failed", feature = "ble", action = "scan",
+                    payload = mapOf("error_code" to errorCode.toString()))
+                mainHandler.post {
+                    scanEventSink?.error("SCAN_FAILED", "Error code: $errorCode", null)
+                }
+            }
+        }
+
+        scanner?.startScan(listOf(filter), settings, scanCallback!!)
+        Logger.debug("ble_scan_active", feature = "ble", action = "startBleScan",
+            payload = mapOf("filter" to SERVICE_UUID.toString()))
+    }
+
+    private fun stopBleScan() {
+        try { scanCallback?.let { scanner?.stopScan(it) } } catch (e: Exception) {
+            Logger.warn("ble_stop_scan_failed", feature = "ble", action = "stopBleScan", exception = e)
+        }
+        Logger.debug("ble_scan_stopped", feature = "ble", action = "stopBleScan")
+        scanCallback = null
+        scanner = null
+    }
+
+    // Conecta ao dispositivo como cliente GATT, lê o ContextCard e desconecta.
+    // Retorna o JSON do ContextCard via MethodChannel result.
+    // Timeout de GATT_TIMEOUT_MS para evitar que a Promise fique pendente para sempre.
+    private fun connectAndReadCard(deviceId: String, result: MethodChannel.Result) {
+        val corrId = CorrelationManager.beginOperation("ble_gatt")
+        if (!hasBluetoothPermissions()) {
+            Logger.warn("ble_gatt_permission_denied", feature = "ble", action = "connectAndReadCard",
+                correlationId = corrId)
+            CorrelationManager.endOperation("ble_gatt")
+            result.error("PERMISSION_DENIED", "Bluetooth permissions not granted", null); return
+        }
+        val btManager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val btAdapter = btManager?.adapter
+        if (btAdapter == null || !btAdapter.isEnabled) {
+            Logger.warn("ble_adapter_disabled", feature = "ble", action = "connectAndReadCard",
+                correlationId = corrId)
+            CorrelationManager.endOperation("ble_gatt")
+            result.error("BT_DISABLED", "Bluetooth is not enabled", null); return
+        }
+
+        val device = try {
+            btAdapter.getRemoteDevice(deviceId)
+        } catch (e: IllegalArgumentException) {
+            Logger.warn("ble_gatt_invalid_device_id", feature = "ble", action = "connectAndReadCard",
+                exception = e, payload = mapOf("device_id" to deviceId), correlationId = corrId)
+            CorrelationManager.endOperation("ble_gatt")
+            result.error("INVALID_ID", "Invalid device ID: $deviceId", null); return
+        }
+
+        // Fecha GATTs zumbis para este dispositivo antes de tentar nova conexão
+        closeZombieGatts(deviceId)
+
+        var responded = false
+        var activeGatt: BluetoothGatt? = null
+
+        // Garante que result seja chamado exatamente uma vez
+        fun respond(block: () -> Unit) {
+            if (!responded) {
+                responded = true
+                mainHandler.post(block)
+            }
+        }
+
+        fun cleanup(gatt: BluetoothGatt) {
+            try { gatt.disconnect() } catch (e: Exception) {
+                Logger.warn("gatt_disconnect_failed", feature = "ble", exception = e,
+                    correlationId = corrId)
+            }
+            mainHandler.postDelayed({
+                try { gatt.close() } catch (e: Exception) {
+                    Logger.warn("gatt_close_failed", feature = "ble", exception = e,
+                        correlationId = corrId)
+                }
+                activeGatts.remove(gatt)
+            }, 500L) // pequeno delay para que o disconnect seja processado
+        }
+
+        // Timeout: se nenhuma resposta chegar em GATT_TIMEOUT_MS, falha graciosamente
+        val timeoutRunnable = Runnable {
+            Logger.warn("ble_gatt_timeout", feature = "ble", action = "connectAndReadCard",
+                durationMs = GATT_TIMEOUT_MS, payload = mapOf("device_id" to deviceId),
+                correlationId = corrId)
+            CorrelationManager.endOperation("ble_gatt")
+            respond { result.error("TIMEOUT", "GATT connection timed out", null) }
+            activeGatt?.let { cleanup(it) }
+        }
+        val gattCallback = object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                when (newState) {
+                    BluetoothProfile.STATE_CONNECTED -> {
+                        Logger.debug("ble_gatt_connected", feature = "ble",
+                            action = "connectAndReadCard",
+                            payload = mapOf("device_id" to deviceId),
+                            correlationId = corrId)
+                        // Solicita MTU maior para suportar ContextCards de até 512 bytes
+                        gatt.requestMtu(512)
+                    }
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        mainHandler.removeCallbacks(timeoutRunnable)
+                        Logger.warn("ble_gatt_disconnected", feature = "ble",
+                            action = "connectAndReadCard",
+                            payload = mapOf("device_id" to deviceId, "status" to status.toString()),
+                            correlationId = corrId)
+                        CorrelationManager.endOperation("ble_gatt")
+                        respond { result.error("DISCONNECTED", "Device disconnected (status=$status)", null) }
+                        try { gatt.close() } catch (e: Exception) {
+                            Logger.warn("gatt_close_failed", feature = "ble", exception = e,
+                                correlationId = corrId)
+                        }
+                        activeGatts.remove(gatt)
+                    }
+                }
+            }
+
+            override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+                Logger.trace("ble_gatt_mtu_changed", feature = "ble", action = "connectAndReadCard",
+                    payload = mapOf("mtu" to mtu.toString(), "status" to status.toString()),
+                    correlationId = corrId)
+                // Inicia descoberta de serviços após negociar MTU
+                gatt.discoverServices()
+            }
+
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    Logger.warn("ble_gatt_discovery_failed", feature = "ble",
+                        action = "connectAndReadCard",
+                        payload = mapOf("status" to status.toString()),
+                        correlationId = corrId)
+                    CorrelationManager.endOperation("ble_gatt")
+                    respond { result.error("DISCOVERY_FAILED", "Service discovery failed: $status", null) }
+                    cleanup(gatt); return
+                }
+                val service = gatt.getService(UUID.fromString("550e8400-e29b-41d4-a716-446655440000"))
+                if (service == null) {
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    Logger.warn("ble_gatt_service_not_found", feature = "ble",
+                        action = "connectAndReadCard", correlationId = corrId)
+                    CorrelationManager.endOperation("ble_gatt")
+                    respond { result.error("NO_SERVICE", "Sopro service not found", null) }
+                    cleanup(gatt); return
+                }
+                val char = service.getCharacteristic(CONTEXT_CARD_CHAR_UUID)
+                if (char == null) {
+                    mainHandler.removeCallbacks(timeoutRunnable)
+                    Logger.warn("ble_gatt_characteristic_not_found", feature = "ble",
+                        action = "connectAndReadCard", correlationId = corrId)
+                    CorrelationManager.endOperation("ble_gatt")
+                    respond { result.error("NO_CHAR", "ContextCard characteristic not found", null) }
+                    cleanup(gatt); return
+                }
+                Logger.debug("ble_gatt_services_discovered", feature = "ble",
+                    action = "connectAndReadCard", correlationId = corrId)
+                gatt.readCharacteristic(char)
+            }
+
+            // Callback legado (Android < 13) — suprimido pois ainda é chamado em < API 33
+            @Suppress("DEPRECATION")
+            override fun onCharacteristicRead(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                status: Int
+            ) {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                    onReadResult(gatt, characteristic.value, status, result, timeoutRunnable)
+                }
+            }
+
+            // Callback moderno (Android 13+)
+            override fun onCharacteristicRead(
+                gatt: BluetoothGatt,
+                characteristic: BluetoothGattCharacteristic,
+                value: ByteArray,
+                status: Int
+            ) {
+                onReadResult(gatt, value, status, result, timeoutRunnable)
+            }
+
+            private fun onReadResult(
+                gatt: BluetoothGatt,
+                value: ByteArray,
+                status: Int,
+                res: MethodChannel.Result,
+                timeout: Runnable
+            ) {
+                mainHandler.removeCallbacks(timeout)
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    val cardJson = String(value, Charsets.UTF_8)
+                    Logger.info("ble_gatt_read_success", feature = "ble",
+                        action = "connectAndReadCard",
+                        payload = mapOf("bytes" to value.size.toString()),
+                        correlationId = corrId)
+                    CorrelationManager.endOperation("ble_gatt")
+                    respond { res.success(cardJson) }
+                } else {
+                    Logger.warn("ble_gatt_read_failed", feature = "ble",
+                        action = "connectAndReadCard",
+                        payload = mapOf("status" to status.toString()),
+                        correlationId = corrId)
+                    CorrelationManager.endOperation("ble_gatt")
+                    respond { res.error("READ_FAILED", "Characteristic read failed: $status", null) }
+                }
+                cleanup(gatt)
+            }
+        }
+
+        // Aguarda 600ms antes de conectar: Android precisa de tempo entre a descoberta
+        // via scan e a tentativa de conexão GATT para evitar status=133 (conexão zumbi)
+        mainHandler.postDelayed({
+            Logger.debug("ble_gatt_connecting", feature = "ble", action = "connectAndReadCard",
+                payload = mapOf("device_id" to deviceId), correlationId = corrId)
+            activeGatt = device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            activeGatt?.let { activeGatts.add(it) }
+            mainHandler.postDelayed(timeoutRunnable, GATT_TIMEOUT_MS)
+        }, 600L)
+    }
+
+    // Fecha todos os GATTs ativos para um dispositivo antes de nova conexão.
+    // Evita status=133 causado por conexões zumbi no Android BLE stack.
+    private fun closeZombieGatts(deviceId: String) {
+        val zombies = activeGatts.filter { it.device.address == deviceId }
+        if (zombies.isNotEmpty()) {
+            Logger.debug("ble_gatt_zombie_close", feature = "ble", action = "closeZombieGatts",
+                payload = mapOf("device_id" to deviceId, "count" to zombies.size.toString()))
+        }
+        zombies.forEach { gatt ->
+            try { gatt.disconnect() } catch (e: Exception) {
+                Logger.warn("gatt_disconnect_failed", feature = "ble",
+                    action = "closeZombieGatts", exception = e)
+            }
+            try { gatt.close() } catch (e: Exception) {
+                Logger.warn("gatt_close_failed", feature = "ble",
+                    action = "closeZombieGatts", exception = e)
+            }
+        }
+        activeGatts.removeAll(zombies.toSet())
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Permissões — callback unificado GPS (1001) e BLE (1002)
+    // ═════════════════════════════════════════════════════════════════════════
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        when (requestCode) {
+            PERM_REQUEST_LOC -> {
+                val granted = grantResults.isNotEmpty() &&
+                              grantResults[0] == PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    Logger.info("permission_granted", feature = "location",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permission" to "ACCESS_FINE_LOCATION"))
+                } else {
+                    Logger.warn("permission_denied", feature = "location",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permission" to "ACCESS_FINE_LOCATION"))
+                }
+                pendingLocPermResult?.success(granted)
+                pendingLocPermResult = null
+                if (granted && locationEventSink != null) startLocationStream()
+            }
+            PERM_REQUEST_BLE -> {
+                val granted = grantResults.isNotEmpty() &&
+                              grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+                if (granted) {
+                    Logger.info("permission_granted", feature = "ble",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permissions" to "BLE_SCAN,BLE_CONNECT,BLE_ADVERTISE"))
+                } else {
+                    Logger.warn("permission_denied", feature = "ble",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permissions" to "BLE_SCAN,BLE_CONNECT,BLE_ADVERTISE"))
+                }
+                pendingBlePermResult?.success(granted)
+                pendingBlePermResult = null
+            }
+            PERM_REQUEST_BG_LOC -> {
+                val granted = grantResults.isNotEmpty() &&
+                              grantResults[0] == PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    Logger.info("permission_granted", feature = "geofence",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permission" to "ACCESS_BACKGROUND_LOCATION"))
+                } else {
+                    Logger.warn("permission_denied", feature = "geofence",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permission" to "ACCESS_BACKGROUND_LOCATION"))
+                }
+                pendingBgLocResult?.success(granted)
+                pendingBgLocResult = null
+            }
+            PERM_REQUEST_MIC -> {
+                val granted = grantResults.isNotEmpty() &&
+                              grantResults[0] == PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    Logger.info("permission_granted", feature = "overlay",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permission" to "RECORD_AUDIO"))
+                } else {
+                    Logger.warn("permission_denied", feature = "overlay",
+                        action = "onRequestPermissionsResult",
+                        payload = mapOf("permission" to "RECORD_AUDIO"))
+                }
+                pendingMicPermResult?.success(granted)
+                pendingMicPermResult = null
+            }
+        }
+    }
+
+    // Detecta quando o app é aberto (ou trazido ao foreground) pelo botão flutuante.
+    // FLAG_ACTIVITY_SINGLE_TOP garante que esta Activity não seja recriada,
+    // mas onNewIntent() é chamado com o Intent atualizado.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra("start_voice_recording", false)) {
+            Logger.info("overlay_opened_app", feature = "overlay", action = "onNewIntent")
+            overlayChannel?.invokeMethod("openVoiceFromOverlay", null)
+        }
+    }
+
+    override fun onDestroy() {
+        Logger.info("activity_destroying", feature = "main_activity", action = "onDestroy")
+        stopLocationStream()
+        stopBleAdvertising()
+        stopBleScan()
+        // Fecha todos os GATTs ativos para evitar leak de conexões
+        val gattCount = activeGatts.size
+        activeGatts.forEach { gatt ->
+            try { gatt.disconnect(); gatt.close() } catch (e: Exception) {
+                Logger.warn("gatt_cleanup_failed", feature = "ble",
+                    action = "onDestroy", exception = e)
+            }
+        }
+        if (gattCount > 0) {
+            Logger.debug("gatt_connections_closed", feature = "ble", action = "onDestroy",
+                payload = mapOf("count" to gattCount.toString()))
+        }
+        activeGatts.clear()
+        mainHandler.removeCallbacksAndMessages(null)
+        Logger.info("activity_destroyed", feature = "main_activity", action = "onDestroy")
+        super.onDestroy()
+    }
 }
