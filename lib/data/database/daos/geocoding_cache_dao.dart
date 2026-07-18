@@ -4,23 +4,25 @@ import '../sopro_database.dart';
 import '../tables/geocoding_cache_table.dart';
 
 // DAO para a tabela de cache de geocoding.
-// Gerencia HIT/MISS por queryKey e aplica TTL de 30 dias automaticamente.
+// Gerencia HIT/MISS por queryKey e aplica a storagePolicy (permanent/30_days).
 part 'geocoding_cache_dao.g.dart';
-
-// TTL padrão: 30 dias em milissegundos
-const _kTtlMs = 30 * 24 * 60 * 60 * 1000;
 
 @DriftAccessor(tables: [GeocodingCache])
 class GeocodingCacheDao extends DatabaseAccessor<SoproDatabase>
     with _$GeocodingCacheDaoMixin {
   GeocodingCacheDao(super.db);
 
-  // Busca entradas válidas (não expiradas) para uma chave normalizada.
-  // Retorna lista vazia em MISS ou quando o TTL expirou.
-  Future<List<GeocodingCacheData>> findByKey(String key) {
+  // Busca entradas válidas para uma chave normalizada, respeitando storagePolicy:
+  //   permanent → sempre válido
+  //   30_days   → válido se createdAt + 30 dias > agora
+  Future<List<GeocodingCacheData>> findByKey(String key) async {
     final now = DateTime.now().millisecondsSinceEpoch;
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
     return (select(geocodingCache)
-          ..where((row) => row.queryKey.equals(key) & row.expiresAt.isBiggerThanValue(now)))
+          ..where((t) => t.queryKey.equals(key))
+          ..where((t) =>
+              t.storagePolicy.equals('permanent') |
+              t.createdAt.isBiggerThanValue(now - thirtyDaysMs)))
         .get();
   }
 
@@ -30,12 +32,15 @@ class GeocodingCacheDao extends DatabaseAccessor<SoproDatabase>
     await batch((b) => b.insertAllOnConflictUpdate(geocodingCache, entries));
   }
 
-  // Remove entradas cuja data de expiração já passou.
-  // Deve ser chamado periodicamente para manter o banco compacto.
+  // Remove entradas '30_days' cujo createdAt + 30 dias já passou. Entradas
+  // 'permanent' nunca são removidas. Mantém o banco compacto.
   Future<int> deleteExpired() {
     final now = DateTime.now().millisecondsSinceEpoch;
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
     return (delete(geocodingCache)
-          ..where((row) => row.expiresAt.isSmallerOrEqualValue(now)))
+          ..where((t) =>
+              t.storagePolicy.equals('30_days') &
+              t.createdAt.isSmallerOrEqualValue(now - thirtyDaysMs)))
         .go();
   }
 
@@ -51,17 +56,17 @@ class GeocodingCacheDao extends DatabaseAccessor<SoproDatabase>
     required double lat,
     required double lon,
     required String source,
-  }) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    return GeocodingCacheCompanion(
-      id:          Value(id),
-      queryKey:    Value(queryKey),
-      displayName: Value(displayName),
-      lat:         Value(lat),
-      lon:         Value(lon),
-      source:      Value(source),
-      expiresAt:   Value(now + _kTtlMs),
-      createdAt:   Value(now),
-    );
-  }
+    String storagePolicy = 'permanent',
+    String placeId = '',
+  }) => GeocodingCacheCompanion.insert(
+        id:            id,
+        queryKey:      queryKey,
+        displayName:   displayName,
+        lat:           lat,
+        lon:           lon,
+        source:        source,
+        storagePolicy: Value(storagePolicy),
+        placeId:       Value(placeId),
+        createdAt:     DateTime.now().millisecondsSinceEpoch,
+      );
 }

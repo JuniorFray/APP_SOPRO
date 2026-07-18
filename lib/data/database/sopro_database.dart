@@ -40,6 +40,7 @@ part 'sopro_database.g.dart';
 //   v3 (Sprint 9): nova tabela BleEncounters — histórico de encontros BLE
 //   v4 (Sprint 13): adição de phone em ContextCards e BleEncounters
 //   v5 (Sprint F3-1): nova tabela GeocodingCache — cache de resultados de geocoding
+//   v6 (Sprint F3-3): GeocodingCache ganha storagePolicy + placeId; remove expiresAt
 @DriftDatabase(
   tables: [
     Environments,
@@ -63,7 +64,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -90,6 +91,15 @@ class SoproDatabase extends _$SoproDatabase {
           if (from < 5) {
             // Sprint F3-1: cache de resultados de geocoding (TTL 30 dias)
             await m.createTable(geocodingCache);
+          }
+          if (from < 6) {
+            // Sprint F3-3: storagePolicy + placeId; remove expiresAt legado
+            await m.addColumn(geocodingCache, geocodingCache.storagePolicy);
+            await m.addColumn(geocodingCache, geocodingCache.placeId);
+            // Remove expiresAt se existir (campo antigo)
+            try {
+              await customStatement('ALTER TABLE geocoding_cache DROP COLUMN expires_at');
+            } catch (_) {}
           }
         },
       );

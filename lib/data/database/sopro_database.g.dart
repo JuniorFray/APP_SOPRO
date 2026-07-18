@@ -1629,12 +1629,22 @@ class $GeocodingCacheTable extends GeocodingCache
   late final GeneratedColumn<String> source = GeneratedColumn<String>(
       'source', aliasedName, false,
       type: DriftSqlType.string, requiredDuringInsert: true);
-  static const VerificationMeta _expiresAtMeta =
-      const VerificationMeta('expiresAt');
+  static const VerificationMeta _storagePolicyMeta =
+      const VerificationMeta('storagePolicy');
   @override
-  late final GeneratedColumn<int> expiresAt = GeneratedColumn<int>(
-      'expires_at', aliasedName, false,
-      type: DriftSqlType.int, requiredDuringInsert: true);
+  late final GeneratedColumn<String> storagePolicy = GeneratedColumn<String>(
+      'storage_policy', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('permanent'));
+  static const VerificationMeta _placeIdMeta =
+      const VerificationMeta('placeId');
+  @override
+  late final GeneratedColumn<String> placeId = GeneratedColumn<String>(
+      'place_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
   static const VerificationMeta _createdAtMeta =
       const VerificationMeta('createdAt');
   @override
@@ -1642,8 +1652,17 @@ class $GeocodingCacheTable extends GeocodingCache
       'created_at', aliasedName, false,
       type: DriftSqlType.int, requiredDuringInsert: true);
   @override
-  List<GeneratedColumn> get $columns =>
-      [id, queryKey, displayName, lat, lon, source, expiresAt, createdAt];
+  List<GeneratedColumn> get $columns => [
+        id,
+        queryKey,
+        displayName,
+        lat,
+        lon,
+        source,
+        storagePolicy,
+        placeId,
+        createdAt
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1691,11 +1710,15 @@ class $GeocodingCacheTable extends GeocodingCache
     } else if (isInserting) {
       context.missing(_sourceMeta);
     }
-    if (data.containsKey('expires_at')) {
-      context.handle(_expiresAtMeta,
-          expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta));
-    } else if (isInserting) {
-      context.missing(_expiresAtMeta);
+    if (data.containsKey('storage_policy')) {
+      context.handle(
+          _storagePolicyMeta,
+          storagePolicy.isAcceptableOrUnknown(
+              data['storage_policy']!, _storagePolicyMeta));
+    }
+    if (data.containsKey('place_id')) {
+      context.handle(_placeIdMeta,
+          placeId.isAcceptableOrUnknown(data['place_id']!, _placeIdMeta));
     }
     if (data.containsKey('created_at')) {
       context.handle(_createdAtMeta,
@@ -1724,8 +1747,10 @@ class $GeocodingCacheTable extends GeocodingCache
           .read(DriftSqlType.double, data['${effectivePrefix}lon'])!,
       source: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}source'])!,
-      expiresAt: attachedDatabase.typeMapping
-          .read(DriftSqlType.int, data['${effectivePrefix}expires_at'])!,
+      storagePolicy: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}storage_policy'])!,
+      placeId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}place_id'])!,
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}created_at'])!,
     );
@@ -1745,7 +1770,8 @@ class GeocodingCacheData extends DataClass
   final double lat;
   final double lon;
   final String source;
-  final int expiresAt;
+  final String storagePolicy;
+  final String placeId;
   final int createdAt;
   const GeocodingCacheData(
       {required this.id,
@@ -1754,7 +1780,8 @@ class GeocodingCacheData extends DataClass
       required this.lat,
       required this.lon,
       required this.source,
-      required this.expiresAt,
+      required this.storagePolicy,
+      required this.placeId,
       required this.createdAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1765,7 +1792,8 @@ class GeocodingCacheData extends DataClass
     map['lat'] = Variable<double>(lat);
     map['lon'] = Variable<double>(lon);
     map['source'] = Variable<String>(source);
-    map['expires_at'] = Variable<int>(expiresAt);
+    map['storage_policy'] = Variable<String>(storagePolicy);
+    map['place_id'] = Variable<String>(placeId);
     map['created_at'] = Variable<int>(createdAt);
     return map;
   }
@@ -1778,7 +1806,8 @@ class GeocodingCacheData extends DataClass
       lat: Value(lat),
       lon: Value(lon),
       source: Value(source),
-      expiresAt: Value(expiresAt),
+      storagePolicy: Value(storagePolicy),
+      placeId: Value(placeId),
       createdAt: Value(createdAt),
     );
   }
@@ -1793,7 +1822,8 @@ class GeocodingCacheData extends DataClass
       lat: serializer.fromJson<double>(json['lat']),
       lon: serializer.fromJson<double>(json['lon']),
       source: serializer.fromJson<String>(json['source']),
-      expiresAt: serializer.fromJson<int>(json['expiresAt']),
+      storagePolicy: serializer.fromJson<String>(json['storagePolicy']),
+      placeId: serializer.fromJson<String>(json['placeId']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
     );
   }
@@ -1807,7 +1837,8 @@ class GeocodingCacheData extends DataClass
       'lat': serializer.toJson<double>(lat),
       'lon': serializer.toJson<double>(lon),
       'source': serializer.toJson<String>(source),
-      'expiresAt': serializer.toJson<int>(expiresAt),
+      'storagePolicy': serializer.toJson<String>(storagePolicy),
+      'placeId': serializer.toJson<String>(placeId),
       'createdAt': serializer.toJson<int>(createdAt),
     };
   }
@@ -1819,7 +1850,8 @@ class GeocodingCacheData extends DataClass
           double? lat,
           double? lon,
           String? source,
-          int? expiresAt,
+          String? storagePolicy,
+          String? placeId,
           int? createdAt}) =>
       GeocodingCacheData(
         id: id ?? this.id,
@@ -1828,7 +1860,8 @@ class GeocodingCacheData extends DataClass
         lat: lat ?? this.lat,
         lon: lon ?? this.lon,
         source: source ?? this.source,
-        expiresAt: expiresAt ?? this.expiresAt,
+        storagePolicy: storagePolicy ?? this.storagePolicy,
+        placeId: placeId ?? this.placeId,
         createdAt: createdAt ?? this.createdAt,
       );
   GeocodingCacheData copyWithCompanion(GeocodingCacheCompanion data) {
@@ -1840,7 +1873,10 @@ class GeocodingCacheData extends DataClass
       lat: data.lat.present ? data.lat.value : this.lat,
       lon: data.lon.present ? data.lon.value : this.lon,
       source: data.source.present ? data.source.value : this.source,
-      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+      storagePolicy: data.storagePolicy.present
+          ? data.storagePolicy.value
+          : this.storagePolicy,
+      placeId: data.placeId.present ? data.placeId.value : this.placeId,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -1854,15 +1890,16 @@ class GeocodingCacheData extends DataClass
           ..write('lat: $lat, ')
           ..write('lon: $lon, ')
           ..write('source: $source, ')
-          ..write('expiresAt: $expiresAt, ')
+          ..write('storagePolicy: $storagePolicy, ')
+          ..write('placeId: $placeId, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
-      id, queryKey, displayName, lat, lon, source, expiresAt, createdAt);
+  int get hashCode => Object.hash(id, queryKey, displayName, lat, lon, source,
+      storagePolicy, placeId, createdAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1873,7 +1910,8 @@ class GeocodingCacheData extends DataClass
           other.lat == this.lat &&
           other.lon == this.lon &&
           other.source == this.source &&
-          other.expiresAt == this.expiresAt &&
+          other.storagePolicy == this.storagePolicy &&
+          other.placeId == this.placeId &&
           other.createdAt == this.createdAt);
 }
 
@@ -1884,7 +1922,8 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
   final Value<double> lat;
   final Value<double> lon;
   final Value<String> source;
-  final Value<int> expiresAt;
+  final Value<String> storagePolicy;
+  final Value<String> placeId;
   final Value<int> createdAt;
   final Value<int> rowid;
   const GeocodingCacheCompanion({
@@ -1894,7 +1933,8 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
     this.lat = const Value.absent(),
     this.lon = const Value.absent(),
     this.source = const Value.absent(),
-    this.expiresAt = const Value.absent(),
+    this.storagePolicy = const Value.absent(),
+    this.placeId = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -1905,7 +1945,8 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
     required double lat,
     required double lon,
     required String source,
-    required int expiresAt,
+    this.storagePolicy = const Value.absent(),
+    this.placeId = const Value.absent(),
     required int createdAt,
     this.rowid = const Value.absent(),
   })  : id = Value(id),
@@ -1914,7 +1955,6 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
         lat = Value(lat),
         lon = Value(lon),
         source = Value(source),
-        expiresAt = Value(expiresAt),
         createdAt = Value(createdAt);
   static Insertable<GeocodingCacheData> custom({
     Expression<String>? id,
@@ -1923,7 +1963,8 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
     Expression<double>? lat,
     Expression<double>? lon,
     Expression<String>? source,
-    Expression<int>? expiresAt,
+    Expression<String>? storagePolicy,
+    Expression<String>? placeId,
     Expression<int>? createdAt,
     Expression<int>? rowid,
   }) {
@@ -1934,7 +1975,8 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
       if (lat != null) 'lat': lat,
       if (lon != null) 'lon': lon,
       if (source != null) 'source': source,
-      if (expiresAt != null) 'expires_at': expiresAt,
+      if (storagePolicy != null) 'storage_policy': storagePolicy,
+      if (placeId != null) 'place_id': placeId,
       if (createdAt != null) 'created_at': createdAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -1947,7 +1989,8 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
       Value<double>? lat,
       Value<double>? lon,
       Value<String>? source,
-      Value<int>? expiresAt,
+      Value<String>? storagePolicy,
+      Value<String>? placeId,
       Value<int>? createdAt,
       Value<int>? rowid}) {
     return GeocodingCacheCompanion(
@@ -1957,7 +2000,8 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
       lat: lat ?? this.lat,
       lon: lon ?? this.lon,
       source: source ?? this.source,
-      expiresAt: expiresAt ?? this.expiresAt,
+      storagePolicy: storagePolicy ?? this.storagePolicy,
+      placeId: placeId ?? this.placeId,
       createdAt: createdAt ?? this.createdAt,
       rowid: rowid ?? this.rowid,
     );
@@ -1984,8 +2028,11 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
     if (source.present) {
       map['source'] = Variable<String>(source.value);
     }
-    if (expiresAt.present) {
-      map['expires_at'] = Variable<int>(expiresAt.value);
+    if (storagePolicy.present) {
+      map['storage_policy'] = Variable<String>(storagePolicy.value);
+    }
+    if (placeId.present) {
+      map['place_id'] = Variable<String>(placeId.value);
     }
     if (createdAt.present) {
       map['created_at'] = Variable<int>(createdAt.value);
@@ -2005,7 +2052,8 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
           ..write('lat: $lat, ')
           ..write('lon: $lon, ')
           ..write('source: $source, ')
-          ..write('expiresAt: $expiresAt, ')
+          ..write('storagePolicy: $storagePolicy, ')
+          ..write('placeId: $placeId, ')
           ..write('createdAt: $createdAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -3065,7 +3113,8 @@ typedef $$GeocodingCacheTableCreateCompanionBuilder = GeocodingCacheCompanion
   required double lat,
   required double lon,
   required String source,
-  required int expiresAt,
+  Value<String> storagePolicy,
+  Value<String> placeId,
   required int createdAt,
   Value<int> rowid,
 });
@@ -3077,7 +3126,8 @@ typedef $$GeocodingCacheTableUpdateCompanionBuilder = GeocodingCacheCompanion
   Value<double> lat,
   Value<double> lon,
   Value<String> source,
-  Value<int> expiresAt,
+  Value<String> storagePolicy,
+  Value<String> placeId,
   Value<int> createdAt,
   Value<int> rowid,
 });
@@ -3109,8 +3159,11 @@ class $$GeocodingCacheTableFilterComposer
   ColumnFilters<String> get source => $composableBuilder(
       column: $table.source, builder: (column) => ColumnFilters(column));
 
-  ColumnFilters<int> get expiresAt => $composableBuilder(
-      column: $table.expiresAt, builder: (column) => ColumnFilters(column));
+  ColumnFilters<String> get storagePolicy => $composableBuilder(
+      column: $table.storagePolicy, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get placeId => $composableBuilder(
+      column: $table.placeId, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<int> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
@@ -3143,8 +3196,12 @@ class $$GeocodingCacheTableOrderingComposer
   ColumnOrderings<String> get source => $composableBuilder(
       column: $table.source, builder: (column) => ColumnOrderings(column));
 
-  ColumnOrderings<int> get expiresAt => $composableBuilder(
-      column: $table.expiresAt, builder: (column) => ColumnOrderings(column));
+  ColumnOrderings<String> get storagePolicy => $composableBuilder(
+      column: $table.storagePolicy,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get placeId => $composableBuilder(
+      column: $table.placeId, builder: (column) => ColumnOrderings(column));
 
   ColumnOrderings<int> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
@@ -3177,8 +3234,11 @@ class $$GeocodingCacheTableAnnotationComposer
   GeneratedColumn<String> get source =>
       $composableBuilder(column: $table.source, builder: (column) => column);
 
-  GeneratedColumn<int> get expiresAt =>
-      $composableBuilder(column: $table.expiresAt, builder: (column) => column);
+  GeneratedColumn<String> get storagePolicy => $composableBuilder(
+      column: $table.storagePolicy, builder: (column) => column);
+
+  GeneratedColumn<String> get placeId =>
+      $composableBuilder(column: $table.placeId, builder: (column) => column);
 
   GeneratedColumn<int> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -3217,7 +3277,8 @@ class $$GeocodingCacheTableTableManager extends RootTableManager<
             Value<double> lat = const Value.absent(),
             Value<double> lon = const Value.absent(),
             Value<String> source = const Value.absent(),
-            Value<int> expiresAt = const Value.absent(),
+            Value<String> storagePolicy = const Value.absent(),
+            Value<String> placeId = const Value.absent(),
             Value<int> createdAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -3228,7 +3289,8 @@ class $$GeocodingCacheTableTableManager extends RootTableManager<
             lat: lat,
             lon: lon,
             source: source,
-            expiresAt: expiresAt,
+            storagePolicy: storagePolicy,
+            placeId: placeId,
             createdAt: createdAt,
             rowid: rowid,
           ),
@@ -3239,7 +3301,8 @@ class $$GeocodingCacheTableTableManager extends RootTableManager<
             required double lat,
             required double lon,
             required String source,
-            required int expiresAt,
+            Value<String> storagePolicy = const Value.absent(),
+            Value<String> placeId = const Value.absent(),
             required int createdAt,
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -3250,7 +3313,8 @@ class $$GeocodingCacheTableTableManager extends RootTableManager<
             lat: lat,
             lon: lon,
             source: source,
-            expiresAt: expiresAt,
+            storagePolicy: storagePolicy,
+            placeId: placeId,
             createdAt: createdAt,
             rowid: rowid,
           ),

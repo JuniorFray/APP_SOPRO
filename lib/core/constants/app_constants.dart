@@ -13,6 +13,15 @@ class AppConstants {
   static String get geminiApiKey =>
       dotenv.env['GEMINI_API_KEY'] ?? '';
 
+  // Chave da LocationIQ (Camada 2 de geocoding). Lida do .env em runtime.
+  // 5.000 req/dia grátis; cache permanente permitido pelos ToS.
+  static String get locationIqKey =>
+      dotenv.env['LOCATIONIQ_KEY'] ?? '';
+
+  // Endpoint de busca forward da LocationIQ (OSM + dados de endereço extras).
+  static const locationIqEndpoint =
+      'https://us1.locationiq.com/v1/search';
+
   // Modelo Gemini ativo. gemini-1.5-flash e gemini-2.0-flash foram desligados
   // em junho de 2026 e retornam 404. gemini-2.5-flash é o substituto estável.
   static const geminiModel = 'gemini-2.5-flash';

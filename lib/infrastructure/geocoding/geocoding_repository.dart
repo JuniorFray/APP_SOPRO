@@ -20,6 +20,14 @@ class GeocodingRepository {
   // Geocoding reverso: coordenadas → nome do local
   Future<GeocodingResult?> reverse(double lat, double lon) =>
       _service.reverse(lat, lon);
+
+  // Camada 3 — chamada pela UI quando usuário toca "Nenhum desses"
+  // após ver resultados do Photon + LocationIQ.
+  Future<List<GeocodingResult>> searchGoogle(String query,
+      {double userLat = 0.0, double userLon = 0.0}) =>
+      (_service as AndroidGeocodingService)
+          .searchGooglePlaces(query,
+              userLat: userLat, userLon: userLon);
 }
 
 // Provider do repositório — singleton no escopo do app

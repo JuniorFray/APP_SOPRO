@@ -7,6 +7,8 @@ import '../logging/core/logger.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../core/constants/app_constants.dart';
+
 import '../../data/database/daos/geocoding_cache_dao.dart';
 import 'geocoding_platform_interface.dart';
 import 'query_normalizer.dart';
@@ -52,16 +54,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   Future<List<GeocodingResult>> search(String query) async {
     // 1. Normalização — só classifica (QueryNormalizer, componente puro).
     final normalized = QueryNormalizer.normalize(query);
-    // TEMP remover após validação do Ranker.
-    Logger.debug('query_normalized',
-        payload: {'query': normalized.query, 'kind': normalized.kind.name},
-        feature: 'geocoding', action: 'normalize');
-    // TEMP remover após validação do DecisionEngine
-    Logger.debug('query_hints_detected', payload: {
-      'brand':     normalized.brandHint,
-      'locations': normalized.locationHints,
-      'category':  normalized.categoryHint,
-    }, feature: 'geocoding', action: 'hints');
 
     // Chave de cache PREFIXADA pelo tipo → não reutiliza entradas do algoritmo
     // antigo (ex.: "piracicaba" vs "city:piracicaba"). Cache não é apagado.
@@ -76,11 +68,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     //    Computada antes do cache para orientar também o CandidateFilter.
     final strategy = SearchStrategy.plan(normalized.kind);
     final constraints = strategy.constraints;
-    // TEMP remover após validação.
-    Logger.debug('search_constraints', payload: {
-      'provider':    strategy.provider.name,
-      'constraints': constraints.toLog(),
-    }, feature: 'geocoding', action: 'constraints');
 
     // Camada 1: cache local (apenas resultados com qualidade suficiente).
     final cached = await _cacheDao.findByKey(key);
@@ -104,7 +91,7 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     }
 
     // 3. Execução — Photon (constraints) ou Geocoder nativo (fallback Photon).
-    final List<GeocodingResult> raw;
+    List<GeocodingResult> raw;
     switch (strategy.provider) {
       case SearchProvider.photon:
         // Busca em DOIS ESTÁGIOS só quando há locationHint (estabelecimento
@@ -121,18 +108,21 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
             query, key, constraints, userLat, userLon);
     }
 
+    // Camada 2: LocationIQ quando Photon/Geocoder não trouxeram nada.
+    if (raw.isEmpty) {
+      raw = await _searchLocationIQ(query, key,
+          userLat: userLat, userLon: userLon);
+    }
+
     // 4. CandidateFilter → LocationRanker.
     return _filterAndRank(normalized, constraints, raw, userLat, userLon);
   }
 
-  // Estágio B: filtra candidatos inválidos e emite os logs temporários; depois
-  // rankeia apenas os sobreviventes. Cache e busca fresca passam pelo mesmo caminho.
+  // Estágio B: filtra candidatos inválidos e rankeia apenas os sobreviventes.
+  // Cache e busca fresca passam pelo mesmo caminho.
   List<GeocodingResult> _filterAndRank(
       NormalizedQuery normalized, SearchConstraints c,
       List<GeocodingResult> raw, double userLat, double userLon) {
-    // TEMP remover após validação.
-    Logger.debug('candidate_filter_started', payload: {'received': raw.length},
-        feature: 'geocoding', action: 'filter');
     final filtered = CandidateFilter.filter(
       raw,
       queryType: c.queryType,
@@ -141,22 +131,10 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       userLat: userLat == 0.0 ? null : userLat,
       userLon: userLon == 0.0 ? null : userLon,
     );
-    for (final rem in filtered.removed) {
-      // TEMP remover após validação.
-      Logger.debug('candidate_filter_removed', payload: {
-        'candidate': rem.candidate.displayName.split('\n').first,
-        'reason':    rem.reason,
-      }, feature: 'geocoding', action: 'filter');
-    }
-    // TEMP remover após validação.
-    Logger.debug('candidate_filter_finished', payload: {
-      'kept':    filtered.kept.length,
-      'removed': filtered.removed.length,
-    }, feature: 'geocoding', action: 'filter');
     return _rankAndLog(normalized, filtered.kept, userLat, userLon);
   }
 
-  // Aplica o LocationRanker e emite os logs temporários de auditoria do Ranker.
+  // Aplica o LocationRanker e devolve os candidatos ordenados por confiança.
   List<GeocodingResult> _rankAndLog(
       NormalizedQuery normalized, List<GeocodingResult> raw,
       double userLat, double userLon) {
@@ -168,31 +146,7 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       locationHints: normalized.locationHints,
       categoryHint: normalized.categoryHint,
     );
-    final ranked = rr.orderedCandidates;
-    // TEMP remover após validação.
-    if (normalized.locationHints.isNotEmpty) {
-      final hints = normalized.locationHints.map((h) => h.toLowerCase()).toList();
-      for (final r in ranked) {
-        final d = r.district.toLowerCase();
-        Logger.debug('district_match', payload: {
-          'candidate': r.name.isNotEmpty ? r.name : r.displayName.split('\n').first,
-          'matched':   d.isNotEmpty && hints.any((h) => d.contains(h)),
-        }, feature: 'geocoding', action: 'district_match');
-      }
-    }
-    // TEMP remover após validação do Ranker.
-    Logger.debug('ranking_result', payload: {
-      'query': normalized.query,
-      'ordered_candidates':
-          ranked.map((r) => r.displayName.split('\n').first).toList(),
-    }, feature: 'geocoding', action: 'rank');
-    // TEMP remover após validação do Ranker.
-    Logger.debug('ranking_selected', payload: {
-      'first':  ranked.isNotEmpty ? ranked.first.displayName.split('\n').first : '',
-      'second': ranked.length > 1 ? ranked[1].displayName.split('\n').first : '',
-      'auto_selected': rr.confidence == LocationConfidence.high,
-    }, feature: 'geocoding', action: 'rank');
-    return ranked;
+    return rr.orderedCandidates;
   }
 
   // ── Busca em dois estágios (estabelecimento + bairro) ─────────────────────
@@ -203,12 +157,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   Future<List<GeocodingResult>> _twoStageSearch(
       NormalizedQuery normalized, SearchConstraints c, String key,
       double userLat, double userLon) async {
-    // TEMP remover após validação.
-    Logger.debug('two_stage_search_started', payload: {
-      'brand':        normalized.brandHint,
-      'locationHint': normalized.locationHints,
-    }, feature: 'geocoding', action: 'two_stage_start');
-
     // Stage 1 — resolve o locationHint num lugar administrativo real.
     final place =
         await _resolveLocationHint(normalized.locationHints, c.countryCode);
@@ -217,14 +165,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       return _searchPhoton(normalized.query, key, c,
           userLat: userLat, userLon: userLon);
     }
-    // TEMP remover após validação.
-    Logger.debug('location_hint_resolved', payload: {
-      'hint':     place.hint,
-      'district': place.district,
-      'city':     place.city,
-      'lat':      place.lat,
-      'lon':      place.lon,
-    }, feature: 'geocoding', action: 'hint_resolved');
 
     // Marca sem o hint: remove o sufixo do bairro do brandHint (é sufixo por
     // construção do QueryNormalizer). "Assaí Gonzaga" − "Gonzaga" → "Assaí".
@@ -233,9 +173,6 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     // Stage 2 — busca a marca com viés no ponto do Stage 1 (zoom de bairro).
     final raw = await _searchPhoton(brandOnly, key, c,
         userLat: place.lat, userLon: place.lon, zoom: _neighborhoodZoom);
-    // TEMP remover após validação.
-    Logger.debug('two_stage_search_finished', payload: {'candidates': raw.length},
-        feature: 'geocoding', action: 'two_stage_finish');
     return raw;
   }
 
@@ -590,8 +527,151 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     }
   }
 
+  // Camada 2 — LocationIQ (OSM + dados extras, 5.000/dia grátis,
+  // cache permanente permitido pelos ToS).
+  // Chamada apenas quando Photon retorna vazio.
+  Future<List<GeocodingResult>> _searchLocationIQ(
+      String query, String key,
+      {double userLat = 0.0, double userLon = 0.0}) async {
+    final apiKey = AppConstants.locationIqKey;
+    if (apiKey.isEmpty) return [];
+    final sw = Stopwatch()..start();
+    try {
+      final cleanQuery = query
+          .replaceAll(RegExp(r'\s*,\s*\d+\s*$'), '').trim();
+      final params = {
+        'q':           cleanQuery,
+        'key':         apiKey,
+        'format':      'json',
+        'limit':       '5',
+        'countrycodes': 'br',
+        'addressdetails': '1',
+      };
+      final uri = Uri.https(
+          'us1.locationiq.com', '/v1/search', params);
+      final client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 8);
+      final request = await client.getUrl(uri);
+      request.headers.set('Accept', 'application/json');
+      request.headers.set('User-Agent', 'Sopro/1.0 (Android)');
+      final response = await request.close();
+      if (response.statusCode != 200) {
+        Logger.warn('locationiq_http_error', payload: {
+          'query': query, 'status': response.statusCode,
+        }, feature: 'geocoding', action: 'locationiq_http',
+            durationMs: sw.elapsedMilliseconds);
+        return [];
+      }
+      final body = await response
+          .transform(const Utf8Decoder()).join();
+      client.close();
+      final List<dynamic> features;
+      try {
+        features = jsonDecode(body) as List<dynamic>;
+      } catch (_) {
+        return [];
+      }
+      final results = features
+          .whereType<Map<String, dynamic>>()
+          .map(_parseLocationIQFeature)
+          .whereType<GeocodingResult>()
+          .toList();
+      Logger.debug('locationiq_result', payload: {
+        'query': query,
+        'count': results.length,
+        'first': results.isNotEmpty
+            ? results.first.displayName : 'nenhum',
+      }, feature: 'geocoding', action: 'locationiq_parse',
+          durationMs: sw.elapsedMilliseconds);
+      if (results.isNotEmpty) {
+        await _saveToCache(results, key,
+            storagePolicy: 'permanent');
+      }
+      return results;
+    } catch (e, st) {
+      Logger.error('locationiq_error',
+          payload: {'query': query},
+          exception: e, stackTrace: st,
+          feature: 'geocoding', action: 'locationiq_call',
+          durationMs: sw.elapsedMilliseconds);
+      return [];
+    }
+  }
+
+  // Parser do JSON do LocationIQ → GeocodingResult
+  GeocodingResult? _parseLocationIQFeature(
+      Map<String, dynamic> f) {
+    try {
+      final lat = double.tryParse(
+          f['lat'] as String? ?? '') ?? 0.0;
+      final lon = double.tryParse(
+          f['lon'] as String? ?? '') ?? 0.0;
+      if (lat == 0.0 && lon == 0.0) return null;
+      final display =
+          f['display_name'] as String? ?? '';
+      final addr =
+          f['address'] as Map<String, dynamic>? ?? {};
+      final name = (addr['amenity'] ??
+          addr['shop'] ?? addr['mall'] ??
+          addr['pharmacy'] ?? addr['supermarket'] ??
+          addr['name'] ?? '') as String;
+      final road = (addr['road'] ?? '') as String;
+      final city = (addr['city'] ??
+          addr['city_district'] ?? addr['town'] ??
+          addr['village'] ?? '') as String;
+      final state = (addr['state'] ?? '') as String;
+      final postcode =
+          (addr['postcode'] ?? '') as String;
+      final suburb =
+          (addr['suburb'] ?? '') as String;
+      // Monta displayName limpo
+      final parts = <String>[];
+      if (name.isNotEmpty) parts.add(name);
+      if (road.isNotEmpty) parts.add(road);
+      if (city.isNotEmpty) parts.add(city);
+      if (state.isNotEmpty) parts.add(state);
+      final displayName =
+          parts.isNotEmpty ? parts.join(' — ') : display;
+      if (displayName.isEmpty) return null;
+      return GeocodingResult(
+        displayName: displayName,
+        lat: lat,
+        lon: lon,
+        source: 'locationiq',
+        hasNumber: road.isNotEmpty,
+        name: name,
+        address: road,
+        district: suburb,
+        city: city,
+        state: state,
+        postalCode: postcode,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Camada 3 — Google Places (slot reservado, Sprint F3-4).
+  // Chamado apenas quando usuário toca "Nenhum desses" após
+  // ver resultados do Photon e do LocationIQ.
+  // Retorna lista vazia até ser implementado.
+  Future<List<GeocodingResult>> searchGooglePlaces(
+      String query,
+      {double userLat = 0.0, double userLon = 0.0}) async {
+    // TODO Sprint F3-4: implementar Google Places Autocomplete
+    // + Place Details com session tokens.
+    // storagePolicy: '30_days', placeId: place_id do Google.
+    Logger.debug('google_places_stub',
+        payload: {'query': query},
+        feature: 'geocoding', action: 'google_stub');
+    return [];
+  }
+
   // Persiste lista de resultados no cache com a chave normalizada
-  Future<void> _saveToCache(List<GeocodingResult> results, String key) async {
+  Future<void> _saveToCache(
+      List<GeocodingResult> results, String key,
+      {String storagePolicy = 'permanent',
+      String placeId = ''}) async {
     final entries = results
         .map((r) => _cacheDao.buildEntry(
               id: _uuid.v4(),
@@ -600,6 +680,8 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
               lat: r.lat,
               lon: r.lon,
               source: r.source,
+              storagePolicy: storagePolicy,
+              placeId: placeId,
             ))
         .toList();
     await _cacheDao.saveAll(entries);

@@ -49,6 +49,10 @@ class GeocodingResult {
   // Calculada pelo LocationRanker via copyWith (não pela fonte).
   final double? distanceToUser;
 
+  // ID externo do provider (Google place_id).
+  // Vazio para Photon e LocationIQ.
+  final String placeId;
+
   const GeocodingResult({
     required this.displayName,
     required this.lat,
@@ -64,6 +68,7 @@ class GeocodingResult {
     this.postalCode = '',
     this.featureType = '',
     this.distanceToUser,
+    this.placeId = '',
   });
 
   // Cópia com distância preenchida pelo Ranker (único campo que ele altera).
@@ -82,6 +87,7 @@ class GeocodingResult {
         postalCode: postalCode,
         featureType: featureType,
         distanceToUser: distanceToUser ?? this.distanceToUser,
+        placeId: placeId,
       );
 
   @override
