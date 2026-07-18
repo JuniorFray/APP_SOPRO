@@ -1839,27 +1839,121 @@ Retorne SO o JSON.""".trimIndent()
         return null
     }
 
-    // Resolução Inteligente de Localização (paridade com resolveEnvironmentLocation
-    // da Home). Classifica a origem e NUNCA cria o ambiente imediatamente:
-    //   - local atual / nome personalizado → confirma o uso do GPS;
-    //   - categoria genérica / endereço possessivo → resolve no app (overlay
-    //     não possui geocoder, ao contrário da Home).
+    // Sprint F3-3 — cria o ambiente por voz SEM GPS cego. Nomes pessoais
+    // (casa/lar/trabalho/escritório/serviço) tentam a localização atual; se o GPS
+    // estiver disponível, criam COM coords + geofence. Todos os demais (e os
+    // pessoais sem GPS) nascem SEM coords: o endereço é definido depois na
+    // AddEnvironmentScreen, aberta via pending nas SharedPreferences.
     private fun resolveEnvironmentLocation(name: String) {
         // LOG TEMPORÁRIO — início da resolução de localização.
         Logger.info("location_resolution_started", feature = "floating_voice",
             action = "location", payload = mapOf("name" to name),
             correlationId = voiceCorrelationId)
-        when (classifyLocationSource(name)) {
-            "gps" -> askLocationConfirm(name)
-            else -> {
-                // LOG TEMPORÁRIO — aguardando resolução no app (sem geocoder aqui).
-                Logger.info("location_resolution_waiting", feature = "floating_voice",
-                    action = "location",
-                    payload = mapOf("name" to name, "reason" to "needs_app_geocoder"),
-                    correlationId = voiceCorrelationId)
-                speak("Para criar $name preciso do endereço. Abra o app Sopro para escolher o local.")
+        val personalNames = listOf("casa", "lar", "trabalho",
+            "escritório", "escritorio", "serviço", "servico")
+        val isPersonal = personalNames.any { name.lowercase().contains(it) }
+        showToast("Criando '$name'...")
+        serviceScope.launch(Dispatchers.IO) {
+            // Nome pessoal → tenta GPS atual e cria COM coords + geofence.
+            if (isPersonal) {
+                val loc = getLastLocationBlocking()
+                val lat = loc?.latitude ?: 0.0
+                val lon = loc?.longitude ?: 0.0
+                if (lat != 0.0 && lon != 0.0) {
+                    val ok = writeEnvironmentToDb(name, lat, lon, 100)
+                    withContext(Dispatchers.Main) {
+                        speak(if (ok) "Ambiente $name criado."
+                              else "Não consegui criar $name agora.")
+                        endVoice()
+                    }
+                    return@launch
+                }
+                // Sem GPS → segue para o caminho sem coords + pending.
+            }
+            // Caso geral (ou pessoal sem GPS): cria SEM coords e deixa pending.
+            val envId = writeEnvironmentNoCoordsToDb(name)
+            withContext(Dispatchers.Main) {
+                if (envId != null) {
+                    savePendingLocationEnv(envId, capitalizeEnvName(name))
+                    Logger.info("floating_env_created_pending", feature = "floating_voice",
+                        action = "db_write",
+                        payload = mapOf("env_id" to envId, "env_name" to name,
+                            "has_coords" to "false"),
+                        correlationId = voiceCorrelationId)
+                    // Pessoal sem GPS: confirma só a criação; geral orienta a abrir o app.
+                    speak(if (isPersonal) "Ambiente $name criado."
+                          else "Ambiente $name criado. Abra o app para definir o endereço.")
+                } else {
+                    speak("Não consegui criar $name agora.")
+                }
                 endVoice()
             }
+        }
+    }
+
+    // Capitaliza cada palavra do nome do ambiente em pt-BR (paridade com a Home
+    // e com writeEnvironmentToDb). Usado no pending e no insert sem coords.
+    private fun capitalizeEnvName(name: String): String =
+        name.trim().split(" ").joinToString(" ") { word ->
+            word.lowercase(java.util.Locale("pt", "BR"))
+                .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
+        }
+
+    // Sprint F3-3 — persiste o ambiente pendente de localização. A HomeScreen lê
+    // no onResume (sem o prefixo "flutter.", removido pelo plugin Dart) e abre a
+    // AddEnvironmentScreen em modo "só localização". needs_refresh mostra o novo
+    // ambiente na lista imediatamente.
+    private fun savePendingLocationEnv(envId: String, envName: String) {
+        getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE).edit()
+            .putString("flutter.pending_location_env_id", envId)
+            .putString("flutter.pending_location_env_name", envName)
+            .putBoolean("flutter.needs_refresh", true)
+            .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
+            .apply()
+    }
+
+    // Sprint F3-3 — insere um ambiente SEM coordenadas (lat/lon = 0.0) e SEM
+    // geofence. Retorna o UUID criado, ou null em falha. Padrão SQLite obrigatório:
+    // db.close() no finally.
+    private fun writeEnvironmentNoCoordsToDb(name: String): String? {
+        val corrId = CorrelationManager.correlationIdFor("voice")
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null)
+        val resolvedPath = dbPath ?: run {
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs"), correlationId = corrId)
+            return null
+        }
+        val dbFile = File(resolvedPath)
+        if (!dbFile.exists()) {
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to resolvedPath), correlationId = corrId)
+            return null
+        }
+        var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val envNameCapitalized = capitalizeEnvName(name)
+            val id  = UUID.randomUUID().toString()
+            val now = System.currentTimeMillis()
+            db.execSQL(
+                "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                arrayOf(id, envNameCapitalized, 0.0, 0.0, 100.0, now)
+            )
+            Logger.info("environment_created", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = mapOf("id" to id, "has_coords" to "false"),
+                correlationId = corrId)
+            id
+        } catch (e: Exception) {
+            Logger.error("sqlite_write_environment_failed", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start, exception = e,
+                correlationId = corrId)
+            logException("command_dispatch", e)
+            null
+        } finally {
+            try { db?.close() } catch (_: Exception) {}
         }
     }
 

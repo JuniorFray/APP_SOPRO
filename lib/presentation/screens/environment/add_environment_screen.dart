@@ -39,11 +39,19 @@ class AddEnvironmentScreen extends ConsumerStatefulWidget {
   // Centra o mapa e posiciona o pin automaticamente sem clique do usuário.
   final LatLng? initialPosition;
 
+  // Modo "só localização" (Sprint F3-3): ambiente já criado por voz sem coords.
+  // Quando preenchido, _submit() atualiza o ambiente existente (id) apenas com
+  // lat/lon/raio, em vez de criar um novo.
+  final String? pendingEnvironmentId;
+  final String? pendingEnvironmentName;
+
   const AddEnvironmentScreen({
     super.key,
     this.environment,
     this.initialName,
     this.initialPosition,
+    this.pendingEnvironmentId,
+    this.pendingEnvironmentName,
   });
 
   @override
@@ -87,14 +95,28 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
   // Valor do slider de raio (50–1000 m), sincronizado com _radiusController
   double _radiusSlider = 100.0;
 
+  // Sprint F3-3 — modo "só localização": id/nome do ambiente criado por voz sem
+  // coords. Definidos via construtor; quando != null, _submit atualiza o existente.
+  String? _pendingEnvId;
+  String? _pendingEnvName;
+
   bool get _isEditing => widget.environment != null;
 
   @override
   void initState() {
     super.initState();
-    // Pré-preenche com os dados do ambiente ao editar; initialName (voz) ao criar; vazio caso contrário
+    // Sprint F3-3 — modo só-localização recebido via construtor (onResume do home).
+    // Sem leitura global de SharedPreferences aqui: evita sequestrar uma criação
+    // manual nova com um pending antigo.
+    _pendingEnvId   = widget.pendingEnvironmentId;
+    _pendingEnvName = widget.pendingEnvironmentName;
+    // Pré-preenche com os dados do ambiente ao editar; initialName (voz) ao criar;
+    // pendingEnvironmentName no modo só-localização; vazio caso contrário
     _nameController = TextEditingController(
-      text: widget.environment?.name ?? widget.initialName ?? '',
+      text: widget.environment?.name ??
+          widget.initialName ??
+          widget.pendingEnvironmentName ??
+          '',
     );
     final initialRadius = widget.environment != null
         ? widget.environment!.radiusMeters
@@ -317,9 +339,29 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Campo de nome do ambiente
+                  // Sprint F3-3 — banner do modo só-localização (ambiente por voz)
+                  if (_pendingEnvId != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.edit_location_alt,
+                              color: AppColors.accent, size: 16),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Definindo localização de: ${_pendingEnvName ?? ''}',
+                              style: AppTypography.bodySmall
+                                  .copyWith(color: AppColors.textSecondary),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  // Campo de nome do ambiente (somente leitura no modo só-localização)
                   TextFormField(
                     controller: _nameController,
+                    readOnly: _pendingEnvId != null,
                     textCapitalization: TextCapitalization.words,
                     validator: (v) => (v == null || v.trim().isEmpty)
                         ? AppStrings.environmentNameRequired
@@ -826,6 +868,32 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
     if (!_formKey.currentState!.validate() || _selectedPoint == null) return;
 
     setState(() => _isSaving = true);
+
+    // Sprint F3-3 — modo só-localização: atualiza o ambiente já criado por voz
+    // apenas com coords + raio; não cria novo nem altera nome/createdAt.
+    if (_pendingEnvId != null) {
+      final repo = ref.read(environmentRepositoryProvider);
+      final existing = await repo.getById(_pendingEnvId!);
+      if (existing != null) {
+        final updated = EnvironmentEntity(
+          id:           existing.id,
+          name:         existing.name,
+          latitude:     _selectedPoint!.latitude,
+          longitude:    _selectedPoint!.longitude,
+          radiusMeters: double.parse(_radiusController.text),
+          createdAt:    existing.createdAt,
+        );
+        await repo.save(updated);
+        try {
+          await ref.read(nativeGeofenceServiceProvider).addSingleGeofence(updated);
+        } catch (e) {
+          debugPrint('[AddEnvironmentScreen] Falha ao registrar geofence: $e');
+        }
+      }
+      _pendingEnvId = null;
+      if (mounted) Navigator.pop(context);
+      return;
+    }
 
     // Gera o UUID aqui para que seja conhecido antes e depois do save(),
     // permitindo registrar o geofence nativo com o ID correto.

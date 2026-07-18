@@ -82,6 +82,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         }
         ref.invalidate(environmentsProvider);
         ref.invalidate(triggersByEnvironmentProvider);
+
+        // Sprint F3-3 — ambiente criado por voz sem coords (FloatingVoiceService).
+        // Abre a AddEnvironmentScreen em modo só-localização. Limpa o pending antes
+        // de navegar para não reabrir no próximo resume.
+        final pendingEnvId = prefs.getString('pending_location_env_id');
+        if (pendingEnvId != null) {
+          final pendingEnvName = prefs.getString('pending_location_env_name');
+          await prefs.remove('pending_location_env_id');
+          await prefs.remove('pending_location_env_name');
+          if (mounted) {
+            pushScreen(
+              context,
+              AddEnvironmentScreen(
+                pendingEnvironmentId: pendingEnvId,
+                pendingEnvironmentName: pendingEnvName,
+              ),
+            );
+          }
+        }
       },
     );
     // Executa depois do primeiro frame para que o Navigator esteja disponível
