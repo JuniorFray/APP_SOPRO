@@ -34,7 +34,7 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   static const _uuid = Uuid();
 
   // Photon location_bias_scale (0.0–1.0). Peso da proximidade sobre a prominência.
-  static const _locationBiasScale = '0.5';
+  static const _locationBiasScale = '0.9';
 
   // Zoom da location bias no Stage 2 (Photon `zoom`, default 12). 16 ≈ nível de
   // bairro: raio pequeno em torno do ponto do locationHint resolvido no Stage 1.
@@ -539,14 +539,21 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     try {
       final cleanQuery = query
           .replaceAll(RegExp(r'\s*,\s*\d+\s*$'), '').trim();
-      final params = {
-        'q':           cleanQuery,
-        'key':         apiKey,
-        'format':      'json',
-        'limit':       '5',
+      final params = <String, String>{
+        'q':            cleanQuery,
+        'key':          apiKey,
+        'format':       'json',
+        'limit':        '5',
         'countrycodes': 'br',
         'addressdetails': '1',
       };
+      // Proximidade — prioriza resultados próximos ao usuário.
+      // bounded=0 mantém busca global mas rankeia pelo bias.
+      if (userLat != 0.0 && userLon != 0.0) {
+        params['lat']     = userLat.toString();
+        params['lon']     = userLon.toString();
+        params['bounded'] = '0';
+      }
       final uri = Uri.https(
           'us1.locationiq.com', '/v1/search', params);
       final client = HttpClient();

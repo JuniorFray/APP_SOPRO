@@ -91,20 +91,48 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           final pendingEnvName = prefs.getString('pending_location_env_name');
           await prefs.remove('pending_location_env_id');
           await prefs.remove('pending_location_env_name');
-          if (mounted) {
-            pushScreen(
-              context,
-              AddEnvironmentScreen(
-                pendingEnvironmentId: pendingEnvId,
-                pendingEnvironmentName: pendingEnvName,
-              ),
-            );
-          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              pushScreen(
+                context,
+                AddEnvironmentScreen(
+                  pendingEnvironmentId: pendingEnvId,
+                  pendingEnvironmentName: pendingEnvName,
+                ),
+              );
+            }
+          });
         }
       },
     );
     // Executa depois do primeiro frame para que o Navigator esteja disponível
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkOnboarding());
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Invalida providers no cold start para refletir
+      // ambientes criados pelo FloatingVoiceService.
+      ref.invalidate(environmentsProvider);
+      ref.invalidate(triggersByEnvironmentProvider);
+
+      // Verifica pending de localização do FloatingVoiceService.
+      final prefs = await SharedPreferences.getInstance();
+      final pendingEnvId = prefs.getString('pending_location_env_id');
+      if (pendingEnvId != null && mounted) {
+        final pendingEnvName =
+            prefs.getString('pending_location_env_name');
+        await prefs.remove('pending_location_env_id');
+        await prefs.remove('pending_location_env_name');
+        if (mounted) {
+          pushScreen(
+            context,
+            AddEnvironmentScreen(
+              pendingEnvironmentId: pendingEnvId,
+              pendingEnvironmentName: pendingEnvName,
+            ),
+          );
+        }
+      }
+    });
   }
 
   @override
