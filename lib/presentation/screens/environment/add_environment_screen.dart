@@ -1,9 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -82,15 +82,15 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
   bool _searching = false;
   List<_SearchResult> _searchResults = [];
 
-  // Controlador do mapa — permite mover o centro programaticamente
-  final _mapController = MapController();
+  // Controlador do mapa MapLibre — atribuído em onMapCreated
+  ml.MapLibreMapController? _mapController;
+  // Círculos do pin desenhados via annotations (glow difuso + pin sólido)
+  ml.Circle? _glowOuter;
+  ml.Circle? _glowInner;
+  ml.Circle? _pinCircle;
 
   // Centro inicial do mapa: São Paulo (referência urbana padrão para o Brasil)
   static const _defaultCenter = LatLng(-23.5505, -46.6333);
-
-  // Animação de pulso do marcador de mapa
-  late final AnimationController _markerPulseCtrl;
-  late final Animation<double>   _markerPulseAnim;
 
   // Valor do slider de raio (50–1000 m), sincronizado com _radiusController
   double _radiusSlider = 100.0;
@@ -124,29 +124,32 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
     _radiusSlider = initialRadius.clamp(50.0, 1000.0);
     _radiusController = TextEditingController(text: _radiusSlider.toInt().toString());
 
-    // Pulso animado do pin de localização no mapa
-    _markerPulseCtrl = AnimationController(
-      duration: const Duration(milliseconds: 1200),
-      vsync: this,
-    )..repeat(reverse: true);
-    _markerPulseAnim = Tween<double>(begin: 0.6, end: 1.2).animate(
-      CurvedAnimation(parent: _markerPulseCtrl, curve: Curves.easeInOut),
-    );
     if (widget.environment != null) {
       // Posiciona o pin na localização existente
       _selectedPoint = LatLng(
         widget.environment!.latitude,
         widget.environment!.longitude,
       );
-      // Centraliza o mapa após o primeiro frame (MapController não está pronto no initState)
+      // Centraliza o mapa após o primeiro frame (controller não está pronto no initState)
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _mapController.move(_selectedPoint!, 15.0);
+        if (mounted) {
+          _mapController?.animateCamera(
+            ml.CameraUpdate.newLatLngZoom(
+              ml.LatLng(_selectedPoint!.latitude, _selectedPoint!.longitude),
+              15.0));
+        }
       });
     } else if (widget.initialPosition != null) {
       // GPS pré-obtido via comando de voz — posiciona pin sem clique do usuário
       _selectedPoint = widget.initialPosition;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _mapController.move(widget.initialPosition!, 15.0);
+        if (mounted) {
+          _mapController?.animateCamera(
+            ml.CameraUpdate.newLatLngZoom(
+              ml.LatLng(widget.initialPosition!.latitude,
+                  widget.initialPosition!.longitude),
+              15.0));
+        }
       });
     } else {
       // Modo criação sem posição pré-definida: centraliza e pina no último GPS salvo.
@@ -160,7 +163,9 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
           if (lat != 0.0 && lon != 0.0 && mounted) {
             final pos = LatLng(lat, lon);
             setState(() => _selectedPoint = pos);
-            _mapController.move(pos, 15.0);
+            _mapController?.animateCamera(
+              ml.CameraUpdate.newLatLngZoom(
+                ml.LatLng(pos.latitude, pos.longitude), 15.0));
           }
         } catch (_) {}
       });
@@ -184,7 +189,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
   void dispose() {
     _nameRecordTimer?.cancel();
     _searchDebounce?.cancel();
-    _markerPulseCtrl.dispose();
+    _mapController?.dispose();
     ref.read(voiceServiceProvider).cancelRecording();
     _nameController.dispose();
     _radiusController.dispose();
@@ -203,41 +208,39 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
         key: _formKey,
         child: Stack(
           children: [
-            // Mapa full-screen — ocupa toda a área do body
+            // Mapa full-screen — MapLibre vetorial com estilo noturno custom
             Positioned.fill(
-              child: FlutterMap(
-                mapController: _mapController,
-                options: MapOptions(
-                  initialCenter: _defaultCenter,
-                  initialZoom: 12.0,
-                  onTap: (_, point) => setState(() {
-                    _selectedPoint = point;
-                    _searchResults = [];
-                  }),
-                ),
-                children: [
-                  // Tiles Carto Dark Matter
-                  TileLayer(
-                    urlTemplate:
-                        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                    subdomains: const ['a', 'b', 'c', 'd'],
-                    userAgentPackageName: 'com.sopro.sopro',
+              child: ml.MapLibreMap(
+                styleString: 'asset://assets/map_style_sopro.json',
+                initialCameraPosition: ml.CameraPosition(
+                  target: ml.LatLng(
+                    _defaultCenter.latitude,
+                    _defaultCenter.longitude,
                   ),
-                  // Marcador animado
-                  if (_selectedPoint != null)
-                    AnimatedBuilder(
-                      animation: _markerPulseAnim,
-                      builder: (_, __) => MarkerLayer(
-                        markers: [
-                          Marker(
-                            point: _selectedPoint!,
-                            alignment: Alignment.topCenter,
-                            child: _buildMarker(),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
+                  zoom: 13.0,
+                ),
+                onMapCreated: (controller) {
+                  _mapController = controller;
+                },
+                onStyleLoadedCallback: () async {
+                  if (_selectedPoint != null) {
+                    await _updateMapPin(_selectedPoint!);
+                  }
+                },
+                onMapClick: (point, coordinates) {
+                  final latLng = LatLng(
+                      coordinates.latitude, coordinates.longitude);
+                  setState(() {
+                    _selectedPoint = latLng;
+                    _searchResults = [];
+                  });
+                  _updateMapPin(latLng);
+                },
+                compassEnabled: false,
+                rotateGesturesEnabled: false,
+                tiltGesturesEnabled: false,
+                myLocationEnabled: false,
+                trackCameraPosition: false,
               ),
             ),
 
@@ -307,19 +310,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
               child: CircularProgressIndicator(
                 strokeWidth: 2,
                 color: AppColors.textPrimary,
-              ),
-            ),
-          )
-        else
-          TextButton(
-            onPressed: _selectedPoint != null ? _submit : null,
-            child: Text(
-              AppStrings.save,
-              style: TextStyle(
-                color: _selectedPoint != null
-                    ? AppColors.textPrimary
-                    : AppColors.textDisabled,
-                fontWeight: FontWeight.bold,
               ),
             ),
           ),
@@ -527,54 +517,58 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
     );
   }
 
-  // Pin animado com halo + pulso
-  Widget _buildMarker() {
-    return Stack(
-      alignment: Alignment.bottomCenter,
-      clipBehavior: Clip.none,
-      children: [
-        // Anel de pulso animado
-        Positioned(
-          bottom: 36,
-          child: Transform.scale(
-            scale: _markerPulseAnim.value,
-            child: Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border:
-                    Border.all(color: const Color(0x80FF6B82), width: 2),
-              ),
-            ),
-          ),
-        ),
-        // Halo fixo
-        Positioned(
-          bottom: 36,
-          child: Container(
-            width: 28,
-            height: 28,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: Color(0x33FF6B82),
-            ),
-          ),
-        ),
-        // Ícone do pin com sombra rosa
-        const Icon(
-          Icons.location_pin,
-          color: Color(0xFFFF6B82),
-          size: 44,
-          shadows: [
-            Shadow(
-              color: Color(0x66FF6B82),
-              blurRadius: 12,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-      ],
+  // Atualiza pin + glow no MapLibre após tap ou GPS.
+  Future<void> _updateMapPin(LatLng point) async {
+    final ctrl = _mapController;
+    if (ctrl == null) return;
+    final mlPoint = ml.LatLng(point.latitude, point.longitude);
+
+    // Remove layers anteriores
+    if (_glowOuter != null) {
+      await ctrl.removeCircle(_glowOuter!);
+      _glowOuter = null;
+    }
+    if (_glowInner != null) {
+      await ctrl.removeCircle(_glowInner!);
+      _glowInner = null;
+    }
+    if (_pinCircle != null) {
+      await ctrl.removeCircle(_pinCircle!);
+      _pinCircle = null;
+    }
+
+    // Glow externo difuso
+    _glowOuter = await ctrl.addCircle(ml.CircleOptions(
+      geometry: mlPoint,
+      circleRadius: 42,
+      circleColor: '#E03050',
+      circleOpacity: 0.08,
+      circleBlur: 1.0,
+    ));
+
+    // Glow interno
+    _glowInner = await ctrl.addCircle(ml.CircleOptions(
+      geometry: mlPoint,
+      circleRadius: 20,
+      circleColor: '#E03050',
+      circleOpacity: 0.18,
+      circleBlur: 0.7,
+    ));
+
+    // Pin — círculo sólido com borda
+    _pinCircle = await ctrl.addCircle(ml.CircleOptions(
+      geometry: mlPoint,
+      circleRadius: 9,
+      circleColor: '#E03050',
+      circleOpacity: 1.0,
+      circleStrokeWidth: 2.5,
+      circleStrokeColor: '#ffffff',
+      circleStrokeOpacity: 0.9,
+    ));
+
+    // Centraliza câmera no ponto
+    await ctrl.animateCamera(
+      ml.CameraUpdate.newLatLng(mlPoint),
     );
   }
 
@@ -632,7 +626,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                   SliderTheme(
                     data: SliderTheme.of(context).copyWith(
                       trackHeight: 6,
-                      overlayColor: const Color(0x33FF6B82),
+                      overlayColor: const Color(0x33E03050),
                       overlayShape:
                           const RoundSliderOverlayShape(overlayRadius: 16),
                       thumbShape: const _GlassThumb(),
@@ -661,14 +655,14 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                             colors: _selectedPoint != null
-                                ? const [Color(0xFFFF6178), Color(0xFFF04666)]
-                                : const [Color(0x66FF6178), Color(0x66F04666)],
+                                ? const [Color(0xFFE03050), Color(0xFFE03050)]
+                                : const [Color(0x66E03050), Color(0x66E03050)],
                           ),
                           borderRadius: BorderRadius.circular(AppRadius.button),
                           boxShadow: _selectedPoint != null
                               ? const [
                                   BoxShadow(
-                                    color: Color(0x40FF4566),
+                                    color: Color(0x40E03050),
                                     blurRadius: 12,
                                     offset: Offset(0, 4),
                                   ),
@@ -809,14 +803,17 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
   }
 
   // Seleciona um resultado da busca: move o mapa e posiciona o pin
-  void _selectResult(_SearchResult result) {
+  Future<void> _selectResult(_SearchResult result) async {
     final point = LatLng(result.lat, result.lon);
     setState(() {
       _selectedPoint  = point;
       _searchResults  = [];
     });
     _searchCtrl.clear();
-    _mapController.move(point, 15.0);
+    await _updateMapPin(point);
+    _mapController?.animateCamera(
+      ml.CameraUpdate.newLatLngZoom(
+        ml.LatLng(point.latitude, point.longitude), 15.0));
   }
 
   // Obtém a posição real via GPS nativo e centraliza o mapa no ponto obtido.
@@ -849,7 +846,10 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
       if (pos != null) {
         final point = LatLng(pos.latitude, pos.longitude);
         setState(() => _selectedPoint = point);
-        _mapController.move(point, 16.0);
+        await _updateMapPin(point);
+        _mapController?.animateCamera(
+          ml.CameraUpdate.newLatLngZoom(
+            ml.LatLng(point.latitude, point.longitude), 16.0));
       } else {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(

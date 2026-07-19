@@ -8,9 +8,12 @@ plugins {
 android {
     namespace = "com.sopro.sopro"
     compileSdk = 35
-    ndkVersion = flutter.ndkVersion
+    // NDK 28+ exigido por plugins nativos (maplibre_gl) sob AGP 8.6.
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
+        // Desugaring exigido por flutter_local_notifications sob AGP 8.6.
+        coreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
@@ -50,6 +53,9 @@ flutter {
 }
 
 dependencies {
+    // Core library desugaring — backport de APIs Java 8+ exigido por
+    // flutter_local_notifications no toolchain AGP 8.6.
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
     // FusedLocationProviderClient para GPS eficiente em bateria.
     implementation 'com.google.android.gms:play-services-location:21.3.0'
     // Coroutines para chamadas de rede fora da main thread no FloatingVoiceService
