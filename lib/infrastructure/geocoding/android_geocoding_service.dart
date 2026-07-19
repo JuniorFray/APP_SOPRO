@@ -40,6 +40,17 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // bairro: raio pequeno em torno do ponto do locationHint resolvido no Stage 1.
   static const _neighborhoodZoom = '16';
 
+  // Modificadores de categoria que podem aparecer no final do nome.
+  // Ex.: "Assaí Atacadista" → strip "Atacadista" → busca "Assaí".
+  // "Delta Supermercado" → strip "Supermercado" → busca "Delta".
+  static const _categoryModifiers = {
+    'atacadista', 'atacado', 'supermercado', 'supermercados',
+    'hipermercado', 'hipermercados', 'mercado', 'drogaria',
+    'farmacia', 'farmacias', 'hospital', 'clinica',
+    'restaurante', 'lanchonete', 'padaria', 'academia',
+    'comercio', 'comercial', 'distribuidora',
+  };
+
   // Layers de LUGAR usados no Stage 1 (resolver o bairro/cidade do locationHint).
   // Sem osm_tag → busca administrativa pura, nunca POIs.
   static const _placeLayers = ['district', 'locality', 'city', 'county', 'state'];
@@ -108,14 +119,29 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
             query, key, constraints, userLat, userLon);
     }
 
-    // Camada 2: LocationIQ quando Photon/Geocoder não trouxeram nada.
-    if (raw.isEmpty) {
-      raw = await _searchLocationIQ(query, key,
-          userLat: userLat, userLon: userLon);
-    }
+    // 4. CandidateFilter → LocationRanker (resultado primário).
+    final primary = _filterAndRank(
+        normalized, constraints, raw, userLat, userLon);
+    if (primary.isNotEmpty) return primary;
 
-    // 4. CandidateFilter → LocationRanker.
-    return _filterAndRank(normalized, constraints, raw, userLat, userLon);
+    // 5. LocationIQ — acionado quando Photon retornou vazio OU
+    //    quando retornou candidatos que o CandidateFilter descartou
+    //    (ex.: mesmo nome em outra cidade, distância > radiusKm).
+    //    Usa query com marca limpa para melhorar precisão:
+    //      "Açaí Atacadista Piracicaba" → busca "Açaí Atacadista Piracicaba"
+    //      "Delta Supermercado"         → busca "Delta"
+    final rawBrand = normalized.brandHint ?? query;
+    final cleanBrand = _stripTrailingCategoryWords(rawBrand);
+    // Reconstrói a query com a cidade/hints preservados se existirem.
+    final liqHints = normalized.locationHints;
+    final liqQuery = liqHints.isNotEmpty
+        ? '$cleanBrand ${liqHints.last}'
+        : (cleanBrand.isNotEmpty ? cleanBrand : query);
+    final liqRaw = await _searchLocationIQ(
+        liqQuery, key,
+        userLat: userLat, userLon: userLon);
+    return _filterAndRank(
+        normalized, constraints, liqRaw, userLat, userLon);
   }
 
   // Estágio B: filtra candidatos inválidos e rankeia apenas os sobreviventes.
@@ -209,11 +235,38 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     final b = (brand ?? '').trim();
     final h = hint.trim();
     if (b.isEmpty) return h;
-    if (b.toLowerCase().endsWith(h.toLowerCase())) {
-      final cut = b.substring(0, b.length - h.length).trim();
-      if (cut.isNotEmpty) return cut;
+    String result = b;
+    if (result.toLowerCase().endsWith(h.toLowerCase())) {
+      final cut = result.substring(0, result.length - h.length).trim();
+      if (cut.isNotEmpty) result = cut;
     }
-    return b;
+    // Remove modificadores de categoria que sobraram após strip do hint.
+    // Ex.: "Açaí Atacadista" (após remover "Piracicaba") → "Açaí".
+    final stripped = _stripTrailingCategoryWords(result);
+    return stripped.isNotEmpty ? stripped : result;
+  }
+
+  // Remove palavras de categoria do final da marca.
+  // Preserva sempre ao menos o primeiro token.
+  // Ex.: "Açaí Atacadista" → "Açaí"
+  //      "Delta Supermercado" → "Delta"
+  //      "Pão de Açúcar" → "Pão de Açúcar" (sem modificador)
+  String _stripTrailingCategoryWords(String brand) {
+    String normLocal(String s) => s
+        .toLowerCase()
+        .replaceAll(RegExp(r'[áàãâä]'), 'a')
+        .replaceAll(RegExp(r'[éèêë]'), 'e')
+        .replaceAll(RegExp(r'[íìîï]'), 'i')
+        .replaceAll(RegExp(r'[óòõôö]'), 'o')
+        .replaceAll(RegExp(r'[úùûü]'), 'u')
+        .replaceAll(RegExp(r'[ç]'), 'c');
+    final tokens = brand.trim().split(RegExp(r'\s+'));
+    var end = tokens.length;
+    while (end > 1 &&
+        _categoryModifiers.contains(normLocal(tokens[end - 1]))) {
+      end--;
+    }
+    return tokens.sublist(0, end).join(' ');
   }
 
   // Camadas 2 + 3: Geocoder nativo Android (bounding box do usuário) e, se vazio

@@ -85,54 +85,75 @@ class GlassSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = borderRadius ?? BorderRadius.circular(AppRadius.card);
+    final radius = borderRadius ??
+        BorderRadius.circular(AppRadius.card);
 
     return Container(
       margin: margin,
-      // Sombras vivem fora do ClipRRect para não serem cortadas.
+      // Sombras fora do clip para não serem cortadas.
       decoration: shadows == null
           ? null
-          : BoxDecoration(borderRadius: radius, boxShadow: shadows),
+          : BoxDecoration(
+              borderRadius: radius, boxShadow: shadows),
       child: ClipRRect(
         borderRadius: radius,
-        child: BackdropFilter(
-          // ÚNICO filtro — desfoca apenas o conteúdo ATRÁS do vidro.
-          filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: radius,
-              // Massa do vidro: tint diagonal denso (topo-esq claro → base tênue).
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Color(0x24FFFFFF), // white 14% — corpo do vidro
-                  Color(0x0FFFFFFF), // white 6%
-                  Color(0x08FFFFFF), // white 3%
-                ],
-                stops: [0.0, 0.55, 1.0],
-              ),
-              border: _border(),
-            ),
-            // Reflexo especular no topo + profundidade na base — UM só gradiente.
-            foregroundDecoration: specular
-                ? BoxDecoration(
+        child: Stack(
+          children: [
+
+            // ── Camada 1: blur do fundo (BackdropFilter
+            //    isolado — sem content dentro dele).
+            //    Evita o save layer do Android engolir
+            //    os filhos e torná-los invisíveis.
+            Positioned.fill(
+              child: BackdropFilter(
+                filter: ImageFilter.blur(
+                    sigmaX: blurSigma, sigmaY: blurSigma),
+                child: Container(
+                  decoration: BoxDecoration(
                     borderRadius: radius,
                     gradient: const LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                       colors: [
-                        Color(0x38FFFFFF), // white 22% — banda especular (reflexo)
-                        Color(0x0AFFFFFF), // white 4%
-                        Color(0x00FFFFFF), // transparente — miolo limpo (legibilidade)
-                        Color(0x0F000000), // black 6% — profundidade na base
+                        Color(0x24FFFFFF),
+                        Color(0x0FFFFFFF),
+                        Color(0x08FFFFFF),
                       ],
-                      stops: [0.0, 0.12, 0.5, 1.0],
+                      stops: [0.0, 0.55, 1.0],
                     ),
-                  )
-                : null,
-            child: child,
-          ),
+                    border: _border(),
+                  ),
+                ),
+              ),
+            ),
+
+            // ── Camada 2: conteúdo real (fora do
+            //    BackdropFilter — sem conflito de layer).
+            child,
+
+            // ── Camada 3: reflexo especular (overlay
+            //    semi-transparente, não bloqueia toques).
+            if (specular)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Color(0x38FFFFFF),
+                          Color(0x0AFFFFFF),
+                          Color(0x00FFFFFF),
+                          Color(0x0F000000),
+                        ],
+                        stops: [0.0, 0.12, 0.5, 1.0],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );

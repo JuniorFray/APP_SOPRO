@@ -69,7 +69,12 @@ class SearchStrategy {
 
   // Raio máximo (km) para estabelecimento sem cidade explícita — evita que um
   // POI homônimo distante (outro estado) entre no ranking. Configurável.
-  static const _establishmentRadiusKm = 300.0;
+  // 80km cobre a região metropolitana do usuário sem abrir
+  // o Brasil inteiro. São Paulo capital fica a 160km de
+  // Piracicaba — fora do raio, evitando resultados irrelevantes.
+  // Resultados fora do raio são descartados pelo CandidateFilter.
+  // Se o estabelecimento não existir na região → LocationIQ assume.
+  static const _establishmentRadiusKm = 80.0;
 
   // Regra fixa por tipo. POIs via osm_tag (não há layer "poi" no Photon);
   // cidade/estado via layer; endereço/CEP via Geocoder nativo (com fallback).

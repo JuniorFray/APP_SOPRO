@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:maplibre_gl/maplibre_gl.dart' as ml;
@@ -82,18 +84,28 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
   bool _searching = false;
   List<_SearchResult> _searchResults = [];
 
+  // Estilo do mapa carregado como string via rootBundle — asset:// não é
+  // confiável em maplibre_gl ^0.22.0.
+  String? _mapStyleJson;
+
   // Controlador do mapa MapLibre — atribuído em onMapCreated
   ml.MapLibreMapController? _mapController;
-  // Círculos do pin desenhados via annotations (glow difuso + pin sólido)
-  ml.Circle? _glowOuter;
-  ml.Circle? _glowInner;
-  ml.Circle? _pinCircle;
+  // Pin teardrop renderizado como imagem + posição de tela p/ luz atmosférica
+  ml.Symbol?  _pinSymbol;
+  Offset?     _pinScreenPos;
+  bool        _pinImageReady = false;
+  // Animação de pulso atmosférico muito sutil
+  late AnimationController _lightPulseCtrl;
+  late Animation<double>   _lightPulseAnim;
 
   // Centro inicial do mapa: São Paulo (referência urbana padrão para o Brasil)
   static const _defaultCenter = LatLng(-23.5505, -46.6333);
 
   // Valor do slider de raio (50–1000 m), sincronizado com _radiusController
   double _radiusSlider = 100.0;
+
+  // Modo de visualização do mapa: false = 2D (topo), true = 3D (prédios extrudados).
+  bool _is3D = false;
 
   // Sprint F3-3 — modo "só localização": id/nome do ambiente criado por voz sem
   // coords. Definidos via construtor; quando != null, _submit atualiza o existente.
@@ -110,6 +122,21 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
     // manual nova com um pending antigo.
     _pendingEnvId   = widget.pendingEnvironmentId;
     _pendingEnvName = widget.pendingEnvironmentName;
+
+    // Carrega o estilo do mapa como string — asset:// não é
+    // confiável em maplibre_gl ^0.22.0.
+    rootBundle.loadString('assets/map_style_sopro.json').then((json) {
+      if (mounted) setState(() => _mapStyleJson = json);
+    });
+
+    // Pulso atmosférico muito sutil da iluminação sobre o mapa
+    _lightPulseCtrl = AnimationController(
+      duration: const Duration(seconds: 3),
+      vsync: this,
+    )..repeat(reverse: true);
+    _lightPulseAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _lightPulseCtrl, curve: Curves.easeInOut),
+    );
     // Pré-preenche com os dados do ambiente ao editar; initialName (voz) ao criar;
     // pendingEnvironmentName no modo só-localização; vazio caso contrário
     _nameController = TextEditingController(
@@ -189,6 +216,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
   void dispose() {
     _nameRecordTimer?.cancel();
     _searchDebounce?.cancel();
+    _lightPulseCtrl.dispose();
     _mapController?.dispose();
     ref.read(voiceServiceProvider).cancelRecording();
     _nameController.dispose();
@@ -208,10 +236,13 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
         key: _formKey,
         child: Stack(
           children: [
-            // Mapa full-screen — MapLibre vetorial com estilo noturno custom
+            // Mapa full-screen — MapLibre vetorial com estilo noturno custom.
+            // Aguarda o estilo carregar como string (asset:// não é confiável).
             Positioned.fill(
-              child: ml.MapLibreMap(
-                styleString: 'asset://assets/map_style_sopro.json',
+              child: _mapStyleJson == null
+                  ? const SizedBox.expand()
+                  : ml.MapLibreMap(
+                styleString: _mapStyleJson!,
                 initialCameraPosition: ml.CameraPosition(
                   target: ml.LatLng(
                     _defaultCenter.latitude,
@@ -223,9 +254,22 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                   _mapController = controller;
                 },
                 onStyleLoadedCallback: () async {
+                  // Registra imagem do pin
+                  final pinBytes = await _renderPinImage();
+                  await _mapController?.addImage('sopro_pin', pinBytes);
+                  setState(() => _pinImageReady = true);
+
                   if (_selectedPoint != null) {
                     await _updateMapPin(_selectedPoint!);
                   }
+
+                  // maplibre_gl renderiza o primeiro frame escuro/incompleto
+                  // (surface OpenGL stale) até haver um movimento de câmera que
+                  // force o redesenho. Nudge imperceptível de zoom acorda o mapa.
+                  await _mapController?.animateCamera(
+                    ml.CameraUpdate.zoomBy(0.01),
+                    duration: const Duration(milliseconds: 1),
+                  );
                 },
                 onMapClick: (point, coordinates) {
                   final latLng = LatLng(
@@ -236,6 +280,14 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                   });
                   _updateMapPin(latLng);
                 },
+                onCameraIdle: () async {
+                  if (_selectedPoint != null && _mapController != null) {
+                    await _updatePinScreenPos(ml.LatLng(
+                      _selectedPoint!.latitude,
+                      _selectedPoint!.longitude,
+                    ));
+                  }
+                },
                 compassEnabled: false,
                 rotateGesturesEnabled: false,
                 tiltGesturesEnabled: false,
@@ -243,6 +295,26 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                 trackCameraPosition: false,
               ),
             ),
+
+            // Iluminação atmosférica sobre o mapa (após pin renderizado).
+            // TEMPORARIAMENTE DESATIVADA: o vignette escurecia demais o mapa.
+            // Reativar quando a receita de luz estiver ajustada.
+            // if (_pinScreenPos != null && _pinImageReady)
+            //   Positioned.fill(
+            //     child: IgnorePointer(
+            //       child: AnimatedBuilder(
+            //         animation: _lightPulseAnim,
+            //         builder: (_, __) => RepaintBoundary(
+            //           child: CustomPaint(
+            //             painter: _AtmosphericLightPainter(
+            //               center:    _pinScreenPos!,
+            //               pulseVal:  _lightPulseAnim.value,
+            //             ),
+            //           ),
+            //         ),
+            //       ),
+            //     ),
+            //   ),
 
             // Card glass superior: nome + busca (flutua sobre o mapa)
             Positioned(
@@ -260,6 +332,13 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                 right: 16,
                 child: _MapChip(label: AppStrings.mapTapInstruction),
               ),
+
+            // Botão alternar 2D / 3D — acima do botão GPS
+            Positioned(
+              bottom: 262,
+              right: 12,
+              child: _build3DButton(),
+            ),
 
             // Botão GPS — canto inferior direito acima do painel
             Positioned(
@@ -517,62 +596,143 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
     );
   }
 
-  // Atualiza pin + glow no MapLibre após tap ou GPS.
   Future<void> _updateMapPin(LatLng point) async {
     final ctrl = _mapController;
     if (ctrl == null) return;
     final mlPoint = ml.LatLng(point.latitude, point.longitude);
 
-    // Remove layers anteriores
-    if (_glowOuter != null) {
-      await ctrl.removeCircle(_glowOuter!);
-      _glowOuter = null;
-    }
-    if (_glowInner != null) {
-      await ctrl.removeCircle(_glowInner!);
-      _glowInner = null;
-    }
-    if (_pinCircle != null) {
-      await ctrl.removeCircle(_pinCircle!);
-      _pinCircle = null;
+    if (_pinSymbol != null) {
+      await ctrl.removeSymbol(_pinSymbol!);
+      _pinSymbol = null;
     }
 
-    // Glow externo difuso
-    _glowOuter = await ctrl.addCircle(ml.CircleOptions(
-      geometry: mlPoint,
-      circleRadius: 42,
-      circleColor: '#E03050',
-      circleOpacity: 0.08,
-      circleBlur: 1.0,
+    _pinSymbol = await ctrl.addSymbol(ml.SymbolOptions(
+      geometry:   mlPoint,
+      iconImage:  'sopro_pin',
+      iconSize:   1.0,
+      iconAnchor: 'bottom',
     ));
 
-    // Glow interno
-    _glowInner = await ctrl.addCircle(ml.CircleOptions(
-      geometry: mlPoint,
-      circleRadius: 20,
-      circleColor: '#E03050',
-      circleOpacity: 0.18,
-      circleBlur: 0.7,
-    ));
-
-    // Pin — círculo sólido com borda
-    _pinCircle = await ctrl.addCircle(ml.CircleOptions(
-      geometry: mlPoint,
-      circleRadius: 9,
-      circleColor: '#E03050',
-      circleOpacity: 1.0,
-      circleStrokeWidth: 2.5,
-      circleStrokeColor: '#ffffff',
-      circleStrokeOpacity: 0.9,
-    ));
-
-    // Centraliza câmera no ponto
     await ctrl.animateCamera(
-      ml.CameraUpdate.newLatLng(mlPoint),
+      ml.CameraUpdate.newLatLng(mlPoint));
+
+    // Atualiza posição de tela para o efeito de luz
+    await _updatePinScreenPos(mlPoint);
+  }
+
+  // Renderiza um pin teardrop coral como PNG para uso no MapLibre.
+  // Dimensões dobradas (96x112) para um pin ~2x maior e nítido no mapa.
+  Future<Uint8List> _renderPinImage() async {
+    const w = 96.0;
+    const h = 112.0;
+    const cx = w / 2;
+    const r  = w * 0.36;
+    const cy = r + 4;
+
+    final recorder = ui.PictureRecorder();
+    final canvas   = Canvas(recorder, Rect.fromLTWH(0, 0, w, h));
+
+    // Sombra suave
+    final shadowPaint = Paint()
+      ..color        = const Color(0x55000000)
+      ..maskFilter   = const MaskFilter.blur(BlurStyle.normal, 6);
+    final shadowPath = ui.Path()
+      ..addOval(Rect.fromCircle(
+          center: Offset(cx + 2, cy + 2), radius: r))
+      ..moveTo(cx - r * 0.45, cy + r * 0.65)
+      ..lineTo(cx + r * 0.45, cy + r * 0.65)
+      ..lineTo(cx, h - 8)
+      ..close();
+    canvas.drawPath(shadowPath, shadowPaint);
+
+    // Corpo do pin (teardrop)
+    final path = ui.Path()
+      ..addOval(Rect.fromCircle(center: Offset(cx, cy), radius: r))
+      ..moveTo(cx - r * 0.45, cy + r * 0.65)
+      ..lineTo(cx + r * 0.45, cy + r * 0.65)
+      ..lineTo(cx, h - 8)
+      ..close();
+
+    canvas.drawPath(
+      path,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          Offset(cx, cy - r * 0.2),
+          r * 1.4,
+          [const Color(0xFFFF5A70), const Color(0xFFB01830)],
+        ),
     );
+
+    // Borda branca
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style       = PaintingStyle.stroke
+        ..strokeWidth = 3.0
+        ..color       = Colors.white.withOpacity(0.9),
+    );
+
+    // Ponto branco central
+    canvas.drawCircle(
+      Offset(cx, cy),
+      r * 0.28,
+      Paint()..color = Colors.white,
+    );
+
+    final pic   = recorder.endRecording();
+    final img   = await pic.toImage(w.toInt(), h.toInt());
+    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
+    return bytes!.buffer.asUint8List();
+  }
+
+  Future<void> _updatePinScreenPos(ml.LatLng mlPoint) async {
+    final ctrl = _mapController;
+    if (ctrl == null) return;
+    try {
+      final pt = await ctrl.toScreenLocation(mlPoint);
+      if (mounted) {
+        setState(() => _pinScreenPos = Offset(
+          pt.x.toDouble(), pt.y.toDouble()));
+      }
+    } catch (_) {}
   }
 
   // Botão de localização atual — glass mini FAB
+  // Alterna 2D <-> 3D: troca a visibilidade das camadas de prédio e inclina a
+  // câmera (50° em 3D, plano em 2D). No-op se o controlador ainda não existe.
+  Future<void> _toggle3D() async {
+    final ctrl = _mapController;
+    if (ctrl == null) return;
+    final next = !_is3D;
+    setState(() => _is3D = next);
+    // Extrusão só em 3D; fill chapado só em 2D (evita sobreposição de desenho).
+    await ctrl.setLayerVisibility('building-3d', next);
+    await ctrl.setLayerVisibility('building', !next);
+    // Inclina/desinclina preservando centro e zoom atuais.
+    await ctrl.animateCamera(
+      ml.CameraUpdate.tiltTo(next ? 50.0 : 0.0),
+      duration: const Duration(milliseconds: 450),
+    );
+  }
+
+  // Botão redondo que alterna a visão 2D/3D. Coral quando 3D ativo.
+  Widget _build3DButton() {
+    return FloatingActionButton.small(
+      onPressed: _toggle3D,
+      backgroundColor: _is3D ? AppColors.accent : AppColors.backgroundCard,
+      tooltip: _is3D ? AppStrings.map2D : AppStrings.map3D,
+      heroTag: '3d_fab',
+      child: Text(
+        _is3D ? '2D' : '3D',
+        style: TextStyle(
+          color: _is3D ? AppColors.textPrimary : AppColors.textSecondary,
+          fontWeight: FontWeight.w700,
+          fontSize: 13,
+        ),
+      ),
+    );
+  }
+
   Widget _buildGpsButton() {
     return FloatingActionButton.small(
       onPressed: _loadingLocation ? null : _onLocationButtonPressed,
@@ -1063,4 +1223,70 @@ class _SearchResult {
     required this.lat,
     required this.lon,
   });
+}
+
+class _AtmosphericLightPainter extends CustomPainter {
+  final Offset center;
+  final double pulseVal;
+
+  const _AtmosphericLightPainter({
+    required this.center,
+    required this.pulseVal,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Raio base + pulso muito sutil (±8px em 300px base)
+    final radius = 300.0 + pulseVal * 8.0;
+
+    // Calcula centro normalizado para o Alignment do gradient
+    final alignX = (center.dx / size.width)  * 2 - 1;
+    final alignY = (center.dy / size.height) * 2 - 1;
+    final align  = Alignment(alignX, alignY);
+
+    final rect = Offset.zero & size;
+
+    // ── Camada 1: escurecimento geral com buraco de luz ──
+    final darkGrad = RadialGradient(
+      center: align,
+      radius: radius / (size.shortestSide * 0.5),
+      colors: const [
+        Color(0x00000000), // centro: mapa totalmente visível
+        Color(0x00000000), // ainda limpo até 25%
+        Color(0x28030317), // início suave do escurecimento
+        Color(0x72030317), // escurecimento médio
+        Color(0xC8030317), // bordas muito escuras
+      ],
+      stops: const [0.0, 0.25, 0.50, 0.75, 1.0],
+    );
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader  = darkGrad.createShader(rect)
+        ..blendMode = BlendMode.srcOver,
+    );
+
+    // ── Camada 2: tonalização coral atmosférica nas bordas ──
+    final coralGrad = RadialGradient(
+      center: align,
+      radius: radius * 1.4 / (size.shortestSide * 0.5),
+      colors: const [
+        Color(0x00E03050),
+        Color(0x00E03050),
+        Color(0x08E03050),
+        Color(0x14E03050),
+      ],
+      stops: const [0.0, 0.55, 0.80, 1.0],
+    );
+    canvas.drawRect(
+      rect,
+      Paint()
+        ..shader    = coralGrad.createShader(rect)
+        ..blendMode = BlendMode.softLight,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_AtmosphericLightPainter old) =>
+      old.center != center || old.pulseVal != pulseVal;
 }

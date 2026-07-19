@@ -8,50 +8,51 @@
     }
   },
   "glyphs": "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+  "sprite": "https://tiles.openfreemap.org/styles/liberty/sprite",
   "layers": [
     {
       "id": "background",
       "type": "background",
-      "paint": { "background-color": "#30426e" }
+      "paint": { "background-color": "#0a1220" }
     },
     {
       "id": "water",
       "type": "fill",
       "source": "ofm",
       "source-layer": "water",
-      "paint": { "fill-color": "#1e2e52" }
+      "paint": { "fill-color": "#060e1a" }
     },
     {
       "id": "waterway",
       "type": "line",
       "source": "ofm",
       "source-layer": "waterway",
-      "paint": { "line-color": "#1e2e52", "line-width": 1 }
+      "paint": { "line-color": "#060e1a", "line-width": 1 }
     },
     {
       "id": "landcover",
       "type": "fill",
       "source": "ofm",
       "source-layer": "landcover",
-      "paint": { "fill-color": "#2a3a5e", "fill-opacity": 0.5 }
+      "paint": { "fill-color": "#0a1020", "fill-opacity": 0.6 }
     },
     {
       "id": "park",
       "type": "fill",
       "source": "ofm",
       "source-layer": "park",
-      "paint": { "fill-color": "#2d4060", "fill-opacity": 0.7 }
+      "paint": { "fill-color": "#0c1525", "fill-opacity": 0.8 }
     },
     {
       "id": "building",
       "type": "fill",
       "source": "ofm",
       "source-layer": "building",
-      "minzoom": 14,
+      "minzoom": 13,
       "paint": {
-        "fill-color": "#243350",
-        "fill-outline-color": "#1a2740",
-        "fill-opacity": 0.8
+        "fill-color": "#16203a",
+        "fill-outline-color": "#26324f",
+        "fill-opacity": 0.9
       }
     },
     {
@@ -61,7 +62,7 @@
       "source-layer": "transportation",
       "filter": ["in", "class", "path", "track"],
       "paint": {
-        "line-color": "#3a4a6a",
+        "line-color": "#2a3a5a",
         "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.5, 18, 1.5],
         "line-dasharray": [2, 2]
       }
@@ -73,8 +74,8 @@
       "source-layer": "transportation",
       "filter": ["in", "class", "minor", "service", "residential"],
       "paint": {
-        "line-color": "#4a5a7e",
-        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.8, 18, 3]
+        "line-color": "#b89a52",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 18, 2]
       }
     },
     {
@@ -84,7 +85,7 @@
       "source-layer": "transportation",
       "filter": ["in", "class", "secondary", "tertiary"],
       "paint": {
-        "line-color": "#7a6820",
+        "line-color": "#b89a52",
         "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1, 18, 5]
       }
     },
@@ -95,8 +96,26 @@
       "source-layer": "transportation",
       "filter": ["in", "class", "primary", "trunk", "motorway"],
       "paint": {
-        "line-color": "#c8a030",
+        "line-color": "#d4b866",
         "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1.5, 18, 7]
+      }
+    },
+    {
+      "id": "building-3d",
+      "type": "fill-extrusion",
+      "source": "ofm",
+      "source-layer": "building",
+      "minzoom": 14,
+      "layout": { "visibility": "none" },
+      "paint": {
+        "fill-extrusion-color": "#1c2942",
+        "fill-extrusion-height": [
+          "interpolate", ["linear"], ["zoom"],
+          14, 0,
+          15.5, ["get", "render_height"]
+        ],
+        "fill-extrusion-base": ["get", "render_min_height"],
+        "fill-extrusion-opacity": 0.92
       }
     },
     {
@@ -112,8 +131,8 @@
         "text-max-angle": 30
       },
       "paint": {
-        "text-color": "#c8a030",
-        "text-halo-color": "#1a2535",
+        "text-color": "#d4b866",
+        "text-halo-color": "#0a1220",
         "text-halo-width": 1.5
       }
     },

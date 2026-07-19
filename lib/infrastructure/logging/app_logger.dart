@@ -115,8 +115,12 @@ class AppLogger {
         'event_type': eventType,
         'payload': payload,
       });
-      request.contentLength = utf8.encode(body).length;
-      request.write(body);
+      // request.write() usa Latin-1 por padrão no HttpClientRequest,
+      // corrompendo acentos (ã→Ã£, í→Ã­, etc.) no Supabase.
+      // request.add() com bytes UTF-8 garante encoding correto.
+      final bodyBytes = utf8.encode(body);
+      request.contentLength = bodyBytes.length;
+      request.add(bodyBytes);
 
       final response = await request.close();
       // Em debug, avisa se o Supabase recusou o log (4xx/5xx).

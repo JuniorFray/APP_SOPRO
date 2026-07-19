@@ -79,6 +79,12 @@ class QueryNormalizer {
     'padaria', 'academia', 'banco', 'loja',
   };
 
+  static const _brandModifiers = {
+    'atacadista', 'atacado', 'hipermercados',
+    'distribuidora', 'comercio', 'comercial',
+    'supermercados', 'farmácias', 'farmacias',
+  };
+
   // Classifica a consulta (determinístico, sem rede). Ordem importa:
   // CEP → estabelecimento (categoria/marca) → endereço (logradouro/número) →
   // estado (UF por extenso) → cidade (padrão). Extrai hints só p/ establishment.
@@ -115,9 +121,20 @@ class QueryNormalizer {
 
     // 3. Sufixos após a cabeça do núcleo = modificadores de local candidatos.
     final tail = core.length > 1 ? core.sublist(1) : const <String>[];
-    final locationHints = <String>[
-      for (var i = 0; i < tail.length; i++) tail.sublist(i).join(' '),
-    ];
+    final locationHints = <String>[];
+    for (var i = 0; i < tail.length; i++) {
+      final suffix = tail.sublist(i).join(' ');
+      // Exclui sufixos compostos apenas de modificadores de categoria/marca.
+      // Ex.: "atacadista" sozinho não é local geográfico.
+      // "atacadista piracicaba" → "piracicaba" não é modificador → incluído.
+      final suffixTokens = suffix
+          .split(RegExp(r'\s+'))
+          .map((t) => _strip(t.toLowerCase()))
+          .toList();
+      final allModifiers = suffixTokens.every(
+          (t) => _categoryWords.contains(t) || _brandModifiers.contains(t));
+      if (!allModifiers) locationHints.add(suffix);
+    }
 
     return NormalizedQuery(
       query,
