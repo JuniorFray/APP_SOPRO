@@ -94,6 +94,10 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
   ml.Symbol?  _pinSymbol;
   Offset?     _pinScreenPos;
   bool        _pinImageReady = false;
+  // Pins (azuis) dos ambientes já existentes — contexto ao criar/editar.
+  // Mantidos separados de _pinSymbol para nunca serem removidos quando a
+  // seleção coral muda (só o _pinSymbol é recriado em _updateMapPin).
+  final List<ml.Symbol> _envSymbols = [];
   // Animação de pulso atmosférico muito sutil
   late AnimationController _lightPulseCtrl;
   late Animation<double>   _lightPulseAnim;
@@ -254,10 +258,19 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                   _mapController = controller;
                 },
                 onStyleLoadedCallback: () async {
-                  // Registra imagem do pin
+                  // Registra a imagem do pin de seleção (coral) e a dos
+                  // ambientes existentes (azul, para distinguir da seleção).
                   final pinBytes = await _renderPinImage();
                   await _mapController?.addImage('sopro_pin', pinBytes);
+                  final envBytes = await _renderPinImage(
+                    top:    const Color(0xFF5B9BFF),
+                    bottom: const Color(0xFF2456A8),
+                  );
+                  await _mapController?.addImage('env_pin', envBytes);
                   setState(() => _pinImageReady = true);
+
+                  // Desenha os pins de todos os ambientes já cadastrados.
+                  await _showEnvironmentPins();
 
                   if (_selectedPoint != null) {
                     await _updateMapPin(_selectedPoint!);
@@ -620,9 +633,40 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
     await _updatePinScreenPos(mlPoint);
   }
 
-  // Renderiza um pin teardrop coral como PNG para uso no MapLibre.
+  // Desenha um pin (azul) para cada ambiente já cadastrado — contexto visual ao
+  // criar/editar. Snapshot via getAll() (não o stream, que pode estar vazio no
+  // instante do style-load). No modo edição pula o próprio ambiente para não
+  // sobrepor o pin coral de seleção. Idempotente: limpa os pins anteriores.
+  Future<void> _showEnvironmentPins() async {
+    final ctrl = _mapController;
+    if (ctrl == null) return;
+    // Remove pins antigos (caso o estilo recarregue) antes de redesenhar.
+    for (final s in _envSymbols) {
+      await ctrl.removeSymbol(s);
+    }
+    _envSymbols.clear();
+
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    final editingId = widget.environment?.id;
+    for (final e in envs) {
+      if (e.id == editingId) continue; // não duplica o ambiente em edição
+      final s = await ctrl.addSymbol(ml.SymbolOptions(
+        geometry:   ml.LatLng(e.latitude, e.longitude),
+        iconImage:  'env_pin',
+        iconSize:   0.8, // um pouco menor que a seleção coral (1.0)
+        iconAnchor: 'bottom',
+      ));
+      _envSymbols.add(s);
+    }
+  }
+
+  // Renderiza um pin teardrop como PNG para uso no MapLibre. Cores parametrizadas:
+  // coral (default) = seleção atual; azul = ambientes já existentes.
   // Dimensões dobradas (96x112) para um pin ~2x maior e nítido no mapa.
-  Future<Uint8List> _renderPinImage() async {
+  Future<Uint8List> _renderPinImage({
+    Color top    = const Color(0xFFFF5A70),
+    Color bottom = const Color(0xFFB01830),
+  }) async {
     const w = 96.0;
     const h = 112.0;
     const cx = w / 2;
@@ -659,7 +703,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
         ..shader = ui.Gradient.radial(
           Offset(cx, cy - r * 0.2),
           r * 1.4,
-          [const Color(0xFFFF5A70), const Color(0xFFB01830)],
+          [top, bottom],
         ),
     );
 

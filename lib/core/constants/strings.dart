@@ -157,6 +157,8 @@ class AppStrings {
   // Mapa de seleção de local
   static const mapTapInstruction = 'Toque no mapa para definir o local';
   static const useCurrentLocation = 'Usar localização atual';
+  static const map2D = 'Ver em 2D';
+  static const map3D = 'Ver em 3D';
   static const locationPermissionDenied =
       'Permissão de localização negada. Habilite nas configurações do dispositivo.';
   static const locationError =
