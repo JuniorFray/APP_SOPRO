@@ -61,8 +61,7 @@ class AddEnvironmentScreen extends ConsumerStatefulWidget {
       _AddEnvironmentScreenState();
 }
 
-class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
-    with TickerProviderStateMixin {
+class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameController;
   late final TextEditingController _radiusController;
@@ -90,17 +89,12 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
 
   // Controlador do mapa MapLibre — atribuído em onMapCreated
   ml.MapLibreMapController? _mapController;
-  // Pin teardrop renderizado como imagem + posição de tela p/ luz atmosférica
+  // Pin teardrop de seleção renderizado como imagem (Symbol nativo do mapa).
   ml.Symbol?  _pinSymbol;
-  Offset?     _pinScreenPos;
-  bool        _pinImageReady = false;
   // Pins (azuis) dos ambientes já existentes — contexto ao criar/editar.
   // Mantidos separados de _pinSymbol para nunca serem removidos quando a
   // seleção coral muda (só o _pinSymbol é recriado em _updateMapPin).
   final List<ml.Symbol> _envSymbols = [];
-  // Animação de pulso atmosférico muito sutil
-  late AnimationController _lightPulseCtrl;
-  late Animation<double>   _lightPulseAnim;
 
   // Centro inicial do mapa: São Paulo (referência urbana padrão para o Brasil)
   static const _defaultCenter = LatLng(-23.5505, -46.6333);
@@ -133,14 +127,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
       if (mounted) setState(() => _mapStyleJson = json);
     });
 
-    // Pulso atmosférico muito sutil da iluminação sobre o mapa
-    _lightPulseCtrl = AnimationController(
-      duration: const Duration(seconds: 3),
-      vsync: this,
-    )..repeat(reverse: true);
-    _lightPulseAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _lightPulseCtrl, curve: Curves.easeInOut),
-    );
     // Pré-preenche com os dados do ambiente ao editar; initialName (voz) ao criar;
     // pendingEnvironmentName no modo só-localização; vazio caso contrário
     _nameController = TextEditingController(
@@ -220,7 +206,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
   void dispose() {
     _nameRecordTimer?.cancel();
     _searchDebounce?.cancel();
-    _lightPulseCtrl.dispose();
     _mapController?.dispose();
     ref.read(voiceServiceProvider).cancelRecording();
     _nameController.dispose();
@@ -260,14 +245,13 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                 onStyleLoadedCallback: () async {
                   // Registra a imagem do pin de seleção (coral) e a dos
                   // ambientes existentes (azul, para distinguir da seleção).
-                  final pinBytes = await _renderPinImage();
+                  final pinBytes = await _renderPinImage(withGlow: true);
                   await _mapController?.addImage('sopro_pin', pinBytes);
                   final envBytes = await _renderPinImage(
                     top:    const Color(0xFF5B9BFF),
                     bottom: const Color(0xFF2456A8),
                   );
                   await _mapController?.addImage('env_pin', envBytes);
-                  setState(() => _pinImageReady = true);
 
                   // Desenha os pins de todos os ambientes já cadastrados.
                   await _showEnvironmentPins();
@@ -293,14 +277,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                   });
                   _updateMapPin(latLng);
                 },
-                onCameraIdle: () async {
-                  if (_selectedPoint != null && _mapController != null) {
-                    await _updatePinScreenPos(ml.LatLng(
-                      _selectedPoint!.latitude,
-                      _selectedPoint!.longitude,
-                    ));
-                  }
-                },
                 compassEnabled: false,
                 rotateGesturesEnabled: false,
                 tiltGesturesEnabled: false,
@@ -308,26 +284,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
                 trackCameraPosition: false,
               ),
             ),
-
-            // Iluminação atmosférica sobre o mapa (após pin renderizado).
-            // TEMPORARIAMENTE DESATIVADA: o vignette escurecia demais o mapa.
-            // Reativar quando a receita de luz estiver ajustada.
-            // if (_pinScreenPos != null && _pinImageReady)
-            //   Positioned.fill(
-            //     child: IgnorePointer(
-            //       child: AnimatedBuilder(
-            //         animation: _lightPulseAnim,
-            //         builder: (_, __) => RepaintBoundary(
-            //           child: CustomPaint(
-            //             painter: _AtmosphericLightPainter(
-            //               center:    _pinScreenPos!,
-            //               pulseVal:  _lightPulseAnim.value,
-            //             ),
-            //           ),
-            //         ),
-            //       ),
-            //     ),
-            //   ),
 
             // Card glass superior: nome + busca (flutua sobre o mapa)
             Positioned(
@@ -628,9 +584,6 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
 
     await ctrl.animateCamera(
       ml.CameraUpdate.newLatLng(mlPoint));
-
-    // Atualiza posição de tela para o efeito de luz
-    await _updatePinScreenPos(mlPoint);
   }
 
   // Desenha um pin (azul) para cada ambiente já cadastrado — contexto visual ao
@@ -662,19 +615,53 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
 
   // Renderiza um pin teardrop como PNG para uso no MapLibre. Cores parametrizadas:
   // coral (default) = seleção atual; azul = ambientes já existentes.
-  // Dimensões dobradas (96x112) para um pin ~2x maior e nítido no mapa.
+  // withGlow embute um halo coral (estilo Uber) DENTRO da própria imagem, atrás
+  // do pin — como vira um Symbol nativo, o glow acompanha o pino em qualquer
+  // gesto sem atraso. Só a seleção coral usa glow; ambientes existentes não.
   Future<Uint8List> _renderPinImage({
     Color top    = const Color(0xFFFF5A70),
     Color bottom = const Color(0xFFB01830),
+    bool  withGlow = false,
   }) async {
-    const w = 96.0;
-    const h = 112.0;
-    const cx = w / 2;
-    const r  = w * 0.36;
-    const cy = r + 4;
+    // Raio do círculo e comprimento do teardrop mantidos idênticos ao layout
+    // original — mudar isso deslocaria a âncora 'bottom' (ponta sobre o local).
+    const r      = 96.0 * 0.36;              // 34.56 (== antigo w * 0.36)
+    const tipLen = 112.0 - 8.0 - (r + 4.0);  // distância centro→ponta (mantida)
+    const bottomMargin = 8.0;                // ponta→borda inferior (NÃO alterar)
+
+    // Halo só na seleção coral. Espaço extra (folga p/ blur) é adicionado apenas
+    // no topo e nas laterais; embaixo mantém a mesma margem da ponta.
+    final haloR = withGlow ? r * 3.0 : 0.0;
+    final pad   = withGlow ? haloR + 12.0 : 0.0;
+
+    final cx = withGlow ? pad : 48.0;                        // centro X
+    final cy = withGlow ? pad : (r + 4.0);                   // centro do círculo
+    final w  = withGlow ? pad * 2 : 96.0;
+    final h  = withGlow ? cy + tipLen + bottomMargin : 112.0;
 
     final recorder = ui.PictureRecorder();
     final canvas   = Canvas(recorder, Rect.fromLTWH(0, 0, w, h));
+
+    // Halo coral (radial + blur) desenhado ANTES do corpo — fica atrás do pin.
+    if (withGlow) {
+      canvas.drawCircle(
+        Offset(cx, cy),
+        haloR,
+        Paint()
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8)
+          ..shader = ui.Gradient.radial(
+            Offset(cx, cy),
+            haloR,
+            const [
+              Color(0x38FF6A00), // centro ~0.22 laranja quente
+              Color(0x30FF5A0E), // ~0.19 até 50%
+              Color(0x12FF4A18), // cai suave
+              Color(0x00FF3D1F), // transparente vermelho na borda
+            ],
+            const [0.0, 0.5, 0.7, 1.0],
+          ),
+      );
+    }
 
     // Sombra suave
     final shadowPaint = Paint()
@@ -724,21 +711,9 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
     );
 
     final pic   = recorder.endRecording();
-    final img   = await pic.toImage(w.toInt(), h.toInt());
+    final img   = await pic.toImage(w.round(), h.round());
     final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
     return bytes!.buffer.asUint8List();
-  }
-
-  Future<void> _updatePinScreenPos(ml.LatLng mlPoint) async {
-    final ctrl = _mapController;
-    if (ctrl == null) return;
-    try {
-      final pt = await ctrl.toScreenLocation(mlPoint);
-      if (mounted) {
-        setState(() => _pinScreenPos = Offset(
-          pt.x.toDouble(), pt.y.toDouble()));
-      }
-    } catch (_) {}
   }
 
   // Botão de localização atual — glass mini FAB
@@ -1073,59 +1048,69 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
 
     setState(() => _isSaving = true);
 
-    // Sprint F3-3 — modo só-localização: atualiza o ambiente já criado por voz
-    // apenas com coords + raio; não cria novo nem altera nome/createdAt.
-    if (_pendingEnvId != null) {
-      final repo = ref.read(environmentRepositoryProvider);
-      final existing = await repo.getById(_pendingEnvId!);
-      if (existing != null) {
-        final updated = EnvironmentEntity(
-          id:           existing.id,
-          name:         existing.name,
-          latitude:     _selectedPoint!.latitude,
-          longitude:    _selectedPoint!.longitude,
-          radiusMeters: double.parse(_radiusController.text),
-          createdAt:    existing.createdAt,
-        );
-        await repo.save(updated);
-        try {
-          await ref.read(nativeGeofenceServiceProvider).addSingleGeofence(updated);
-        } catch (e) {
-          debugPrint('[AddEnvironmentScreen] Falha ao registrar geofence: $e');
-        }
-      }
-      _pendingEnvId = null;
-      if (mounted) Navigator.pop(context);
-      return;
-    }
-
-    // Gera o UUID aqui para que seja conhecido antes e depois do save(),
-    // permitindo registrar o geofence nativo com o ID correto.
-    final id = widget.environment?.id.isNotEmpty == true
-        ? widget.environment!.id
-        : const Uuid().v4();
-
-    final entity = EnvironmentEntity(
-      id: id,
-      name: _nameController.text.trim(),
-      latitude: _selectedPoint!.latitude,
-      longitude: _selectedPoint!.longitude,
-      radiusMeters: double.parse(_radiusController.text),
-      createdAt: widget.environment?.createdAt ?? DateTime.now(),
-    );
-
-    await ref.read(environmentRepositoryProvider).save(entity);
-
-    // Registra/atualiza o geofence nativo imediatamente após salvar.
-    // Sem isso, o ambiente só seria monitorado após o próximo startup do app.
     try {
-      await ref.read(nativeGeofenceServiceProvider).addSingleGeofence(entity);
-    } catch (e) {
-      // Falha silenciosa: o GPS stream do GeofenceManager ainda monitora em foreground
-      debugPrint('[AddEnvironmentScreen] Falha ao registrar geofence nativo: $e');
-    }
+      // Sprint F3-3 — modo só-localização: atualiza o ambiente já criado por voz
+      // apenas com coords + raio; não cria novo nem altera nome/createdAt.
+      if (_pendingEnvId != null) {
+        final repo = ref.read(environmentRepositoryProvider);
+        final existing = await repo.getById(_pendingEnvId!);
+        if (existing != null) {
+          final updated = EnvironmentEntity(
+            id:           existing.id,
+            name:         existing.name,
+            latitude:     _selectedPoint!.latitude,
+            longitude:    _selectedPoint!.longitude,
+            radiusMeters: double.tryParse(_radiusController.text) ?? 100.0,
+            createdAt:    existing.createdAt,
+          );
+          await repo.save(updated);
+          try {
+            await ref
+                .read(nativeGeofenceServiceProvider)
+                .addSingleGeofence(updated);
+          } catch (e) {
+            debugPrint('[AddEnvironmentScreen] Falha geofence: $e');
+          }
+        }
+        _pendingEnvId = null;
+        if (mounted) Navigator.pop(context);
+        return;
+      }
 
-    if (mounted) Navigator.pop(context);
+      // Gera o UUID aqui para que seja conhecido antes e depois do save(),
+      // permitindo registrar o geofence nativo com o ID correto.
+      final id = widget.environment?.id.isNotEmpty == true
+          ? widget.environment!.id
+          : const Uuid().v4();
+
+      final entity = EnvironmentEntity(
+        id:           id,
+        name:         _nameController.text.trim(),
+        latitude:     _selectedPoint!.latitude,
+        longitude:    _selectedPoint!.longitude,
+        radiusMeters: double.tryParse(_radiusController.text) ?? 100.0,
+        createdAt:    widget.environment?.createdAt ?? DateTime.now(),
+      );
+
+      await ref.read(environmentRepositoryProvider).save(entity);
+
+      // Registra/atualiza o geofence nativo imediatamente após salvar.
+      // Sem isso, o ambiente só seria monitorado após o próximo startup do app.
+      try {
+        await ref
+            .read(nativeGeofenceServiceProvider)
+            .addSingleGeofence(entity);
+      } catch (e) {
+        // Falha silenciosa: o GPS stream do GeofenceManager ainda monitora em foreground
+        debugPrint('[AddEnvironmentScreen] Falha geofence nativo: $e');
+      }
+
+      if (mounted) Navigator.pop(context);
+    } catch (e, st) {
+      debugPrint('[AddEnvironmentScreen] Erro ao salvar: $e\n$st');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
 }
@@ -1169,7 +1154,7 @@ class _GradientTrack extends SliderTrackShape with BaseSliderTrackShape {
         RRect.fromRectAndRadius(activeRect, radius),
         Paint()
           ..shader = const LinearGradient(
-            colors: [Color(0xFFFF6B82), Color(0xFF4F8CFF)],
+            colors: [Color(0xFFFF6B82), AppColors.accent],
           ).createShader(trackRect),
       );
     }
@@ -1267,70 +1252,4 @@ class _SearchResult {
     required this.lat,
     required this.lon,
   });
-}
-
-class _AtmosphericLightPainter extends CustomPainter {
-  final Offset center;
-  final double pulseVal;
-
-  const _AtmosphericLightPainter({
-    required this.center,
-    required this.pulseVal,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    // Raio base + pulso muito sutil (±8px em 300px base)
-    final radius = 300.0 + pulseVal * 8.0;
-
-    // Calcula centro normalizado para o Alignment do gradient
-    final alignX = (center.dx / size.width)  * 2 - 1;
-    final alignY = (center.dy / size.height) * 2 - 1;
-    final align  = Alignment(alignX, alignY);
-
-    final rect = Offset.zero & size;
-
-    // ── Camada 1: escurecimento geral com buraco de luz ──
-    final darkGrad = RadialGradient(
-      center: align,
-      radius: radius / (size.shortestSide * 0.5),
-      colors: const [
-        Color(0x00000000), // centro: mapa totalmente visível
-        Color(0x00000000), // ainda limpo até 25%
-        Color(0x28030317), // início suave do escurecimento
-        Color(0x72030317), // escurecimento médio
-        Color(0xC8030317), // bordas muito escuras
-      ],
-      stops: const [0.0, 0.25, 0.50, 0.75, 1.0],
-    );
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader  = darkGrad.createShader(rect)
-        ..blendMode = BlendMode.srcOver,
-    );
-
-    // ── Camada 2: tonalização coral atmosférica nas bordas ──
-    final coralGrad = RadialGradient(
-      center: align,
-      radius: radius * 1.4 / (size.shortestSide * 0.5),
-      colors: const [
-        Color(0x00E03050),
-        Color(0x00E03050),
-        Color(0x08E03050),
-        Color(0x14E03050),
-      ],
-      stops: const [0.0, 0.55, 0.80, 1.0],
-    );
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader    = coralGrad.createShader(rect)
-        ..blendMode = BlendMode.softLight,
-    );
-  }
-
-  @override
-  bool shouldRepaint(_AtmosphericLightPainter old) =>
-      old.center != center || old.pulseVal != pulseVal;
 }

@@ -596,25 +596,31 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
   }
 
   Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
+    // Valida diretamente o controller — evita dependência do
+    // FormState que pode ser null quando SoproTextField usa
+    // TextField internamente (sem TextFormField).
+    final content = _contentCtrl.text.trim();
+    if (content.isEmpty) return;
     setState(() => _isSaving = true);
 
-    final entity = TriggerEntity(
-      // Ao editar: mantém o ID original para fazer upsert (atualização)
-      // Ao criar: string vazia → repositório gera UUID novo
-      id: widget.existingTrigger?.id ?? '',
-      environmentId: widget.environmentId,
-      title: _titleCtrl.text.trim(),
-      content: _contentCtrl.text.trim(),
-      // Ao editar: preserva o estado ativo original
-      isActive: widget.existingTrigger?.isActive ?? true,
-      // Ao editar: preserva a data de criação original
-      createdAt: widget.existingTrigger?.createdAt ?? DateTime.now(),
-    );
+    try {
+      final entity = TriggerEntity(
+        id:            widget.existingTrigger?.id ?? '',
+        environmentId: widget.environmentId,
+        title:         _titleCtrl.text.trim(),
+        content:       content,
+        isActive:      widget.existingTrigger?.isActive ?? true,
+        createdAt:     widget.existingTrigger?.createdAt ?? DateTime.now(),
+      );
 
-    await ref.read(triggerRepositoryProvider).save(entity);
+      await ref.read(triggerRepositoryProvider).save(entity);
 
-    if (mounted) Navigator.pop(context);
+      if (mounted) Navigator.pop(context);
+    } catch (e, st) {
+      debugPrint('[TriggerSheet] Erro ao salvar: $e\n$st');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
 }

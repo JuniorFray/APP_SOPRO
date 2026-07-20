@@ -107,7 +107,7 @@ class AppLogger {
       request.headers
         ..set('apikey', _apiKey)
         ..set('Authorization', 'Bearer $_apiKey')
-        ..contentType = ContentType.json
+        ..contentType = ContentType('application', 'json', charset: 'utf-8')
         ..set('Prefer', 'return=minimal'); // não retorna o registro inserido
 
       final body = jsonEncode({

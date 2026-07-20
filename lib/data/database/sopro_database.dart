@@ -41,6 +41,7 @@ part 'sopro_database.g.dart';
 //   v4 (Sprint 13): adição de phone em ContextCards e BleEncounters
 //   v5 (Sprint F3-1): nova tabela GeocodingCache — cache de resultados de geocoding
 //   v6 (Sprint F3-3): GeocodingCache ganha storagePolicy + placeId; remove expiresAt
+//   v7: title de Triggers deixa de ter comprimento mínimo (permite gatilho sem título)
 @DriftDatabase(
   tables: [
     Environments,
@@ -64,7 +65,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -100,6 +101,12 @@ class SoproDatabase extends _$SoproDatabase {
             try {
               await customStatement('ALTER TABLE geocoding_cache DROP COLUMN expires_at');
             } catch (_) {}
+          }
+          if (from < 7) {
+            // v7: title de Triggers perde o CHECK de comprimento mínimo.
+            // Sem usuários em produção → recria a tabela do zero (não preserva dados).
+            await m.deleteTable('triggers');
+            await m.createTable(triggers);
           }
         },
       );

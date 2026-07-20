@@ -8,7 +8,6 @@
     }
   },
   "glyphs": "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
-  "sprite": "https://tiles.openfreemap.org/styles/liberty/sprite",
   "layers": [
     {
       "id": "background",

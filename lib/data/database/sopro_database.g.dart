@@ -380,8 +380,7 @@ class $TriggersTable extends Triggers
   @override
   late final GeneratedColumn<String> title = GeneratedColumn<String>(
       'title', aliasedName, false,
-      additionalChecks:
-          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 200),
+      additionalChecks: GeneratedColumn.checkTextLength(maxTextLength: 200),
       type: DriftSqlType.string,
       requiredDuringInsert: true);
   static const VerificationMeta _contentMeta =

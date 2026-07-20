@@ -222,7 +222,7 @@ class AppStrings {
   static const settingsNotifEnabledDesc =
       'Receber sussurros ao entrar nos seus ambientes';
   // Botão flutuante de voz (overlay — V2)
-  static const settingsOverlaySection     = 'Acesso rápido';
+  static const settingsOverlaySection     = 'Botão flutuante';
   static const settingsOverlayEnabled     = 'Botão de voz flutuante';
   static const settingsOverlayEnabledDesc =
       'Acesse o Sopro de qualquer tela do celular';
@@ -238,6 +238,12 @@ class AppStrings {
   static const settingsSourceCode     = 'github.com/JuniorFray/APP_SOPRO';
   static const settingsAppDesc        =
       '"O sussurro certo. No lugar certo." — memória física contextual, 100% on-device.';
+
+  // Acesso rápido — atalhos Privacidade / Suporte (blocos quadrados)
+  static const settingsShortcutsSection = 'Acesso rápido';
+  static const settingsShortcutPrivacy  = 'Privacidade';
+  static const settingsShortcutSupport  = 'Suporte';
+  static const settingsComingSoon       = 'Em breve';
 
   // Notificações avançadas (som e frequência)
   static const settingsNotifSound        = 'Som nas notificações';

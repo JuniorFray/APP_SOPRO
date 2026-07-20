@@ -23,6 +23,7 @@ import '../../../domain/entities/ble_encounter_entity.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/encounter_providers.dart';
 import '../../widgets/glass_surface.dart';
+import '../../widgets/sopro_card.dart';
 
 class EncountersScreen extends ConsumerWidget {
   const EncountersScreen({super.key});
@@ -133,7 +134,10 @@ class _EncounterTile extends StatelessWidget {
         child: const Icon(Icons.delete_outline, color: AppColors.textPrimary),
       ),
       onDismissed: (_) => onDelete(),
-      child: ListTile(
+      child: SoproCard(
+        glass: true,
+        margin: const EdgeInsets.only(bottom: AppSpacing.xs),
+        child: ListTile(
         contentPadding:
             const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
         leading: CircleAvatar(
@@ -172,6 +176,7 @@ class _EncounterTile extends StatelessWidget {
           icon: const Icon(Icons.delete_outline, color: AppTheme.textDisabled),
           tooltip: AppStrings.encounterDeleteBtn,
           onPressed: onDelete,
+        ),
         ),
       ),
     );

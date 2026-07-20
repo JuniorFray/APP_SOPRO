@@ -16,8 +16,8 @@ class Triggers extends Table {
   TextColumn get environmentId =>
       text().references(Environments, #id, onDelete: KeyAction.cascade)();
 
-  // Título curto exibido na notificação
-  TextColumn get title => text().withLength(min: 1, max: 200)();
+  // Título curto exibido na notificação (opcional — permite string vazia)
+  TextColumn get title => text().withLength(max: 200)();
 
   // Conteúdo completo do gatilho
   TextColumn get content => text()();

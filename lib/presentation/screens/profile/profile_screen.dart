@@ -9,7 +9,10 @@
 //   - Interesses (tags, separadas por vírgula)
 //   - Nota pessoal (bio, texto livre)
 //   - Telefone/WhatsApp (phone, opcional — compartilhado via BLE)
-//   - Toggle: Visível para outros (bleVisibleProvider)
+//   - Toggle: Compartilhar WhatsApp (shareWhatsAppProvider)
+//
+// O toggle "Visível para outros" vive apenas em Configurações (bleVisibleProvider),
+// não é duplicado aqui.
 
 import 'dart:io';
 
@@ -27,10 +30,10 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/context_card_entity.dart';
-import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/settings_providers.dart';
 import '../../widgets/glass_surface.dart';
+import '../../widgets/sopro_card.dart';
 import '../../widgets/sopro_primary_button.dart';
 import '../../widgets/sopro_text_field.dart';
 
@@ -245,7 +248,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isVisible    = ref.watch(bleVisibleProvider);
     final shareWhatsApp = ref.watch(shareWhatsAppProvider);
 
     return Scaffold(
@@ -262,7 +264,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           child: SizedBox.expand(),
         ),
       ),
-      body: _loaded ? _buildForm(isVisible, shareWhatsApp) : _buildLoading(),
+      body: _loaded ? _buildForm(shareWhatsApp) : _buildLoading(),
     );
   }
 
@@ -272,7 +274,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
   }
 
-  Widget _buildForm(bool isVisible, bool shareWhatsApp) {
+  Widget _buildForm(bool shareWhatsApp) {
     // Inicial do nome para o avatar quando não há foto
     final initial = _nameCtrl.text.isNotEmpty
         ? _nameCtrl.text[0].toUpperCase()
@@ -293,7 +295,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   alignment: Alignment.bottomRight,
                   children: [
                     CircleAvatar(
-                      radius: 44,
+                      radius: 54,
                       backgroundImage:
                           _photoFile != null ? FileImage(_photoFile!) : null,
                       // ignore: deprecated_member_use
@@ -316,11 +318,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         color: AppTheme.accent,
                         shape: BoxShape.circle,
                       ),
-                      padding: const EdgeInsets.all(5),
+                      padding: const EdgeInsets.all(6),
                       child: const Icon(
                         Icons.camera_alt,
                         color: AppColors.textPrimary,
-                        size: 14,
+                        size: 17,
                       ),
                     ),
                   ],
@@ -330,153 +332,140 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: AppSpacing.xxl),
 
-          // ── Seção: Identidade ───────────────────────────────────────────
+          // ── Seção: Identidade (card de vidro) ───────────────────────────
           const _SectionLabel(label: AppStrings.profileSectionIdentity),
           const SizedBox(height: AppSpacing.sm),
 
-          SoproTextField(
-            controller: _nameCtrl,
-            label: AppStrings.profileName,
-            hint: AppStrings.profileNameHint,
-            textCapitalization: TextCapitalization.words,
-            maxLength: 50,
-            onChanged: (_) => setState(() {}), // atualiza avatar em tempo real
-            validator: (v) => (v == null || v.trim().isEmpty)
-                ? AppStrings.profileNameRequired
-                : null,
-          ),
-          const SizedBox(height: AppSpacing.sm),
-
-          SoproTextField(
-            controller: _roleCtrl,
-            label: AppStrings.profileRole,
-            hint: AppStrings.profileRoleHint,
-            textCapitalization: TextCapitalization.words,
-            maxLength: 60,
-          ),
-          const SizedBox(height: AppSpacing.sm),
-
-          SoproTextField(
-            controller: _companyCtrl,
-            label: AppStrings.profileCompany,
-            hint: AppStrings.profileCompanyHint,
-            textCapitalization: TextCapitalization.words,
-            maxLength: 60,
+          SoproCard(
+            glass: true,
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Column(
+              children: [
+                SoproTextField(
+                  controller: _nameCtrl,
+                  label: AppStrings.profileName,
+                  hint: AppStrings.profileNameHint,
+                  textCapitalization: TextCapitalization.words,
+                  maxLength: 50,
+                  onChanged: (_) => setState(() {}), // atualiza avatar em tempo real
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? AppStrings.profileNameRequired
+                      : null,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                SoproTextField(
+                  controller: _roleCtrl,
+                  label: AppStrings.profileRole,
+                  hint: AppStrings.profileRoleHint,
+                  textCapitalization: TextCapitalization.words,
+                  maxLength: 60,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                SoproTextField(
+                  controller: _companyCtrl,
+                  label: AppStrings.profileCompany,
+                  hint: AppStrings.profileCompanyHint,
+                  textCapitalization: TextCapitalization.words,
+                  maxLength: 60,
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: AppSpacing.xl),
 
-          // ── Seção: Contexto ─────────────────────────────────────────────
+          // ── Seção: Contexto (card de vidro) ─────────────────────────────
           const _SectionLabel(label: AppStrings.profileSectionContext),
           const SizedBox(height: AppSpacing.sm),
 
-          SoproTextField(
-            controller: _tagsCtrl,
-            label: AppStrings.profileInterests,
-            hint: AppStrings.profileInterestsHint,
-            maxLength: 120,
+          SoproCard(
+            glass: true,
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Column(
+              children: [
+                SoproTextField(
+                  controller: _tagsCtrl,
+                  label: AppStrings.profileInterests,
+                  hint: AppStrings.profileInterestsHint,
+                  maxLength: 120,
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                SoproTextField(
+                  controller: _bioCtrl,
+                  label: AppStrings.profileNote,
+                  hint: AppStrings.profileNoteHint,
+                  textCapitalization: TextCapitalization.sentences,
+                  maxLines: 4,
+                  maxLength: 500,
+                ),
+              ],
+            ),
           ),
+          const SizedBox(height: AppSpacing.xl),
+
+          // ── Seção: Contato (card de vidro — campo + toggle juntos) ──────
+          const _SectionLabel(label: AppStrings.profileSectionContact),
           const SizedBox(height: AppSpacing.sm),
 
-          SoproTextField(
-            controller: _bioCtrl,
-            label: AppStrings.profileNote,
-            hint: AppStrings.profileNoteHint,
-            textCapitalization: TextCapitalization.sentences,
-            maxLines: 4,
-            maxLength: 500,
-          ),
-          const SizedBox(height: AppSpacing.xl),
-
-          // ── Seção: Contato ──────────────────────────────────────────────
-          const _SectionLabel(label: AppStrings.profileSectionContact),
-          const SizedBox(height: AppSpacing.xs),
-
-          // Campo de WhatsApp/telefone — compartilhado via BLE se preenchido.
-          // Só dígitos; o app monta o link wa.me/55<número> ao exibir o cartão.
-          SoproTextField(
-            controller: _phoneCtrl,
-            label: AppStrings.profilePhone,
-            hint: AppStrings.profilePhoneHint,
-            keyboardType: TextInputType.phone,
-            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            prefixIcon: const Icon(
-              Icons.chat_bubble_outline,
-              color: AppTheme.textSecondary,
-              size: 20,
-            ),
-            helperText: shareWhatsApp
-                ? AppStrings.profilePhoneHelperOn
-                : AppStrings.profilePhoneHelperOff,
-            helperStyle: AppTypography.caption.copyWith(
-              color: shareWhatsApp ? AppTheme.accent : AppTheme.textDisabled,
-            ),
-            maxLength: 13,
-          ),
-          const SizedBox(height: AppSpacing.xl),
-
-          // ── Seção: Privacidade ──────────────────────────────────────────
-          const _SectionLabel(label: AppStrings.profileSectionPrivacy),
-          const SizedBox(height: AppSpacing.xs),
-
-          Container(
-            decoration: BoxDecoration(
-              color: AppTheme.backgroundSurface,
-              borderRadius: BorderRadius.circular(AppRadius.icon),
-            ),
-            child: SwitchListTile(
-              value: isVisible,
-              onChanged: (v) =>
-                  ref.read(bleVisibleProvider.notifier).state = v,
-              activeColor: AppTheme.accent,
-              title: const Text(
-                AppStrings.profileVisible,
-                style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontWeight: FontWeight.w500,
+          SoproCard(
+            glass: true,
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Column(
+              children: [
+                // Campo de WhatsApp/telefone — compartilhado via BLE se preenchido.
+                // Só dígitos; o app monta o link wa.me/55<número> ao exibir o cartão.
+                SoproTextField(
+                  controller: _phoneCtrl,
+                  label: AppStrings.profilePhone,
+                  hint: AppStrings.profilePhoneHint,
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  prefixIcon: const Icon(
+                    Icons.chat_bubble_outline,
+                    color: AppTheme.textSecondary,
+                    size: 20,
+                  ),
+                  helperText: shareWhatsApp
+                      ? AppStrings.profilePhoneHelperOn
+                      : AppStrings.profilePhoneHelperOff,
+                  helperStyle: AppTypography.caption.copyWith(
+                    color:
+                        shareWhatsApp ? AppTheme.accent : AppTheme.textDisabled,
+                  ),
+                  maxLength: 13,
                 ),
-              ),
-              subtitle: const Text(
-                AppStrings.profileVisibleDesc,
-                style: TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 12,
-                  height: 1.4,
+                const Divider(
+                  color: AppColors.border,
+                  height: AppSpacing.md,
+                  thickness: 1,
                 ),
-              ),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-
-          // Toggle independente: compartilha o telefone no cartão BLE ou não.
-          // O número continua salvo no perfil mas é omitido do payload se desligado.
-          Container(
-            decoration: BoxDecoration(
-              color: AppTheme.backgroundSurface,
-              borderRadius: BorderRadius.circular(AppRadius.icon),
-            ),
-            child: SwitchListTile(
-              value: shareWhatsApp,
-              onChanged: (v) async {
-                ref.read(shareWhatsAppProvider.notifier).state = v;
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setBool('share_whatsapp', v);
-              },
-              activeColor: AppTheme.accent,
-              title: const Text(
-                AppStrings.profileShareWhatsApp,
-                style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontWeight: FontWeight.w500,
+                // Toggle: compartilha o telefone no cartão BLE ou não.
+                // O número continua salvo no perfil mas é omitido do payload se desligado.
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: shareWhatsApp,
+                  onChanged: (v) async {
+                    ref.read(shareWhatsAppProvider.notifier).state = v;
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('share_whatsapp', v);
+                  },
+                  activeColor: AppTheme.accent,
+                  title: const Text(
+                    AppStrings.profileShareWhatsApp,
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  subtitle: const Text(
+                    AppStrings.profileShareWhatsAppDesc,
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                      height: 1.4,
+                    ),
+                  ),
                 ),
-              ),
-              subtitle: const Text(
-                AppStrings.profileShareWhatsAppDesc,
-                style: TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 12,
-                  height: 1.4,
-                ),
-              ),
+              ],
             ),
           ),
           const SizedBox(height: AppSpacing.xxl),
@@ -485,6 +474,30 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             label: AppStrings.profileSave,
             onPressed: _saving ? null : _save,
             loading: _saving,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+
+          // Botão secundário: descarta e volta sem salvar.
+          SizedBox(
+            height: 52,
+            width: double.infinity,
+            child: OutlinedButton(
+              onPressed: _saving ? null : () => Navigator.pop(context),
+              style: OutlinedButton.styleFrom(
+                backgroundColor: AppColors.backgroundCard,
+                side: const BorderSide(color: AppColors.border),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(AppRadius.button),
+                ),
+              ),
+              child: Text(
+                AppStrings.cancel,
+                style: AppTypography.titleSmall.copyWith(
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
           ),
         ],
       ),

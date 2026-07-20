@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
-import '../../../core/navigation/app_router.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
@@ -13,7 +12,7 @@ import '../../providers/ble_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../../widgets/glass_surface.dart';
-import '../encounters/encounters_screen.dart';
+import '../../widgets/sopro_card.dart';
 import '../../../infrastructure/overlay/floating_voice_service_manager.dart';
 
 // Canal nativo para o FloatingVoiceService (botão flutuante de voz)
@@ -57,197 +56,198 @@ class SettingsScreen extends ConsumerWidget {
         children: [
           // ─── Seção: Bluetooth Social ───────────────────────────────────────
           const _SectionHeader(label: AppStrings.settingsBleSection),
-
-          _SwitchTile(
-            icon: Icons.bluetooth,
-            title: AppStrings.settingsBleVisible,
-            subtitle: AppStrings.settingsBleVisibleDesc,
-            value: bleVisible,
-            onChanged: (v) {
-              // Altera o estado em memória; PeopleNearbyScreen o lê antes
-              // de iniciar advertising. Não precisa de persistência extra
-              // porque o advertising é iniciado manualmente pelo usuário.
-              ref.read(bleVisibleProvider.notifier).state = v;
-            },
+          _SectionCard(
+            children: [
+              _SwitchTile(
+                icon: Icons.bluetooth,
+                title: AppStrings.settingsBleVisible,
+                subtitle: AppStrings.settingsBleVisibleDesc,
+                value: bleVisible,
+                onChanged: (v) {
+                  // Altera o estado em memória; PeopleNearbyScreen o lê antes
+                  // de iniciar advertising. Não precisa de persistência extra
+                  // porque o advertising é iniciado manualmente pelo usuário.
+                  ref.read(bleVisibleProvider.notifier).state = v;
+                },
+              ),
+              const _ItemDivider(),
+              // Seletor de potência BLE — afeta alcance de detecção por outros
+              _BlePowerTile(
+                value: bleTxPower,
+                onChanged: (v) async {
+                  ref.read(bleTxPowerProvider.notifier).state = v;
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setInt('ble_tx_power', v);
+                },
+              ),
+            ],
           ),
-
-          // Seletor de potência BLE — afeta alcance de detecção por outros
-          _BlePowerTile(
-            value: bleTxPower,
-            onChanged: (v) async {
-              ref.read(bleTxPowerProvider.notifier).state = v;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setInt('ble_tx_power', v);
-            },
-          ),
-
-          const _Divider(),
 
           // ─── Seção: Notificações ───────────────────────────────────────────
           const _SectionHeader(label: AppStrings.settingsNotifSection),
-
-          _SwitchTile(
-            icon: Icons.notifications_outlined,
-            title: AppStrings.settingsNotifEnabled,
-            subtitle: AppStrings.settingsNotifEnabledDesc,
-            value: notifEnabled,
-            onChanged: (v) async {
-              // Atualiza em memória imediatamente (FireTriggersUseCase lê via callback)
-              ref.read(notificationsEnabledProvider.notifier).state = v;
-              // Persiste a preferência para sobreviver ao reinício do app
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('notifications_enabled', v);
-            },
+          _SectionCard(
+            children: [
+              _SwitchTile(
+                icon: Icons.notifications_outlined,
+                title: AppStrings.settingsNotifEnabled,
+                subtitle: AppStrings.settingsNotifEnabledDesc,
+                value: notifEnabled,
+                onChanged: (v) async {
+                  // Atualiza em memória imediatamente (FireTriggersUseCase lê via callback)
+                  ref.read(notificationsEnabledProvider.notifier).state = v;
+                  // Persiste a preferência para sobreviver ao reinício do app
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('notifications_enabled', v);
+                },
+              ),
+              const _ItemDivider(),
+              // Toggle de som — ativo mesmo quando notificações estão desabilitadas
+              // para que o usuário pré-configure antes de reativar
+              _SwitchTile(
+                icon: Icons.volume_up_outlined,
+                title: AppStrings.settingsNotifSound,
+                subtitle: AppStrings.settingsNotifSoundDesc,
+                value: notifSound,
+                onChanged: (v) async {
+                  ref.read(notificationSoundProvider.notifier).state = v;
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('notification_sound_enabled', v);
+                },
+              ),
+              const _ItemDivider(),
+              // Seletor de frequência mínima entre notificações
+              _CooldownTile(
+                value: notifCooldown,
+                onChanged: (v) async {
+                  ref.read(notificationCooldownMinutesProvider.notifier).state = v;
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setInt('notification_cooldown_minutes', v);
+                },
+              ),
+            ],
           ),
-
-          // Toggle de som — ativo mesmo quando notificações estão desabilitadas
-          // para que o usuário pré-configure antes de reativar
-          _SwitchTile(
-            icon: Icons.volume_up_outlined,
-            title: AppStrings.settingsNotifSound,
-            subtitle: AppStrings.settingsNotifSoundDesc,
-            value: notifSound,
-            onChanged: (v) async {
-              ref.read(notificationSoundProvider.notifier).state = v;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('notification_sound_enabled', v);
-            },
-          ),
-
-          // Seletor de frequência mínima entre notificações
-          _CooldownTile(
-            value: notifCooldown,
-            onChanged: (v) async {
-              ref.read(notificationCooldownMinutesProvider.notifier).state = v;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setInt('notification_cooldown_minutes', v);
-            },
-          ),
-
-          const _Divider(),
 
           // ─── Seção: Interação por voz ──────────────────────────────────────
           const _SectionHeader(label: AppStrings.voiceSection),
-
-          _SwitchTile(
-            icon: Icons.record_voice_over_outlined,
-            title: AppStrings.voiceAudioResponse,
-            subtitle: AppStrings.voiceAudioResponseDesc,
-            value: voiceAudio,
-            onChanged: (v) async {
-              ref.read(voiceAudioResponseProvider.notifier).state = v;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('voice_audio_response', v);
-            },
+          _SectionCard(
+            children: [
+              _SwitchTile(
+                icon: Icons.record_voice_over_outlined,
+                title: AppStrings.voiceAudioResponse,
+                subtitle: AppStrings.voiceAudioResponseDesc,
+                value: voiceAudio,
+                onChanged: (v) async {
+                  ref.read(voiceAudioResponseProvider.notifier).state = v;
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('voice_audio_response', v);
+                },
+              ),
+              const _ItemDivider(),
+              _SwitchTile(
+                icon: Icons.subtitles_outlined,
+                title: AppStrings.voiceTextResponse,
+                subtitle: AppStrings.voiceTextResponseDesc,
+                value: voiceText,
+                onChanged: (v) async {
+                  ref.read(voiceTextResponseProvider.notifier).state = v;
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('voice_text_response', v);
+                },
+              ),
+              const _ItemDivider(),
+              // Seletor de velocidade de fala com DropdownButton
+              _VoiceRateTile(
+                value: voiceRate,
+                onChanged: (v) async {
+                  ref.read(voiceSpeechRateProvider.notifier).state = v;
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setDouble('voice_speech_rate', v);
+                },
+              ),
+            ],
           ),
-
-          _SwitchTile(
-            icon: Icons.subtitles_outlined,
-            title: AppStrings.voiceTextResponse,
-            subtitle: AppStrings.voiceTextResponseDesc,
-            value: voiceText,
-            onChanged: (v) async {
-              ref.read(voiceTextResponseProvider.notifier).state = v;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool('voice_text_response', v);
-            },
-          ),
-
-          // Seletor de velocidade de fala com DropdownButton
-          _VoiceRateTile(
-            value: voiceRate,
-            onChanged: (v) async {
-              ref.read(voiceSpeechRateProvider.notifier).state = v;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setDouble('voice_speech_rate', v);
-            },
-          ),
-
-          const _Divider(),
 
           // ─── Seção: Acesso rápido (botão flutuante de voz) ────────────────
           const _SectionHeader(label: AppStrings.settingsOverlaySection),
-
-          _OverlayToggleTile(
-            value: floatingVoice,
-            onChanged: (v) async {
-              if (v) {
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setBool('floating_voice_enabled', true);
-                ref.read(floatingVoiceEnabledProvider.notifier).state = true;
-                try {
-                  final String? failure =
-                      await FloatingVoiceServiceManager.tryStart(
-                          requestPermissionsIfNeeded: true);
-                  if (failure == 'overlay_denied') {
-                    // Redireciona para conceder SYSTEM_ALERT_WINDOW — toggle fica desligado
-                    await _overlayChannel.invokeMethod<void>(
-                        'openOverlayPermissionSettings');
+          _SectionCard(
+            children: [
+              _OverlayToggleTile(
+                value: floatingVoice,
+                onChanged: (v) async {
+                  if (v) {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('floating_voice_enabled', true);
+                    ref.read(floatingVoiceEnabledProvider.notifier).state = true;
+                    try {
+                      final String? failure =
+                          await FloatingVoiceServiceManager.tryStart(
+                              requestPermissionsIfNeeded: true);
+                      if (failure == 'overlay_denied') {
+                        // Redireciona para conceder SYSTEM_ALERT_WINDOW — toggle fica desligado
+                        await _overlayChannel.invokeMethod<void>(
+                            'openOverlayPermissionSettings');
+                        await prefs.setBool('floating_voice_enabled', false);
+                        ref.read(floatingVoiceEnabledProvider.notifier).state =
+                            false;
+                      } else if (failure != null) {
+                        await prefs.setBool('floating_voice_enabled', false);
+                        ref.read(floatingVoiceEnabledProvider.notifier).state =
+                            false;
+                      }
+                    } catch (_) {
+                      await prefs.setBool('floating_voice_enabled', false);
+                      ref.read(floatingVoiceEnabledProvider.notifier).state = false;
+                    }
+                  } else {
+                    await FloatingVoiceServiceManager.stop();
+                    ref.read(floatingVoiceEnabledProvider.notifier).state = false;
+                    final prefs = await SharedPreferences.getInstance();
                     await prefs.setBool('floating_voice_enabled', false);
-                    ref.read(floatingVoiceEnabledProvider.notifier).state =
-                        false;
-                  } else if (failure != null) {
-                    await prefs.setBool('floating_voice_enabled', false);
-                    ref.read(floatingVoiceEnabledProvider.notifier).state =
-                        false;
                   }
-                } catch (_) {
-                  await prefs.setBool('floating_voice_enabled', false);
-                  ref.read(floatingVoiceEnabledProvider.notifier).state = false;
-                }
-              } else {
-                await FloatingVoiceServiceManager.stop();
-                ref.read(floatingVoiceEnabledProvider.notifier).state = false;
-                final prefs = await SharedPreferences.getInstance();
-                await prefs.setBool('floating_voice_enabled', false);
-              }
-            },
-          ),
-
-          const _Divider(),
-
-          // ─── Seção: Dados ──────────────────────────────────────────────────
-          const _SectionHeader(label: AppStrings.settingsDataSection),
-
-          _NavTile(
-            icon: Icons.person_outline,
-            title: AppStrings.settingsMyProfile,
-            onTap: () => Navigator.pushNamed(context, '/profile'),
-          ),
-
-          _NavTile(
-            icon: Icons.people_outline,
-            title: AppStrings.settingsMyEncounters,
-            onTap: () => pushScreen(context, const EncountersScreen()),
-          ),
-
-          const _Divider(),
-
-          // ─── Seção: Sobre ──────────────────────────────────────────────────
-          const _SectionHeader(label: AppStrings.settingsAboutSection),
-
-          // Descrição do app
-          const Padding(
-            padding: EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xxs, AppSpacing.md, AppSpacing.sm),
-            child: Text(
-              AppStrings.settingsAppDesc,
-              style: TextStyle(
-                color: AppTheme.textSecondary,
-                fontSize: 13,
-                height: 1.5,
+                },
               ),
-            ),
+            ],
           ),
 
-          // Versão do app
-          const _InfoTile(
-            icon: Icons.info_outline,
-            title: AppStrings.settingsVersion,
-            value: AppStrings.settingsAppVersion,
+          // ─── Seção: Acesso rápido (atalhos Privacidade / Suporte) ─────────
+          const _SectionHeader(label: AppStrings.settingsShortcutsSection),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _ShortcutBlock(
+                    icon: Icons.shield_rounded,
+                    label: AppStrings.settingsShortcutPrivacy,
+                    // TODO: navegar para tela de Privacidade quando existir
+                    onTap: () => _comingSoon(context),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.md),
+                Expanded(
+                  child: _ShortcutBlock(
+                    icon: Icons.support_agent_rounded,
+                    label: AppStrings.settingsShortcutSupport,
+                    // TODO: navegar para tela de Suporte quando existir
+                    onTap: () => _comingSoon(context),
+                  ),
+                ),
+              ],
+            ),
           ),
 
           const SizedBox(height: AppSpacing.xxl),
         ],
+      ),
+    );
+  }
+
+  // Placeholder até as telas de Privacidade/Suporte existirem.
+  void _comingSoon(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(AppStrings.settingsComingSoon),
+        duration: Duration(seconds: 2),
       ),
     );
   }
@@ -292,7 +292,7 @@ class _SwitchTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
@@ -330,7 +330,7 @@ class _BlePowerTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
@@ -375,7 +375,7 @@ class _CooldownTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
@@ -422,7 +422,7 @@ class _VoiceRateTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
@@ -452,84 +452,80 @@ class _VoiceRateTile extends StatelessWidget {
   }
 }
 
-// Linha de navegação com ícone e seta
-class _NavTile extends StatelessWidget {
+// Card de vidro que agrupa os itens de uma seção (delega ao primitivo central).
+class _SectionCard extends StatelessWidget {
+  final List<Widget> children;
+
+  const _SectionCard({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return SoproCard(
+      glass: true,
+      margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+      child: Column(children: children),
+    );
+  }
+}
+
+// Divisória fina e discreta ENTRE itens de um mesmo card.
+class _ItemDivider extends StatelessWidget {
+  const _ItemDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Divider(
+      color: AppTheme.borderColor,
+      height: 1,
+      thickness: 1,
+      indent: AppSpacing.md,
+      endIndent: AppSpacing.md,
+    );
+  }
+}
+
+// Bloco quadrado de atalho (Privacidade / Suporte): ícone + label centralizados.
+class _ShortcutBlock extends StatelessWidget {
   final IconData icon;
-  final String title;
+  final String label;
   final VoidCallback onTap;
 
-  const _NavTile({
+  const _ShortcutBlock({
     required this.icon,
-    required this.title,
+    required this.label,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
+    return AspectRatio(
+      aspectRatio: 1,
+      child: SoproCard(
+        glass: true,
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          // SizedBox.expand: preenche o quadrado (o GlassSurface entrega o
+          // conteúdo com constraints frouxas, então sem isso o Column encolhe
+          // e gruda no canto superior esquerdo). Com altura/largura cheias, o
+          // mainAxis/crossAxis center realmente centraliza ícone + label.
+          child: SizedBox.expand(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(icon, color: AppTheme.accent, size: 40),
+                const SizedBox(height: AppSpacing.sm),
+                Text(
+                  label,
+                  style: AppTypography.titleSmall
+                      .copyWith(color: AppTheme.textPrimary),
+                ),
+              ],
+            ),
+          ),
         ),
-        child: Icon(icon, color: AppTheme.textSecondary, size: 20),
-      ),
-      title: Text(
-        title,
-        style: const TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: FontWeight.w500,
-          fontSize: 14,
-        ),
-      ),
-      trailing: const Icon(
-        Icons.chevron_right,
-        color: AppTheme.textDisabled,
-      ),
-      onTap: onTap,
-    );
-  }
-}
-
-// Linha informativa com ícone, título e valor
-class _InfoTile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String value;
-
-  const _InfoTile({
-    required this.icon,
-    required this.title,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-        ),
-        child: Icon(icon, color: AppTheme.textSecondary, size: 20),
-      ),
-      title: Text(
-        title,
-        style: const TextStyle(
-          color: AppTheme.textPrimary,
-          fontWeight: FontWeight.w500,
-          fontSize: 14,
-        ),
-      ),
-      trailing: Text(
-        value,
-        style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
       ),
     );
   }
@@ -550,7 +546,7 @@ class _OverlayToggleTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
+      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
       leading: Container(
         width: 40,
         height: 40,
@@ -574,21 +570,6 @@ class _OverlayToggleTile extends StatelessWidget {
         onChanged: (v) => onChanged(v),
         activeColor: AppTheme.accent,
       ),
-    );
-  }
-}
-
-// Linha divisória sutil entre seções
-class _Divider extends StatelessWidget {
-  const _Divider();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Divider(
-      color: AppTheme.backgroundElevated,
-      height: 1,
-      indent: 16,
-      endIndent: 16,
     );
   }
 }

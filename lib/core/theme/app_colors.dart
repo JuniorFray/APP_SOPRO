@@ -11,9 +11,9 @@ abstract final class AppColors {
   static const Color backgroundInput         = Color(0xFF111A30); // campos de texto
   static const Color backgroundElevated      = Color(0xFF0F1828); // popovers, dropdowns
 
-  // ── Accent — Azul ─────────────────────────────────────────────────────────
-  static const Color accent       = Color(0xFF4F8CFF); // primary CTA
-  static const Color secondary    = Color(0xFF7CB3FF); // accent glow / gradiente de botão
+  // ── Accent — Coral ────────────────────────────────────────────────────────
+  static const Color accent       = Color(0xFFE03050); // primary CTA
+  static const Color secondary    = Color(0xFFE03050); // igual ao accent → botão sólido coral
   static const Color accentPurple = Color(0xFF8D6BFF); // accent complementar
 
   // ── Semântica ─────────────────────────────────────────────────────────────

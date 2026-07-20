@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
+import '../../core/theme/app_spacing.dart';
 import '../../core/theme/app_typography.dart';
 
 /// Campo de texto padrão do Sopro — V2 Premium.
@@ -74,7 +75,13 @@ class SoproTextField extends StatelessWidget {
       borderSide: const BorderSide(color: AppColors.danger, width: 1.5),
     );
 
-    return TextFormField(
+    // Com maxLength: o label sobe para uma linha própria acima do campo
+    // (label à esquerda, contador X/Y à direita) e o contador padrão do
+    // rodapé é suprimido. Sem maxLength: comportamento original intacto
+    // (label flutuante do TextFormField) — não afeta o _TriggerSheet.
+    final hasCounter = maxLength != null;
+
+    final field = TextFormField(
       controller: controller,
       focusNode: focusNode,
       enabled: enabled,
@@ -90,7 +97,8 @@ class SoproTextField extends StatelessWidget {
       textCapitalization: textCapitalization,
       style: AppTypography.bodyMedium.copyWith(color: AppColors.textPrimary),
       decoration: InputDecoration(
-        labelText: label,
+        labelText: hasCounter ? null : label,
+        counterText: hasCounter ? '' : null,
         hintText: hint,
         suffixText: suffixText,
         prefixIcon: prefixIcon,
@@ -129,6 +137,59 @@ class SoproTextField extends StatelessWidget {
         errorBorder: errorBorder,
         focusedErrorBorder: focusedErrorBorder,
       ),
+    );
+
+    if (!hasCounter) return field;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(
+            left: AppSpacing.xxs,
+            right: AppSpacing.xxs,
+            bottom: AppSpacing.gap6,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: AppTypography.bodySmall
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ),
+              // Contador em tempo real: ouve o controller e atualiza a cada tecla.
+              _CharCounter(controller: controller, maxLength: maxLength!),
+            ],
+          ),
+        ),
+        field,
+      ],
+    );
+  }
+}
+
+/// Contador "X/Y" reativo — reflete o tamanho atual do texto do [controller].
+/// Sem controller cai para "0/Y" estático (caso raro; todo campo com maxLength
+/// no app passa um controller).
+class _CharCounter extends StatelessWidget {
+  const _CharCounter({required this.controller, required this.maxLength});
+
+  final TextEditingController? controller;
+  final int maxLength;
+
+  @override
+  Widget build(BuildContext context) {
+    final style =
+        AppTypography.caption.copyWith(color: AppColors.textDisabled);
+    if (controller == null) {
+      return Text('0/$maxLength', style: style);
+    }
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller!,
+      builder: (_, value, __) =>
+          Text('${value.text.characters.length}/$maxLength', style: style),
     );
   }
 }

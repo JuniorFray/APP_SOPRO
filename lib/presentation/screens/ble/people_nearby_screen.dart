@@ -15,6 +15,7 @@ import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/settings_providers.dart';
 import '../../widgets/glass_surface.dart';
+import '../../widgets/sopro_card.dart';
 import '../encounters/encounters_screen.dart';
 
 // PeopleNearbyScreen — "Pessoas Aqui"
@@ -378,10 +379,9 @@ class _UserTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      color: AppTheme.backgroundSurface,
+    return SoproCard(
+      glass: true,
       margin: const EdgeInsets.only(bottom: AppSpacing.xs),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.icon)),
       child: ListTile(
         onTap: onTap,
         contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xs),

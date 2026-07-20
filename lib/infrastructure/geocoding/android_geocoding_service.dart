@@ -132,11 +132,34 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     //      "Delta Supermercado"         → busca "Delta"
     final rawBrand = normalized.brandHint ?? query;
     final cleanBrand = _stripTrailingCategoryWords(rawBrand);
-    // Reconstrói a query com a cidade/hints preservados se existirem.
     final liqHints = normalized.locationHints;
-    final liqQuery = liqHints.isNotEmpty
+    // Query base: marca limpa + último hint de localização (se houver).
+    String liqQuery = liqHints.isNotEmpty
         ? '$cleanBrand ${liqHints.last}'
         : (cleanBrand.isNotEmpty ? cleanBrand : query);
+    // Injeção automática de cidade para queries curtas (≤2 tokens) sem
+    // hint de localização explícito. Ex.: "Assaí" → "Assaí Piracicaba".
+    // Evita que o LocationIQ busque no Brasil inteiro sem contexto geográfico.
+    if (liqHints.isEmpty &&
+        normalized.kind == QueryKind.establishment &&
+        userLat != 0.0 && userLon != 0.0) {
+      final brandTokens = cleanBrand
+          .trim()
+          .split(RegExp(r'\s+'))
+          .where((t) => t.isNotEmpty)
+          .length;
+      if (brandTokens <= 2) {
+        final city = await _getUserCity(userLat, userLon);
+        if (city.isNotEmpty) {
+          liqQuery = '$cleanBrand $city';
+          Logger.debug('locationiq_city_injected', payload: {
+            'original': cleanBrand,
+            'enriched': liqQuery,
+            'city':     city,
+          }, feature: 'geocoding', action: 'city_inject');
+        }
+      }
+    }
     final liqRaw = await _searchLocationIQ(
         liqQuery, key,
         userLat: userLat, userLon: userLon);
@@ -267,6 +290,49 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       end--;
     }
     return tokens.sublist(0, end).join(' ');
+  }
+
+  // Retorna o nome da cidade do usuário via Photon reverse geocoding.
+  // Resultado cacheado em SharedPreferences — chamada de rede só quando
+  // cidade não está em cache ou posição mudou mais de 10km.
+  Future<String> _getUserCity(double lat, double lon) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cached = prefs.getString('last_known_city') ?? '';
+      if (cached.isNotEmpty) return cached;
+      final uri = Uri.https('photon.komoot.io', '/reverse', {
+        'lat': lat.toString(),
+        'lon': lon.toString(),
+        'limit': '1',
+      });
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 4);
+      final request = await client.getUrl(uri);
+      request.headers.set('Accept', 'application/json');
+      request.headers.set('User-Agent', 'Sopro/1.0');
+      final response = await request.close();
+      if (response.statusCode == 200) {
+        final body = await response.transform(const Utf8Decoder()).join();
+        client.close();
+        final json = jsonDecode(body) as Map<String, dynamic>;
+        final features = json['features'] as List<dynamic>? ?? [];
+        if (features.isNotEmpty) {
+          final props = (features.first
+              as Map<String, dynamic>)['properties']
+              as Map<String, dynamic>? ?? {};
+          final city = (props['city'] as String?) ??
+              (props['town'] as String?) ??
+              (props['locality'] as String?) ??
+              '';
+          if (city.isNotEmpty) {
+            await prefs.setString('last_known_city', city);
+            return city;
+          }
+        }
+      }
+      client.close();
+    } catch (_) {}
+    return '';
   }
 
   // Camadas 2 + 3: Geocoder nativo Android (bounding box do usuário) e, se vazio
@@ -615,6 +681,8 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       request.headers.set('Accept', 'application/json');
       request.headers.set('User-Agent', 'Sopro/1.0 (Android)');
       final response = await request.close();
+      // LocationIQ retorna 404 para "sem resultados" — não é erro HTTP real.
+      if (response.statusCode == 404) return [];
       if (response.statusCode != 200) {
         Logger.warn('locationiq_http_error', payload: {
           'query': query, 'status': response.statusCode,
