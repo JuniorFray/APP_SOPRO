@@ -176,4 +176,54 @@ class NotificationService {
       payload: payload,
     );
   }
+
+  // Exibe a notificação de LISTA DE COMPRAS ao entrar num mercado (isMarket).
+  // Usa InboxStyle para listar os itens pendentes como linhas, no mesmo canal e
+  // importância de showTrigger().
+  //
+  // TODO upgrade: quando o checkbox interativo nativo for implementado, cada
+  // linha desta notificação passa a ter uma ação de toque individual que chama
+  // ShoppingListRepository.toggleChecked() sem abrir o app.
+  Future<void> showMarketList({
+    required int id,
+    required String environmentName,
+    required List<String> pendingItemNames,
+    String? payload,
+    bool useSoundChannel = true,
+  }) async {
+    final channelId   = useSoundChannel ? _triggerChannelId   : _silentChannelId;
+    final channelName = useSoundChannel ? _triggerChannelName : _silentChannelName;
+    final channelDesc = useSoundChannel ? _triggerChannelDesc : _silentChannelDesc;
+    final importance = useSoundChannel ? Importance.max : Importance.defaultImportance;
+    final priority   = useSoundChannel ? Priority.max   : Priority.defaultPriority;
+
+    final title = 'Lista de compras — $environmentName';
+    // Corpo colapsado: resumo dos itens em uma linha.
+    final body = pendingItemNames.join(', ');
+
+    final details = AndroidNotificationDetails(
+      channelId,
+      channelName,
+      channelDescription: channelDesc,
+      importance: importance,
+      priority: priority,
+      icon: 'notification_icon',
+      ticker: title,
+      visibility: NotificationVisibility.public,
+      // InboxStyle: cada item pendente vira uma linha da notificação expandida.
+      styleInformation: InboxStyleInformation(
+        pendingItemNames,
+        contentTitle: title,
+        summaryText: '${pendingItemNames.length} itens',
+      ),
+    );
+
+    await _plugin.show(
+      id,
+      title,
+      body,
+      NotificationDetails(android: details),
+      payload: payload,
+    );
+  }
 }

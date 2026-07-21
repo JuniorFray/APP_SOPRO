@@ -30,6 +30,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/environment_entity.dart';
+import '../../../domain/entities/shopping_list_item_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
 import '../../../infrastructure/location/location_guard.dart';
 import '../../../infrastructure/logging/app_logger.dart';
@@ -356,11 +357,20 @@ class _EnvLocationPending {
   final String name;
   final _EnvTurn turn;
   final List<GeocodingResult> candidates;
-  const _EnvLocationPending({
+  // TTL — pendência efêmera em RAM expira em 30s sem resposta (mesmo padrão do
+  // overlay nativo voice_state_set_at). Evita ficar presa para sempre se o
+  // usuário desistir. Só o gate de expiração a zera por tempo; nunca o gate de
+  // energia. Renovada por touch() quando pedimos ao usuário repetir.
+  DateTime _setAt;
+  _EnvLocationPending({
     required this.name,
     required this.turn,
     this.candidates = const [],
-  });
+  }) : _setAt = DateTime.now();
+
+  static const _ttl = Duration(seconds: 30);
+  bool get isExpired => DateTime.now().difference(_setAt) > _ttl;
+  void touch() => _setAt = DateTime.now();
 }
 
 // ── Botão de voz flutuante (WhatsApp-style) ───────────────────────────────────
@@ -585,21 +595,49 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       return;
     }
 
-    // GATE DE ENVIO — DECISÃO ÚNICA antes de QUALQUER chamada ao Gemini (cobre
-    // comando novo, confirmação sim/não e captura de nome). Gemini só é chamado
-    // quando TODAS as condições do gate adaptativo forem verdadeiras:
-    //   speechDetected == true  E  speechFrames >= mínimo  E  noiseFloor calibrado.
-    // Caso contrário: bloqueia, encerra o fluxo e NUNCA chama o Gemini.
+    // Sinais do gate adaptativo de energia: só há fala válida quando o áudio foi
+    // detectado, atingiu o mínimo de frames E o piso de ruído foi calibrado.
     final gSpeechDetected = service.speechDetected;
     final gSpeechFrames   = service.speechFrames;
     final gCalibrated     = service.noiseCalibrated;
     final shouldSend = gSpeechDetected &&
         gSpeechFrames >= VoiceService.minSpeechFramesRequired &&
         gCalibrated;
+
+    // Resolução Inteligente de Localização — quando há pergunta pendente, esta
+    // gravação é a RESPOSTA (sim/não, endereço, escolha). Tratada ANTES do gate
+    // de energia: um "sim" curto/baixo é justamente o áudio que o gate rejeita —
+    // não pode derrubar a confirmação sem o usuário perceber. O pending só é
+    // zerado quando (a) a resposta é processada em _resolveEnvLocationTurn, ou
+    // (b) expira por TTL — NUNCA pelo gate de energia.
+    if (_envLocationPending != null) {
+      if (_envLocationPending!.isExpired) {
+        // Usuário desistiu (>30s sem responder) — libera o pending e segue o
+        // fluxo normal (esta gravação vira comando novo, se houver fala).
+        _envLocationPending = null;
+        AppLogger.log('env_location_pending_expired', {'surface': 'home'});
+      } else if (!shouldSend) {
+        // Áudio fraco/ruído: NÃO descarta o pending — renova o TTL e pede para
+        // repetir. A próxima gravação continua respondendo a mesma pergunta.
+        _envLocationPending!.touch();
+        if (mounted) setState(() => _fabState = _FabState.idle);
+        await _speak('Não entendi, pode repetir?');
+        return;
+      } else {
+        await _resolveEnvLocationTurn(filePath);
+        return;
+      }
+    }
+
+    // GATE DE ENVIO — DECISÃO ÚNICA antes de QUALQUER chamada ao Gemini (cobre
+    // comando novo, confirmação sim/não e captura de nome). Gemini só é chamado
+    // quando TODAS as condições do gate adaptativo forem verdadeiras:
+    //   speechDetected == true  E  speechFrames >= mínimo  E  noiseFloor calibrado.
+    // Caso contrário: bloqueia, encerra o fluxo e NUNCA chama o Gemini.
     if (!shouldSend) {
       _pendingConfirm     = null;
       _pendingEnvCreate   = false;
-      _envLocationPending = null; // Resolução de Localização — não ouviu a resposta
+      _envLocationPending = null; // já tratado acima; reset defensivo
       await _handleNoSpeech();
       return;
     }
@@ -608,14 +646,6 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
     // resposta sim/não, não um comando novo. Desvia antes do fluxo do Gemini.
     if (_pendingConfirm != null) {
       await _resolveVoiceConfirmation(filePath);
-      return;
-    }
-
-    // Resolução Inteligente de Localização — se há uma pergunta pendente da
-    // conversa de criação de ambiente, esta gravação é a resposta (sim/não,
-    // endereço ou escolha). Desvia antes do fluxo de comando do Gemini.
-    if (_envLocationPending != null) {
-      await _resolveEnvLocationTurn(filePath);
       return;
     }
 
@@ -1530,6 +1560,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       longitude:    lon,
       radiusMeters: radiusMeters.toDouble(),
       createdAt:    DateTime.now(),
+      isMarket:     false,
     );
     // TEMP: remover após calibração da resolução de localização
     AppLogger.log('environment_creation_coordinates', {
@@ -1635,6 +1666,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
       ({double lat, double lng})? loc) {
     final envRepo = ref.read(environmentRepositoryProvider);
     final trgRepo = ref.read(triggerRepositoryProvider);
+    final shopRepo = ref.read(shoppingListRepositoryProvider);
     final geofence = ref.read(nativeGeofenceServiceProvider);
 
     return {
@@ -1676,6 +1708,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           longitude:    loc.lng,
           radiusMeters: 100,
           createdAt:    DateTime.now(),
+          isMarket:     false,
         );
         // TEMP: remover após calibração da resolução de localização
         AppLogger.log('environment_creation_coordinates', {
@@ -1743,6 +1776,55 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         return 'lembrete_criado';
       },
 
+      // Adiciona um item à lista de compras de um MERCADO (isMarket == true).
+      // Resolução do mercado: 0 → avisa e pede para criar; 1 → adiciona direto;
+      // N → reaproveita o _EnvPickerSheet filtrado por mercado para o usuário
+      // escolher, adicionando no callback onEnvSelected.
+      VoiceActionType.addShoppingItem: (a) async {
+        final itemName = a.str(['item', 'name', 'content', 'title']);
+        if (itemName == null) throw 'item_vazio';
+
+        final markets =
+            (await envRepo.getAll()).where((e) => e.isMarket).toList();
+
+        // Sem mercado cadastrado: não cria ambiente sozinho aqui.
+        if (markets.isEmpty) {
+          if (mounted) await _speak(AppStrings.marketVoiceNoMarket);
+          return 'sem_mercado';
+        }
+
+        // Exatamente um mercado: adiciona direto.
+        if (markets.length == 1) {
+          await shopRepo.add(ShoppingListItemEntity(
+            id:            '',
+            environmentId: markets.first.id,
+            name:          _capitalize(itemName),
+            isChecked:     false,
+            createdAt:     DateTime.now(),
+          ));
+          return 'item_adicionado';
+        }
+
+        // Vários mercados: pergunta qual (reaproveita _EnvPickerSheet, filtrado).
+        if (mounted) {
+          _showSheet(_EnvPickerSheet(
+            title: AppStrings.marketVoicePickMarket,
+            subtitle: itemName,
+            filter: (e) => e.isMarket,
+            onEnvSelected: (env) async {
+              await shopRepo.add(ShoppingListItemEntity(
+                id:            '',
+                environmentId: env.id,
+                name:          _capitalize(itemName),
+                isChecked:     false,
+                createdAt:     DateTime.now(),
+              ));
+            },
+          ));
+        }
+        return 'aguardando_mercado';
+      },
+
       // Atualiza um lembrete existente (título e/ou conteúdo) por match de título.
       VoiceActionType.updateTrigger: (a) async {
         final title = a.str(['title']);
@@ -1778,6 +1860,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
           longitude:    env.longitude,
           radiusMeters: radius,
           createdAt:    env.createdAt,
+          isMarket:     env.isMarket,
         );
         await envRepo.save(updated);
         await geofence.addSingleGeofence(updated);
@@ -2052,6 +2135,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         longitude:    loc.longitude,
         radiusMeters: radiusMeters.toDouble(),
         createdAt:    DateTime.now(),
+        isMarket:     false,
       );
       // TEMP: remover após calibração da resolução de localização
       AppLogger.log('environment_creation_coordinates', {
@@ -2344,6 +2428,7 @@ class _VoiceFabState extends ConsumerState<_VoiceFab>
         longitude:    env.longitude,
         radiusMeters: result.environmentRadius!.toDouble(),
         createdAt:    env.createdAt,
+        isMarket:     env.isMarket,
       );
       await ref.read(environmentRepositoryProvider).save(updated);
       if (!mounted) return;
@@ -3009,11 +3094,14 @@ class _EnvPickerSheet extends ConsumerWidget {
   final String subtitle;
   // Executado quando o usuário toca num ambiente
   final void Function(EnvironmentEntity) onEnvSelected;
+  // Filtro opcional dos ambientes exibidos (ex.: só mercados). null = todos.
+  final bool Function(EnvironmentEntity)? filter;
 
   const _EnvPickerSheet({
     required this.title,
     required this.subtitle,
     required this.onEnvSelected,
+    this.filter,
   });
 
   @override
@@ -3065,7 +3153,10 @@ class _EnvPickerSheet extends ConsumerWidget {
                 AppStrings.errorGeneric,
                 style: TextStyle(color: AppTheme.textSecondary),
               ),
-              data: (envs) => envs.isEmpty
+              data: (all) {
+                final envs =
+                    filter == null ? all : all.where(filter!).toList();
+                return envs.isEmpty
                   ? const Text(
                       AppStrings.homeEmptyTitle,
                       style: TextStyle(color: AppTheme.textSecondary),
@@ -3098,7 +3189,8 @@ class _EnvPickerSheet extends ConsumerWidget {
                           onEnvSelected(envs[i]);
                         },
                       ),
-                    ),
+                    );
+              },
             ),
           ],
         ),

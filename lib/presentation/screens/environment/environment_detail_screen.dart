@@ -13,10 +13,12 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/utils/environment_icon_mapper.dart';
 import '../../../domain/entities/environment_entity.dart';
+import '../../../domain/entities/shopping_list_item_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
 import '../../../infrastructure/logging/app_logger.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/environment_providers.dart';
+import '../../providers/shopping_list_providers.dart';
 import '../../providers/trigger_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../../widgets/glass_surface.dart';
@@ -74,12 +76,13 @@ class EnvironmentDetailScreen extends ConsumerWidget {
               AddEnvironmentScreen(environment: currentEnv),
             ),
           ),
-          // Botão para adicionar novo trigger
-          IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: AppStrings.addTrigger,
-            onPressed: () => _showTriggerSheet(context),
-          ),
+          // Adicionar trigger só faz sentido em ambiente comum (não-mercado).
+          if (!currentEnv.isMarket)
+            IconButton(
+              icon: const Icon(Icons.add),
+              tooltip: AppStrings.addTrigger,
+              onPressed: () => _showTriggerSheet(context),
+            ),
         ],
       ),
       body: Column(
@@ -88,47 +91,18 @@ class EnvironmentDetailScreen extends ConsumerWidget {
           // Card com informações geográficas do ambiente
           _EnvironmentInfoCard(environment: currentEnv),
 
-          // Cabeçalho da seção de triggers com contagem dinâmica
-          Padding(
-            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.lg, AppSpacing.md, AppSpacing.xxs),
-            child: triggersAsync.maybeWhen(
-              data: (triggers) => Text(
-                '${AppStrings.triggersSection} (${triggers.length})',
-                style: AppTypography.labelLarge.copyWith(color: AppTheme.textPrimary),
-              ),
-              orElse: () => const Text(
-                AppStrings.triggersSection,
-                style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ),
+          // Toggle discreto: corrige o tipo (mercado ↔ comum) a qualquer momento.
+          // Cobre falso positivo E falso negativo da classificação automática.
+          _MarketToggle(environment: currentEnv),
 
-          // Lista de triggers ou estado vazio
+          // Corpo condicional: lista de compras (mercado) OU gatilhos (comum).
           Expanded(
-            child: triggersAsync.when(
-              loading: () => const Center(
-                child: CircularProgressIndicator(color: AppTheme.accent),
-              ),
-              error: (_, __) => const Center(
-                child: Text(
-                  AppStrings.errorGeneric,
-                  style: TextStyle(color: AppTheme.textSecondary),
-                ),
-              ),
-              data: (triggers) => triggers.isEmpty
-                  ? const _EmptyTriggersState()
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxs),
-                      itemCount: triggers.length,
-                      itemBuilder: (_, i) => _TriggerTile(
-                        trigger: triggers[i],
-                      ),
-                    ),
-            ),
+            child: currentEnv.isMarket
+                ? _ShoppingListView(environment: currentEnv)
+                : _TriggersSection(
+                    environmentId: currentEnv.id,
+                    triggersAsync: triggersAsync,
+                  ),
           ),
         ],
       ),
@@ -201,6 +175,108 @@ class _EnvironmentInfoCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// Toggle discreto "Este é um mercado" — reflete e corrige environment.isMarket.
+// Ao mudar, chama updateIsMarket (único campo alterado) e o stream do ambiente
+// reconstrói a tela no modo certo (lista de compras ou gatilhos).
+class _MarketToggle extends ConsumerWidget {
+  final EnvironmentEntity environment;
+
+  const _MarketToggle({required this.environment});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      child: SoproCard(
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
+        child: SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: environment.isMarket,
+          onChanged: (v) {
+            HapticFeedback.selectionClick();
+            ref
+                .read(environmentRepositoryProvider)
+                .updateIsMarket(environment.id, isMarket: v);
+          },
+          activeColor: AppTheme.accent,
+          secondary: const Icon(Icons.shopping_cart_outlined, color: AppTheme.accent),
+          title: const Text(
+            AppStrings.marketToggleTitle,
+            style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.w500),
+          ),
+          subtitle: const Text(
+            AppStrings.marketToggleDesc,
+            style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.3),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Seção de gatilhos (comportamento original, extraído sem mudanças): cabeçalho
+// com contagem + lista/estado vazio.
+class _TriggersSection extends StatelessWidget {
+  final String environmentId;
+  final AsyncValue<List<TriggerEntity>> triggersAsync;
+
+  const _TriggersSection({
+    required this.environmentId,
+    required this.triggersAsync,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Cabeçalho da seção de triggers com contagem dinâmica
+        Padding(
+          padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.lg, AppSpacing.md, AppSpacing.xxs),
+          child: triggersAsync.maybeWhen(
+            data: (triggers) => Text(
+              '${AppStrings.triggersSection} (${triggers.length})',
+              style: AppTypography.labelLarge.copyWith(color: AppTheme.textPrimary),
+            ),
+            orElse: () => const Text(
+              AppStrings.triggersSection,
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+
+        // Lista de triggers ou estado vazio
+        Expanded(
+          child: triggersAsync.when(
+            loading: () => const Center(
+              child: CircularProgressIndicator(color: AppTheme.accent),
+            ),
+            error: (_, __) => const Center(
+              child: Text(
+                AppStrings.errorGeneric,
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+            ),
+            data: (triggers) => triggers.isEmpty
+                ? const _EmptyTriggersState()
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxs),
+                    itemCount: triggers.length,
+                    itemBuilder: (_, i) => _TriggerTile(
+                      trigger: triggers[i],
+                    ),
+                  ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -623,4 +699,307 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
     }
   }
 
+}
+
+// ─── Lista de compras (ambiente tipo Mercado) ───────────────────────────────
+
+// Corpo da tela quando environment.isMarket == true: cabeçalho com contagem de
+// pendentes, lista de itens em cards de vidro + ações (adicionar / concluir).
+class _ShoppingListView extends ConsumerWidget {
+  final EnvironmentEntity environment;
+
+  const _ShoppingListView({required this.environment});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final itemsAsync =
+        ref.watch(shoppingListByEnvironmentProvider(environment.id));
+    final items = itemsAsync.valueOrNull ?? const <ShoppingListItemEntity>[];
+    final pending = items.where((i) => !i.isChecked).length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Cabeçalho com contagem de itens pendentes
+        Padding(
+          padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.lg, AppSpacing.md, AppSpacing.xxs),
+          child: Text(
+            '${AppStrings.marketListTitle} ($pending)',
+            style: AppTypography.labelLarge.copyWith(color: AppTheme.textPrimary),
+          ),
+        ),
+
+        // Lista ou estado vazio
+        Expanded(
+          child: itemsAsync.when(
+            loading: () => const Center(
+              child: CircularProgressIndicator(color: AppTheme.accent),
+            ),
+            error: (_, __) => const Center(
+              child: Text(
+                AppStrings.errorGeneric,
+                style: TextStyle(color: AppTheme.textSecondary),
+              ),
+            ),
+            data: (list) => list.isEmpty
+                ? const _EmptyShoppingState()
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: AppSpacing.xs),
+                    itemCount: list.length,
+                    itemBuilder: (_, i) => _ShoppingItemTile(item: list[i]),
+                  ),
+          ),
+        ),
+
+        // Ações inferiores: adicionar item (sempre) + concluir compra (se houver)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.xs, AppSpacing.md, AppSpacing.md),
+          child: Column(
+            children: [
+              SoproPrimaryButton(
+                label: AppStrings.marketAddItem,
+                icon: const Icon(Icons.add, color: AppColors.textPrimary, size: 20),
+                onPressed: () => _showAddSheet(context),
+              ),
+              if (items.isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.sm),
+                TextButton.icon(
+                  onPressed: () => _confirmFinish(context, ref),
+                  icon: const Icon(Icons.check_circle_outline,
+                      color: AppTheme.textSecondary, size: 20),
+                  label: const Text(
+                    AppStrings.marketFinishShopping,
+                    style: TextStyle(color: AppTheme.textSecondary),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // Abre o sheet simples para digitar e adicionar um item.
+  void _showAddSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.backgroundElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.button)),
+      ),
+      builder: (_) => _AddShoppingItemSheet(environmentId: environment.id),
+    );
+  }
+
+  // Confirma antes de limpar toda a lista (concluir compra).
+  Future<void> _confirmFinish(BuildContext context, WidgetRef ref) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.backgroundElevated,
+        title: const Text(
+          AppStrings.marketFinishShopping,
+          style: TextStyle(color: AppTheme.textPrimary),
+        ),
+        content: const Text(
+          AppStrings.marketFinishConfirm,
+          style: TextStyle(color: AppTheme.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(AppStrings.cancel,
+                style: TextStyle(color: AppTheme.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(AppStrings.marketFinishShopping,
+                style: TextStyle(color: AppTheme.accent)),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await ref
+          .read(shoppingListRepositoryProvider)
+          .deleteAllByEnvironment(environment.id);
+    }
+  }
+}
+
+// Item da lista de compras: card de vidro com Checkbox + nome (riscado quando
+// marcado) + botão de excluir. O Checkbox chama toggleChecked (único ponto que
+// altera isChecked).
+class _ShoppingItemTile extends ConsumerWidget {
+  final ShoppingListItemEntity item;
+
+  const _ShoppingItemTile({required this.item});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.xxs),
+      child: SoproCard(
+        glass: true,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xs, vertical: AppSpacing.xxs),
+          child: Row(
+            children: [
+              Checkbox(
+                value: item.isChecked,
+                onChanged: (v) {
+                  HapticFeedback.selectionClick();
+                  ref
+                      .read(shoppingListRepositoryProvider)
+                      .toggleChecked(item.id, v ?? false);
+                },
+                activeColor: AppTheme.accent,
+                side: const BorderSide(color: AppTheme.textDisabled, width: 1.5),
+              ),
+              Expanded(
+                child: Text(
+                  item.name,
+                  style: AppTypography.bodyMedium.copyWith(
+                    color: item.isChecked ? AppTheme.textDisabled : AppTheme.textPrimary,
+                    decoration:
+                        item.isChecked ? TextDecoration.lineThrough : null,
+                    decorationColor: AppTheme.textDisabled,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, size: 20),
+                color: AppTheme.textDisabled,
+                tooltip: AppStrings.delete,
+                onPressed: () =>
+                    ref.read(shoppingListRepositoryProvider).delete(item.id),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// Estado vazio da lista de compras
+class _EmptyShoppingState extends StatelessWidget {
+  const _EmptyShoppingState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.shopping_cart_outlined, size: 60, color: AppTheme.accent),
+          SizedBox(height: AppSpacing.md),
+          Text(
+            AppStrings.marketListEmpty,
+            style: TextStyle(
+              color: AppTheme.textPrimary,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          SizedBox(height: AppSpacing.gap6),
+          Text(
+            AppStrings.marketListEmptyHint,
+            style: TextStyle(color: AppTheme.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Bottom sheet simples para adicionar um item à lista (reaproveita SoproTextField).
+class _AddShoppingItemSheet extends ConsumerStatefulWidget {
+  final String environmentId;
+
+  const _AddShoppingItemSheet({required this.environmentId});
+
+  @override
+  ConsumerState<_AddShoppingItemSheet> createState() =>
+      _AddShoppingItemSheetState();
+}
+
+class _AddShoppingItemSheetState extends ConsumerState<_AddShoppingItemSheet> {
+  final _ctrl = TextEditingController();
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final name = _ctrl.text.trim();
+    if (name.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(shoppingListRepositoryProvider).add(
+            ShoppingListItemEntity(
+              id: '',
+              environmentId: widget.environmentId,
+              name: name,
+              isChecked: false,
+              createdAt: DateTime.now(),
+            ),
+          );
+      if (mounted) Navigator.pop(context);
+    } catch (e, st) {
+      debugPrint('[AddShoppingItemSheet] Erro ao salvar: $e\n$st');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 36,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: AppSpacing.md),
+              decoration: BoxDecoration(
+                color: AppTheme.textDisabled,
+                borderRadius: BorderRadius.circular(AppRadius.xs),
+              ),
+            ),
+          ),
+          Text(
+            AppStrings.marketAddItem,
+            style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          SoproTextField(
+            controller: _ctrl,
+            label: AppStrings.marketItemLabel,
+            hint: AppStrings.marketAddItemHint,
+            textCapitalization: TextCapitalization.sentences,
+            autofocus: true,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _submit(),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          SoproPrimaryButton(
+            label: AppStrings.marketAddItem,
+            onPressed: _saving ? null : _submit,
+            loading: _saving,
+          ),
+        ],
+      ),
+    );
+  }
 }

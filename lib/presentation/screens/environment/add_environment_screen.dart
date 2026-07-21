@@ -17,6 +17,7 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../infrastructure/geocoding/geocoding_repository.dart';
+import '../../../infrastructure/voice/environment_type_classifier.dart';
 import '../../../infrastructure/location/location_guard.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
@@ -72,6 +73,11 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   LatLng? _selectedPoint;
   bool _isSaving        = false;
   bool _loadingLocation = false;
+  // GPS "aquecendo": true SÓ no ramo de criação sem posição pré-definida,
+  // enquanto busca um fix fresco para last_known_lat/lon. NÃO bloqueia a busca —
+  // apenas mostra "Localizando..." no campo. false nos modos edição e
+  // initialPosition (voz), que já têm coords confiáveis.
+  bool _gpsWarming      = false;
   // true enquanto o AudioRecorder está gravando para preencher o nome
   bool _recordingName   = false;
   // Timer de auto-stop para gravação de nome (7 s máximo)
@@ -109,6 +115,10 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   // coords. Definidos via construtor; quando != null, _submit atualiza o existente.
   String? _pendingEnvId;
   String? _pendingEnvName;
+
+  // Fase 4 — resultado da confirmação "Este é um mercado?" (null = não perguntado).
+  // Alimenta isMarket ao salvar em _submit.
+  bool? _resolvedIsMarket;
 
   bool get _isEditing => widget.environment != null;
 
@@ -186,19 +196,48 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
           }
         } catch (_) {}
       });
-      // Atualiza SharedPreferences com GPS fresco para garantir coords corretas na busca.
-      // Só tenta se GPS estiver ligado — evita chamada desnecessária ao FusedProvider.
-      final locSvc = ref.read(nativeLocationServiceProvider);
-      locSvc.isLocationEnabled().then((enabled) {
-        if (!enabled) return;
-        locSvc.getCurrentPosition().then((pos) async {
-          if (pos != null) {
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setDouble('last_known_lat', pos.latitude);
-            await prefs.setDouble('last_known_lon', pos.longitude);
+      // Atualiza SharedPreferences com GPS fresco ANTES da primeira busca possível
+      // — sem isso, last_known_lat/lon pode estar zerado/antigo e a busca por
+      // lugar vem sem viés (resultados de cidade errada). _gpsWarming sinaliza o
+      // campo de busca ("Localizando...") sem bloquear a digitação.
+      _gpsWarming = true;
+      _warmUpCurrentGps();
+    }
+  }
+
+  // Aquece last_known_lat/lon com um fix GPS fresco. Chamado SÓ no ramo de
+  // criação sem posição pré-definida. Timeout de 4s no getCurrentPosition: GPS
+  // lento (indoor) não trava a liberação do campo. Encerra _gpsWarming em
+  // sucesso, erro OU timeout — nunca deixa o indicador preso. A busca nunca é
+  // bloqueada; enquanto aquece usa o valor salvo (mesmo antigo) como fallback.
+  Future<void> _warmUpCurrentGps() async {
+    final locSvc = ref.read(nativeLocationServiceProvider);
+    try {
+      final enabled = await locSvc.isLocationEnabled();
+      if (enabled) {
+        final pos = await locSvc
+            .getCurrentPosition()
+            .timeout(const Duration(seconds: 4), onTimeout: () => null);
+        if (pos != null) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setDouble('last_known_lat', pos.latitude);
+          await prefs.setDouble('last_known_lon', pos.longitude);
+          // Recentraliza no fix fresco só se o usuário ainda não escolheu ponto
+          // (não sequestra um toque no mapa nem um resultado já selecionado).
+          if (mounted && _selectedPoint == null) {
+            final point = LatLng(pos.latitude, pos.longitude);
+            setState(() => _selectedPoint = point);
+            await _updateMapPin(point);
+            _mapController?.animateCamera(
+              ml.CameraUpdate.newLatLngZoom(
+                ml.LatLng(point.latitude, point.longitude), 15.0));
           }
-        }).catchError((_) {});
-      }).catchError((_) {});
+        }
+      }
+    } catch (_) {
+      // GPS indisponível / erro de canal — segue com o valor salvo como fallback.
+    } finally {
+      if (mounted) setState(() => _gpsWarming = false);
     }
   }
 
@@ -480,7 +519,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                     child: Row(
                       children: [
                         const SizedBox(width: 12),
-                        _searching
+                        (_searching || _gpsWarming)
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
@@ -499,7 +538,9 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
                             style: AppTypography.bodyMedium
                                 .copyWith(color: AppColors.textPrimary),
                             decoration: InputDecoration(
-                              hintText: AppStrings.searchAddressHint,
+                              hintText: _gpsWarming
+                                  ? AppStrings.searchLocatingHint
+                                  : AppStrings.searchAddressHint,
                               hintStyle: AppTypography.bodyMedium
                                   .copyWith(color: AppColors.textDisabled),
                               border: InputBorder.none,
@@ -1062,6 +1103,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
             longitude:    _selectedPoint!.longitude,
             radiusMeters: double.tryParse(_radiusController.text) ?? 100.0,
             createdAt:    existing.createdAt,
+            isMarket:     existing.isMarket,
           );
           await repo.save(updated);
           try {
@@ -1083,6 +1125,18 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
           ? widget.environment!.id
           : const Uuid().v4();
 
+      // Fase 4 — só para ambiente NOVO: se o nome sugere um mercado, confirmar
+      // ("Sim" pré-selecionado) antes de persistir. Nome que não sugere mercado
+      // salva direto com isMarket=false (fallback silencioso). Ao editar, o tipo
+      // atual é preservado; a correção fica no environment_detail_screen.
+      if (widget.environment == null && _resolvedIsMarket == null) {
+        final envName = _nameController.text.trim();
+        _resolvedIsMarket =
+            EnvironmentTypeClassifier.suggestsMarket(envName)
+                ? await _confirmMarket(envName)
+                : false;
+      }
+
       final entity = EnvironmentEntity(
         id:           id,
         name:         _nameController.text.trim(),
@@ -1090,6 +1144,8 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
         longitude:    _selectedPoint!.longitude,
         radiusMeters: double.tryParse(_radiusController.text) ?? 100.0,
         createdAt:    widget.environment?.createdAt ?? DateTime.now(),
+        // Definido na Fase 4 pelo classificador + confirmação; preserva ao editar.
+        isMarket:     _resolvedIsMarket ?? widget.environment?.isMarket ?? false,
       );
 
       await ref.read(environmentRepositoryProvider).save(entity);
@@ -1111,6 +1167,45 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
+  }
+
+  // Diálogo de confirmação "Este é um mercado?" com "Sim" pré-selecionado
+  // (botão em destaque/coral). Retorna true (Sim) ou false (Não).
+  Future<bool> _confirmMarket(String envName) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.backgroundCard,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+        ),
+        title: const Text(
+          AppStrings.marketConfirmTitle,
+          style: TextStyle(color: AppColors.textPrimary),
+        ),
+        content: const Text(
+          AppStrings.marketConfirmBody,
+          style: TextStyle(color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(
+              AppStrings.marketConfirmNo,
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
+          ),
+          // "Sim" pré-selecionado como ação padrão/destacada.
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.accent),
+            autofocus: true,
+            child: const Text(AppStrings.marketConfirmYes),
+          ),
+        ],
+      ),
+    );
+    return result ?? true; // dispensar o diálogo mantém o padrão "Sim"
   }
 
 }

@@ -46,9 +46,19 @@ class $EnvironmentsTable extends Environments
   late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
       'created_at', aliasedName, false,
       type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _isMarketMeta =
+      const VerificationMeta('isMarket');
+  @override
+  late final GeneratedColumn<bool> isMarket = GeneratedColumn<bool>(
+      'is_market', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_market" IN (0, 1))'),
+      defaultValue: const Constant(false));
   @override
   List<GeneratedColumn> get $columns =>
-      [id, name, latitude, longitude, radiusMeters, createdAt];
+      [id, name, latitude, longitude, radiusMeters, createdAt, isMarket];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -96,6 +106,10 @@ class $EnvironmentsTable extends Environments
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('is_market')) {
+      context.handle(_isMarketMeta,
+          isMarket.isAcceptableOrUnknown(data['is_market']!, _isMarketMeta));
+    }
     return context;
   }
 
@@ -117,6 +131,8 @@ class $EnvironmentsTable extends Environments
           .read(DriftSqlType.double, data['${effectivePrefix}radius_meters'])!,
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+      isMarket: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_market'])!,
     );
   }
 
@@ -133,13 +149,15 @@ class Environment extends DataClass implements Insertable<Environment> {
   final double longitude;
   final double radiusMeters;
   final DateTime createdAt;
+  final bool isMarket;
   const Environment(
       {required this.id,
       required this.name,
       required this.latitude,
       required this.longitude,
       required this.radiusMeters,
-      required this.createdAt});
+      required this.createdAt,
+      required this.isMarket});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -149,6 +167,7 @@ class Environment extends DataClass implements Insertable<Environment> {
     map['longitude'] = Variable<double>(longitude);
     map['radius_meters'] = Variable<double>(radiusMeters);
     map['created_at'] = Variable<DateTime>(createdAt);
+    map['is_market'] = Variable<bool>(isMarket);
     return map;
   }
 
@@ -160,6 +179,7 @@ class Environment extends DataClass implements Insertable<Environment> {
       longitude: Value(longitude),
       radiusMeters: Value(radiusMeters),
       createdAt: Value(createdAt),
+      isMarket: Value(isMarket),
     );
   }
 
@@ -173,6 +193,7 @@ class Environment extends DataClass implements Insertable<Environment> {
       longitude: serializer.fromJson<double>(json['longitude']),
       radiusMeters: serializer.fromJson<double>(json['radiusMeters']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      isMarket: serializer.fromJson<bool>(json['isMarket']),
     );
   }
   @override
@@ -185,6 +206,7 @@ class Environment extends DataClass implements Insertable<Environment> {
       'longitude': serializer.toJson<double>(longitude),
       'radiusMeters': serializer.toJson<double>(radiusMeters),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'isMarket': serializer.toJson<bool>(isMarket),
     };
   }
 
@@ -194,7 +216,8 @@ class Environment extends DataClass implements Insertable<Environment> {
           double? latitude,
           double? longitude,
           double? radiusMeters,
-          DateTime? createdAt}) =>
+          DateTime? createdAt,
+          bool? isMarket}) =>
       Environment(
         id: id ?? this.id,
         name: name ?? this.name,
@@ -202,6 +225,7 @@ class Environment extends DataClass implements Insertable<Environment> {
         longitude: longitude ?? this.longitude,
         radiusMeters: radiusMeters ?? this.radiusMeters,
         createdAt: createdAt ?? this.createdAt,
+        isMarket: isMarket ?? this.isMarket,
       );
   Environment copyWithCompanion(EnvironmentsCompanion data) {
     return Environment(
@@ -213,6 +237,7 @@ class Environment extends DataClass implements Insertable<Environment> {
           ? data.radiusMeters.value
           : this.radiusMeters,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      isMarket: data.isMarket.present ? data.isMarket.value : this.isMarket,
     );
   }
 
@@ -224,14 +249,15 @@ class Environment extends DataClass implements Insertable<Environment> {
           ..write('latitude: $latitude, ')
           ..write('longitude: $longitude, ')
           ..write('radiusMeters: $radiusMeters, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('isMarket: $isMarket')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, name, latitude, longitude, radiusMeters, createdAt);
+  int get hashCode => Object.hash(
+      id, name, latitude, longitude, radiusMeters, createdAt, isMarket);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -241,7 +267,8 @@ class Environment extends DataClass implements Insertable<Environment> {
           other.latitude == this.latitude &&
           other.longitude == this.longitude &&
           other.radiusMeters == this.radiusMeters &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.isMarket == this.isMarket);
 }
 
 class EnvironmentsCompanion extends UpdateCompanion<Environment> {
@@ -251,6 +278,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
   final Value<double> longitude;
   final Value<double> radiusMeters;
   final Value<DateTime> createdAt;
+  final Value<bool> isMarket;
   final Value<int> rowid;
   const EnvironmentsCompanion({
     this.id = const Value.absent(),
@@ -259,6 +287,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     this.longitude = const Value.absent(),
     this.radiusMeters = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.isMarket = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   EnvironmentsCompanion.insert({
@@ -268,6 +297,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     required double longitude,
     required double radiusMeters,
     required DateTime createdAt,
+    this.isMarket = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         name = Value(name),
@@ -282,6 +312,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     Expression<double>? longitude,
     Expression<double>? radiusMeters,
     Expression<DateTime>? createdAt,
+    Expression<bool>? isMarket,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -291,6 +322,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       if (longitude != null) 'longitude': longitude,
       if (radiusMeters != null) 'radius_meters': radiusMeters,
       if (createdAt != null) 'created_at': createdAt,
+      if (isMarket != null) 'is_market': isMarket,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -302,6 +334,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       Value<double>? longitude,
       Value<double>? radiusMeters,
       Value<DateTime>? createdAt,
+      Value<bool>? isMarket,
       Value<int>? rowid}) {
     return EnvironmentsCompanion(
       id: id ?? this.id,
@@ -310,6 +343,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       longitude: longitude ?? this.longitude,
       radiusMeters: radiusMeters ?? this.radiusMeters,
       createdAt: createdAt ?? this.createdAt,
+      isMarket: isMarket ?? this.isMarket,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -335,6 +369,9 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (isMarket.present) {
+      map['is_market'] = Variable<bool>(isMarket.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -350,6 +387,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
           ..write('longitude: $longitude, ')
           ..write('radiusMeters: $radiusMeters, ')
           ..write('createdAt: $createdAt, ')
+          ..write('isMarket: $isMarket, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2060,6 +2098,324 @@ class GeocodingCacheCompanion extends UpdateCompanion<GeocodingCacheData> {
   }
 }
 
+class $ShoppingListItemsTable extends ShoppingListItems
+    with TableInfo<$ShoppingListItemsTable, ShoppingListItem> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ShoppingListItemsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _environmentIdMeta =
+      const VerificationMeta('environmentId');
+  @override
+  late final GeneratedColumn<String> environmentId = GeneratedColumn<String>(
+      'environment_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+      'name', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 200),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _isCheckedMeta =
+      const VerificationMeta('isChecked');
+  @override
+  late final GeneratedColumn<bool> isChecked = GeneratedColumn<bool>(
+      'is_checked', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_checked" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, environmentId, name, isChecked, createdAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'shopping_list_items';
+  @override
+  VerificationContext validateIntegrity(Insertable<ShoppingListItem> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('environment_id')) {
+      context.handle(
+          _environmentIdMeta,
+          environmentId.isAcceptableOrUnknown(
+              data['environment_id']!, _environmentIdMeta));
+    } else if (isInserting) {
+      context.missing(_environmentIdMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+          _nameMeta, name.isAcceptableOrUnknown(data['name']!, _nameMeta));
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('is_checked')) {
+      context.handle(_isCheckedMeta,
+          isChecked.isAcceptableOrUnknown(data['is_checked']!, _isCheckedMeta));
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  ShoppingListItem map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ShoppingListItem(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      environmentId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}environment_id'])!,
+      name: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
+      isChecked: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_checked'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+    );
+  }
+
+  @override
+  $ShoppingListItemsTable createAlias(String alias) {
+    return $ShoppingListItemsTable(attachedDatabase, alias);
+  }
+}
+
+class ShoppingListItem extends DataClass
+    implements Insertable<ShoppingListItem> {
+  final String id;
+  final String environmentId;
+  final String name;
+  final bool isChecked;
+  final DateTime createdAt;
+  const ShoppingListItem(
+      {required this.id,
+      required this.environmentId,
+      required this.name,
+      required this.isChecked,
+      required this.createdAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['environment_id'] = Variable<String>(environmentId);
+    map['name'] = Variable<String>(name);
+    map['is_checked'] = Variable<bool>(isChecked);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  ShoppingListItemsCompanion toCompanion(bool nullToAbsent) {
+    return ShoppingListItemsCompanion(
+      id: Value(id),
+      environmentId: Value(environmentId),
+      name: Value(name),
+      isChecked: Value(isChecked),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory ShoppingListItem.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ShoppingListItem(
+      id: serializer.fromJson<String>(json['id']),
+      environmentId: serializer.fromJson<String>(json['environmentId']),
+      name: serializer.fromJson<String>(json['name']),
+      isChecked: serializer.fromJson<bool>(json['isChecked']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'environmentId': serializer.toJson<String>(environmentId),
+      'name': serializer.toJson<String>(name),
+      'isChecked': serializer.toJson<bool>(isChecked),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  ShoppingListItem copyWith(
+          {String? id,
+          String? environmentId,
+          String? name,
+          bool? isChecked,
+          DateTime? createdAt}) =>
+      ShoppingListItem(
+        id: id ?? this.id,
+        environmentId: environmentId ?? this.environmentId,
+        name: name ?? this.name,
+        isChecked: isChecked ?? this.isChecked,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  ShoppingListItem copyWithCompanion(ShoppingListItemsCompanion data) {
+    return ShoppingListItem(
+      id: data.id.present ? data.id.value : this.id,
+      environmentId: data.environmentId.present
+          ? data.environmentId.value
+          : this.environmentId,
+      name: data.name.present ? data.name.value : this.name,
+      isChecked: data.isChecked.present ? data.isChecked.value : this.isChecked,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ShoppingListItem(')
+          ..write('id: $id, ')
+          ..write('environmentId: $environmentId, ')
+          ..write('name: $name, ')
+          ..write('isChecked: $isChecked, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, environmentId, name, isChecked, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ShoppingListItem &&
+          other.id == this.id &&
+          other.environmentId == this.environmentId &&
+          other.name == this.name &&
+          other.isChecked == this.isChecked &&
+          other.createdAt == this.createdAt);
+}
+
+class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
+  final Value<String> id;
+  final Value<String> environmentId;
+  final Value<String> name;
+  final Value<bool> isChecked;
+  final Value<DateTime> createdAt;
+  final Value<int> rowid;
+  const ShoppingListItemsCompanion({
+    this.id = const Value.absent(),
+    this.environmentId = const Value.absent(),
+    this.name = const Value.absent(),
+    this.isChecked = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ShoppingListItemsCompanion.insert({
+    required String id,
+    required String environmentId,
+    required String name,
+    this.isChecked = const Value.absent(),
+    required DateTime createdAt,
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        environmentId = Value(environmentId),
+        name = Value(name),
+        createdAt = Value(createdAt);
+  static Insertable<ShoppingListItem> custom({
+    Expression<String>? id,
+    Expression<String>? environmentId,
+    Expression<String>? name,
+    Expression<bool>? isChecked,
+    Expression<DateTime>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (environmentId != null) 'environment_id': environmentId,
+      if (name != null) 'name': name,
+      if (isChecked != null) 'is_checked': isChecked,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ShoppingListItemsCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? environmentId,
+      Value<String>? name,
+      Value<bool>? isChecked,
+      Value<DateTime>? createdAt,
+      Value<int>? rowid}) {
+    return ShoppingListItemsCompanion(
+      id: id ?? this.id,
+      environmentId: environmentId ?? this.environmentId,
+      name: name ?? this.name,
+      isChecked: isChecked ?? this.isChecked,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (environmentId.present) {
+      map['environment_id'] = Variable<String>(environmentId.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (isChecked.present) {
+      map['is_checked'] = Variable<bool>(isChecked.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ShoppingListItemsCompanion(')
+          ..write('id: $id, ')
+          ..write('environmentId: $environmentId, ')
+          ..write('name: $name, ')
+          ..write('isChecked: $isChecked, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$SoproDatabase extends GeneratedDatabase {
   _$SoproDatabase(QueryExecutor e) : super(e);
   $SoproDatabaseManager get managers => $SoproDatabaseManager(this);
@@ -2068,6 +2424,8 @@ abstract class _$SoproDatabase extends GeneratedDatabase {
   late final $ContextCardsTable contextCards = $ContextCardsTable(this);
   late final $BleEncountersTable bleEncounters = $BleEncountersTable(this);
   late final $GeocodingCacheTable geocodingCache = $GeocodingCacheTable(this);
+  late final $ShoppingListItemsTable shoppingListItems =
+      $ShoppingListItemsTable(this);
   late final EnvironmentsDao environmentsDao =
       EnvironmentsDao(this as SoproDatabase);
   late final TriggersDao triggersDao = TriggersDao(this as SoproDatabase);
@@ -2077,12 +2435,20 @@ abstract class _$SoproDatabase extends GeneratedDatabase {
       BleEncountersDao(this as SoproDatabase);
   late final GeocodingCacheDao geocodingCacheDao =
       GeocodingCacheDao(this as SoproDatabase);
+  late final ShoppingListItemsDao shoppingListItemsDao =
+      ShoppingListItemsDao(this as SoproDatabase);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
-  List<DatabaseSchemaEntity> get allSchemaEntities =>
-      [environments, triggers, contextCards, bleEncounters, geocodingCache];
+  List<DatabaseSchemaEntity> get allSchemaEntities => [
+        environments,
+        triggers,
+        contextCards,
+        bleEncounters,
+        geocodingCache,
+        shoppingListItems
+      ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
         [
@@ -2105,6 +2471,7 @@ typedef $$EnvironmentsTableCreateCompanionBuilder = EnvironmentsCompanion
   required double longitude,
   required double radiusMeters,
   required DateTime createdAt,
+  Value<bool> isMarket,
   Value<int> rowid,
 });
 typedef $$EnvironmentsTableUpdateCompanionBuilder = EnvironmentsCompanion
@@ -2115,6 +2482,7 @@ typedef $$EnvironmentsTableUpdateCompanionBuilder = EnvironmentsCompanion
   Value<double> longitude,
   Value<double> radiusMeters,
   Value<DateTime> createdAt,
+  Value<bool> isMarket,
   Value<int> rowid,
 });
 
@@ -2165,6 +2533,9 @@ class $$EnvironmentsTableFilterComposer
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
 
+  ColumnFilters<bool> get isMarket => $composableBuilder(
+      column: $table.isMarket, builder: (column) => ColumnFilters(column));
+
   Expression<bool> triggersRefs(
       Expression<bool> Function($$TriggersTableFilterComposer f) f) {
     final $$TriggersTableFilterComposer composer = $composerBuilder(
@@ -2214,6 +2585,9 @@ class $$EnvironmentsTableOrderingComposer
 
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isMarket => $composableBuilder(
+      column: $table.isMarket, builder: (column) => ColumnOrderings(column));
 }
 
 class $$EnvironmentsTableAnnotationComposer
@@ -2242,6 +2616,9 @@ class $$EnvironmentsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<bool> get isMarket =>
+      $composableBuilder(column: $table.isMarket, builder: (column) => column);
 
   Expression<T> triggersRefs<T extends Object>(
       Expression<T> Function($$TriggersTableAnnotationComposer a) f) {
@@ -2294,6 +2671,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             Value<double> longitude = const Value.absent(),
             Value<double> radiusMeters = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
+            Value<bool> isMarket = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EnvironmentsCompanion(
@@ -2303,6 +2681,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             longitude: longitude,
             radiusMeters: radiusMeters,
             createdAt: createdAt,
+            isMarket: isMarket,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -2312,6 +2691,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             required double longitude,
             required double radiusMeters,
             required DateTime createdAt,
+            Value<bool> isMarket = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EnvironmentsCompanion.insert(
@@ -2321,6 +2701,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             longitude: longitude,
             radiusMeters: radiusMeters,
             createdAt: createdAt,
+            isMarket: isMarket,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -3339,6 +3720,182 @@ typedef $$GeocodingCacheTableProcessedTableManager = ProcessedTableManager<
     ),
     GeocodingCacheData,
     PrefetchHooks Function()>;
+typedef $$ShoppingListItemsTableCreateCompanionBuilder
+    = ShoppingListItemsCompanion Function({
+  required String id,
+  required String environmentId,
+  required String name,
+  Value<bool> isChecked,
+  required DateTime createdAt,
+  Value<int> rowid,
+});
+typedef $$ShoppingListItemsTableUpdateCompanionBuilder
+    = ShoppingListItemsCompanion Function({
+  Value<String> id,
+  Value<String> environmentId,
+  Value<String> name,
+  Value<bool> isChecked,
+  Value<DateTime> createdAt,
+  Value<int> rowid,
+});
+
+class $$ShoppingListItemsTableFilterComposer
+    extends Composer<_$SoproDatabase, $ShoppingListItemsTable> {
+  $$ShoppingListItemsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get environmentId => $composableBuilder(
+      column: $table.environmentId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isChecked => $composableBuilder(
+      column: $table.isChecked, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$ShoppingListItemsTableOrderingComposer
+    extends Composer<_$SoproDatabase, $ShoppingListItemsTable> {
+  $$ShoppingListItemsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get environmentId => $composableBuilder(
+      column: $table.environmentId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isChecked => $composableBuilder(
+      column: $table.isChecked, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$ShoppingListItemsTableAnnotationComposer
+    extends Composer<_$SoproDatabase, $ShoppingListItemsTable> {
+  $$ShoppingListItemsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get environmentId => $composableBuilder(
+      column: $table.environmentId, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<bool> get isChecked =>
+      $composableBuilder(column: $table.isChecked, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$ShoppingListItemsTableTableManager extends RootTableManager<
+    _$SoproDatabase,
+    $ShoppingListItemsTable,
+    ShoppingListItem,
+    $$ShoppingListItemsTableFilterComposer,
+    $$ShoppingListItemsTableOrderingComposer,
+    $$ShoppingListItemsTableAnnotationComposer,
+    $$ShoppingListItemsTableCreateCompanionBuilder,
+    $$ShoppingListItemsTableUpdateCompanionBuilder,
+    (
+      ShoppingListItem,
+      BaseReferences<_$SoproDatabase, $ShoppingListItemsTable, ShoppingListItem>
+    ),
+    ShoppingListItem,
+    PrefetchHooks Function()> {
+  $$ShoppingListItemsTableTableManager(
+      _$SoproDatabase db, $ShoppingListItemsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ShoppingListItemsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ShoppingListItemsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ShoppingListItemsTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> environmentId = const Value.absent(),
+            Value<String> name = const Value.absent(),
+            Value<bool> isChecked = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ShoppingListItemsCompanion(
+            id: id,
+            environmentId: environmentId,
+            name: name,
+            isChecked: isChecked,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required String environmentId,
+            required String name,
+            Value<bool> isChecked = const Value.absent(),
+            required DateTime createdAt,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ShoppingListItemsCompanion.insert(
+            id: id,
+            environmentId: environmentId,
+            name: name,
+            isChecked: isChecked,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$ShoppingListItemsTableProcessedTableManager = ProcessedTableManager<
+    _$SoproDatabase,
+    $ShoppingListItemsTable,
+    ShoppingListItem,
+    $$ShoppingListItemsTableFilterComposer,
+    $$ShoppingListItemsTableOrderingComposer,
+    $$ShoppingListItemsTableAnnotationComposer,
+    $$ShoppingListItemsTableCreateCompanionBuilder,
+    $$ShoppingListItemsTableUpdateCompanionBuilder,
+    (
+      ShoppingListItem,
+      BaseReferences<_$SoproDatabase, $ShoppingListItemsTable, ShoppingListItem>
+    ),
+    ShoppingListItem,
+    PrefetchHooks Function()>;
 
 class $SoproDatabaseManager {
   final _$SoproDatabase _db;
@@ -3353,4 +3910,6 @@ class $SoproDatabaseManager {
       $$BleEncountersTableTableManager(_db, _db.bleEncounters);
   $$GeocodingCacheTableTableManager get geocodingCache =>
       $$GeocodingCacheTableTableManager(_db, _db.geocodingCache);
+  $$ShoppingListItemsTableTableManager get shoppingListItems =>
+      $$ShoppingListItemsTableTableManager(_db, _db.shoppingListItems);
 }

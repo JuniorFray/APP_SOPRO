@@ -158,7 +158,8 @@ class AppConstants {
       'delete_trigger {"type":"delete_trigger","environment":"Local","title":"aprox"}\n'
       'delete_all_triggers {"type":"delete_all_triggers","environment":"Local"}\n'
       'delete_environment {"type":"delete_environment","environment":"Local"}\n'
-      'delete_all_environments {"type":"delete_all_environments"}\n\n'
+      'delete_all_environments {"type":"delete_all_environments"}\n'
+      'add_shopping_item {"type":"add_shopping_item","item":"Leite"}\n\n'
       'REGRAS:\n'
       '1) NUNCA invente ambiente. Use so locais ditos pelo usuario. Jamais crie '
       'Casa/Trabalho/Local/Destino se nao foram falados.\n'
@@ -175,7 +176,11 @@ class AppConstants {
       'do contexto; NAO pergunte de novo.\n'
       '8) Duvida real sobre o local: actions=[] e pergunte em follow_up_question.\n'
       '9) create_environment sempre antes dos create_trigger do mesmo local.\n'
-      '10) reply curto e humano; nunca cite intent/acao.\n\n'
+      '10) reply curto e humano; nunca cite intent/acao.\n'
+      '11) Item para a LISTA DE COMPRAS do mercado ("adiciona X na lista", '
+      '"poe X na lista do mercado", "preciso comprar X") = add_shopping_item '
+      '{item}; NAO use create_trigger. Nao precisa nomear o ambiente: o app '
+      'escolhe o mercado.\n\n'
       'EXEMPLOS (E=ambientes existentes):\n'
       // 3 ambientes novos, 4 gatilhos, nada inventado (Caso 1 da validacao)
       '- "medico pegar exame, mercado comprar pao e ovo, escola falar com a professora" '
@@ -207,6 +212,12 @@ class AppConstants {
       // referencia indireta "na volta", ambiente existente
       '- "na volta passar na padaria pegar o bolo" (E: Casa,Padaria) -> "actions":['
       '{"type":"create_trigger","environment":"Padaria","title":"Pegar o bolo"}]\n'
+      // item de lista de compras -> add_shopping_item (o app escolhe o mercado)
+      '- "adiciona leite na lista do mercado" -> "actions":['
+      '{"type":"add_shopping_item","item":"Leite"}]\n'
+      '- "preciso comprar pao e cafe" -> "actions":['
+      '{"type":"add_shopping_item","item":"Pao"},'
+      '{"type":"add_shopping_item","item":"Cafe"}]\n'
       // ambiguidade -> nao adivinha, pergunta (Regra 6/8)
       '- "quando chegar la me lembra de ligar" (sem contexto) -> "actions":[],'
       '"follow_up_question":"Qual lugar voce quer dizer?"\n'

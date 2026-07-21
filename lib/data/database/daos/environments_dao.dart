@@ -31,6 +31,12 @@ class EnvironmentsDao extends DatabaseAccessor<SoproDatabase>
   Future<void> upsert(EnvironmentsCompanion entry) =>
       into(environments).insertOnConflictUpdate(entry);
 
+  // Atualiza apenas a flag isMarket sem tocar nos demais campos
+  Future<bool> setIsMarket(String id, {required bool isMarket}) =>
+      (update(environments)..where((e) => e.id.equals(id)))
+          .write(EnvironmentsCompanion(isMarket: Value(isMarket)))
+          .then((count) => count > 0);
+
   // Remove um environment pelo ID; os triggers vinculados são removidos em
   // cascade pelo banco (definido em triggers_table.dart via onDelete: cascade)
   Future<int> deleteById(String id) =>

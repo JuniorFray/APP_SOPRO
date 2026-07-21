@@ -21,6 +21,10 @@ class Environments extends Table {
   // Timestamp de criação armazenado como milissegundos desde epoch
   DateTimeColumn get createdAt => dateTime()();
 
+  // Marca este ambiente como "Mercado" — troca o sistema de gatilhos de texto
+  // por uma lista de compras gerenciável. Default false (ambiente comum).
+  BoolColumn get isMarket => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column> get primaryKey => {id};
 }

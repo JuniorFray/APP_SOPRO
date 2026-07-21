@@ -202,6 +202,8 @@ class AppStrings {
 
   // Busca de endereço por Nominatim (OpenStreetMap)
   static const searchAddressHint = 'Buscar endereço ou lugar...';
+  // Exibido no campo de busca enquanto o GPS aquece (viés de proximidade).
+  static const searchLocatingHint = 'Localizando...';
   static const searchError = 'Não foi possível buscar o endereço. Tente novamente.';
 
   // Tela de Configurações
@@ -244,6 +246,32 @@ class AppStrings {
   static const settingsShortcutPrivacy  = 'Privacidade';
   static const settingsShortcutSupport  = 'Suporte';
   static const settingsComingSoon       = 'Em breve';
+
+  // Mercado — confirmação de tipo, lista de compras
+  static const marketConfirmTitle    = 'Este é um mercado?';
+  static const marketConfirmBody      =
+      'Você poderá gerenciar uma lista de compras para ele.';
+  static const marketConfirmYes       = 'Sim';
+  static const marketConfirmNo        = 'Não';
+  static const marketToggleTitle      = 'Este é um mercado';
+  static const marketToggleDesc       =
+      'Gerencia uma lista de compras no lugar dos gatilhos';
+  static const marketListTitle        = 'Lista de compras';
+  static const marketListEmpty        = 'Nenhum item ainda';
+  static const marketListEmptyHint    = 'Adicione o que precisa comprar aqui';
+  static const marketAddItem          = 'Adicionar item';
+  static const marketAddItemHint      = 'Ex: Leite, Pão, Ovos';
+  static const marketItemLabel        = 'Item';
+  static const marketFinishShopping   = 'Concluir compra';
+  static const marketFinishConfirm    =
+      'Remover todos os itens desta lista?';
+  static const marketNotifTitle       = 'Lista de compras';
+  // Voz — adicionar item à lista
+  static const marketVoiceNoMarket    =
+      'Você ainda não tem um mercado. Crie um ambiente de mercado primeiro.';
+  static const marketVoicePickMarket  = 'Em qual mercado?';
+  static const marketVoicePickSubtitle = 'Escolha o mercado para adicionar o item';
+  static const marketVoiceItemAdded   = 'Adicionei à lista';
 
   // Notificações avançadas (som e frequência)
   static const settingsNotifSound        = 'Som nas notificações';

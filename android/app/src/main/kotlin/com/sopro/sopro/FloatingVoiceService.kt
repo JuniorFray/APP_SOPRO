@@ -119,6 +119,11 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         // criar um ambiente. Impede create_environment antes da resolução.
         internal const val VAL_AWAITING_LOCATION_CONFIRM = "awaiting_location_confirm"
 
+        // Lista de compras — enquanto ativo, a próxima fala escolhe em QUAL mercado
+        // (dentre 2+) os itens pendentes serão gravados. Armazena pending_shopping_items
+        // e pending_market_names nas mesmas prefs de estado.
+        internal const val VAL_AWAITING_MARKET_CHOICE = "awaiting_market_choice"
+
         // Fase 1 — transcrições "de relógio" que o STT devolve quando não houve
         // fala real (ex.: "00:00", "0:00", "00.00"). Tratadas como ausência de fala.
         private val CLOCK_LIKE_REGEX = Regex("""^\s*\d{1,2}[:.]\d{2}\s*$""")
@@ -951,11 +956,16 @@ delete_trigger {"type":"delete_trigger","environment":"Local","title":"aprox"}
 delete_all_triggers {"type":"delete_all_triggers","environment":"Local"}
 delete_environment {"type":"delete_environment","environment":"Local"}
 delete_all_environments {"type":"delete_all_environments"}
+add_shopping_item {"type":"add_shopping_item","item":"nome do item"}
 REGRAS:
 1) NUNCA invente ambiente. So locais ditos pelo usuario.
 2) Local ja existente = REUTILIZE: so create_trigger com o nome EXATO da lista.
 3) Local novo = create_environment e depois seus create_trigger (nessa ordem).
 4) title: SO a acao, infinitivo, max 50 chars, sem o local.
+4b) LISTA DE COMPRAS: pedidos de "comprar/adicionar/precisa de/poe na lista [item]"
+   SEM uma acao vinculada a um local especifico -> add_shopping_item (um por item),
+   SEM campo environment (o app decide o mercado). Acoes especificas de um lugar
+   ("falar com o gerente", "pagar o boleto", "pegar o exame") continuam create_trigger.
 5) PRIORIDADE DESTRUTIVA (MAXIMA): se a fala tem "todos/todas/tudo/limpar/apagar/
    remover/excluir/deletar" referindo AMBIENTES/LOCAIS -> actions=[{"type":"delete_all_environments"}]
    e NADA de create. Referindo GATILHOS/LEMBRETES de um local -> delete_all_triggers.
@@ -963,8 +973,9 @@ REGRAS:
 6) Duvida real sobre o local: actions=[] e pergunte em follow_up_question.
 7) reply curto e humano; nunca cite intent/acao.
 EXEMPLOS:
-- "medico pegar exame, mercado comprar pao e ovo" (nenhum) -> "actions":[{"type":"create_environment","name":"Medico"},{"type":"create_trigger","environment":"Medico","title":"Pegar exame"},{"type":"create_environment","name":"Mercado"},{"type":"create_trigger","environment":"Mercado","title":"Comprar pao"},{"type":"create_trigger","environment":"Mercado","title":"Comprar ovo"}]
-- "quando chegar no mercado comprar arroz" (Mercado) -> "actions":[{"type":"create_trigger","environment":"Mercado","title":"Comprar arroz"}]
+- "medico pegar exame" (nenhum) -> "actions":[{"type":"create_environment","name":"Medico"},{"type":"create_trigger","environment":"Medico","title":"Pegar exame"}]
+- "adiciona leite e pao na lista de compras" -> "actions":[{"type":"add_shopping_item","item":"Leite"},{"type":"add_shopping_item","item":"Pao"}]
+- "preciso comprar arroz no mercado" -> "actions":[{"type":"add_shopping_item","item":"Arroz"}]
 - "apagar todos os ambientes" -> "actions":[{"type":"delete_all_environments"}]
 - "excluir todos os ambientes" -> "actions":[{"type":"delete_all_environments"}]
 - "remover tudo" -> "actions":[{"type":"delete_all_environments"}]
@@ -1257,6 +1268,42 @@ Retorne SO o JSON.""".trimIndent()
             return
         }
 
+        // Resposta a "em qual mercado?" — grava os itens pendentes no mercado escolhido.
+        // Mesmo molde do bloco acima: lê o estado, consome, tenta casar a fala.
+        if (voiceState == VAL_AWAITING_MARKET_CHOICE && !stateExpired) {
+            val itemsRaw = statePrefs.getString("pending_shopping_items", null) ?: ""
+            val namesRaw = statePrefs.getString("pending_market_names", null) ?: ""
+            val items = itemsRaw.split("|").filter { it.isNotEmpty() }
+            val marketNames = namesRaw.split("|").filter { it.isNotEmpty() }
+            statePrefs.edit()
+                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
+                .remove("pending_shopping_items").remove("pending_market_names").apply()
+
+            val choice = parseMarketChoice(result.transcript ?: "", marketNames)
+            if (choice != null && items.isNotEmpty()) {
+                val market = marketNames[choice]
+                serviceScope.launch(Dispatchers.IO) {
+                    val ok = writeShoppingItemsToDb(items, market)
+                    withContext(Dispatchers.Main) {
+                        if (ok) speakTyped(confirmShoppingPhrase(items, market), TtsTone.SUCCESS)
+                        else speakTyped("Não consegui salvar agora. Tente de novo.", TtsTone.ERROR)
+                        endVoice()
+                    }
+                }
+            } else {
+                // Não casou/ambíguo → regrava o MESMO estado (não perde os itens) e repergunta.
+                statePrefs.edit()
+                    .putString(KEY_VOICE_STATE, VAL_AWAITING_MARKET_CHOICE)
+                    .putString("pending_shopping_items", itemsRaw)
+                    .putString("pending_market_names", namesRaw)
+                    .putLong("voice_state_set_at", System.currentTimeMillis())
+                    .apply()
+                speakTyped("Não peguei bem — pode falar só o nome do mercado?", TtsTone.QUESTION)
+                endVoice()
+            }
+            return
+        }
+
         Logger.info("intent_dispatched", feature = "floating_voice", action = "execute",
             payload = mapOf("intent" to (result.intent ?: "null")),
             correlationId = voiceCorrelationId)
@@ -1321,6 +1368,17 @@ Retorne SO o JSON.""".trimIndent()
                     speak("Não entendi. Diga: lembra de X quando chegar em Y.")
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
+                }
+            }
+            "add_shopping_item" -> {
+                // Caminho legado single-intent (o fluxo normal usa executePlan). O
+                // item vem em triggerTitle quando presente; resolve o mercado igual.
+                val item = result.triggerTitle?.takeIf { it.isNotBlank() }?.trim()
+                if (item != null) {
+                    resolveShoppingItems(listOf(item))
+                } else {
+                    speakTyped("O que você quer adicionar à lista?", TtsTone.QUESTION)
+                    endVoice()
                 }
             }
             "create_environment" -> {
@@ -1663,6 +1721,24 @@ Retorne SO o JSON.""".trimIndent()
         }
         if (destructive != null) {
             routeDestructiveConfirm(destructive)
+            return
+        }
+
+        // Lista de compras: plano composto SÓ de add_shopping_item é resolvido à
+        // parte (não usa o loop construtivo/GPS nem o resumo genérico). Junta todos
+        // os itens e resolve o mercado uma única vez — pergunta "qual mercado?" só
+        // quando houver 2+. Evita o conflito de TTS com o resumo do loop.
+        if (plan.actions.isNotEmpty() && plan.actions.all { it.type == "add_shopping_item" }) {
+            val items = plan.actions
+                .mapNotNull { it.str("item", "name", "title") }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            if (items.isEmpty()) {
+                speakTyped("Não entendi o item. Pode repetir?", TtsTone.ERROR)
+                endVoice()
+            } else {
+                resolveShoppingItems(items)
+            }
             return
         }
 
@@ -2231,6 +2307,190 @@ Retorne SO o JSON.""".trimIndent()
         )
         return candidates.firstOrNull { it.exists() }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Lista de compras (mercados) — caminho nativo do overlay
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Lê (id, name) de todos os ambientes com is_market = 1. Read-only + finally
+    // close, mesmo padrão de readEnvironmentNamesFromDb. Chamado de Dispatchers.IO.
+    private fun queryMarketEnvironments(): List<Pair<String, String>> {
+        val dbFile = findDbFile() ?: return emptyList()
+        var db: SQLiteDatabase? = null
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            val cursor = db.rawQuery(
+                "SELECT id, name FROM environments WHERE is_market = 1", null
+            )
+            val out = mutableListOf<Pair<String, String>>()
+            cursor.use { while (it.moveToNext()) out.add(it.getString(0) to it.getString(1)) }
+            out
+        } catch (e: Exception) {
+            Logger.warn("sqlite_read_markets_failed", feature = "floating_voice", action = "db_read",
+                exception = e, correlationId = CorrelationManager.correlationIdFor("voice"))
+            emptyList()
+        } finally {
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
+        }
+    }
+
+    // Insere N itens na lista de compras do mercado [marketName] (busca o id por
+    // nome, exige is_market = 1). Espelha writeTriggerToDb (READWRITE + finally).
+    // Retorna true se o mercado existe e os inserts ocorreram.
+    private fun writeShoppingItemsToDb(items: List<String>, marketName: String): Boolean {
+        val corrId = CorrelationManager.correlationIdFor("voice")
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("op" to "write_shopping"), correlationId = corrId)
+            return false
+        }
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) return false
+        var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val cursor = db.rawQuery(
+                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) AND is_market = 1 LIMIT 1",
+                arrayOf(marketName)
+            )
+            val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
+            cursor.close()
+            if (envId == null) {
+                Logger.warn("market_not_found", feature = "floating_voice", action = "db_write",
+                    payload = if (LoggerConfiguration.debugLogging)
+                        mapOf("market_name" to marketName) else null,
+                    correlationId = corrId)
+                return false
+            }
+            val now = System.currentTimeMillis()
+            for (raw in items) {
+                val name = capitalizePt(raw)
+                val id = UUID.randomUUID().toString()
+                db.execSQL(
+                    "INSERT INTO shopping_list_items (id, environment_id, name, is_checked, created_at) " +
+                    "VALUES (?, ?, ?, 0, ?)",
+                    arrayOf(id, envId, name, now)
+                )
+            }
+            // Sinaliza a UI para atualizar ao voltar ao foreground (mesmos providers).
+            getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean("flutter.needs_refresh", true)
+                .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
+                .apply()
+            Logger.info("shopping_items_created", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = mapOf("count" to items.size.toString(), "market" to marketName),
+                correlationId = corrId)
+            true
+        } catch (e: Exception) {
+            Logger.error("sqlite_write_shopping_failed", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start, exception = e,
+                correlationId = corrId)
+            logException("command_dispatch", e)
+            false
+        } finally {
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
+        }
+    }
+
+    // Resolve em qual mercado gravar os [items]: 0 → orienta criar; 1 → grava direto
+    // e confirma; 2+ → arma VAL_AWAITING_MARKET_CHOICE e pergunta por voz qual mercado.
+    private fun resolveShoppingItems(items: List<String>) {
+        showProcessingState()
+        serviceScope.launch(Dispatchers.IO) {
+            val markets = queryMarketEnvironments()
+            withContext(Dispatchers.Main) {
+                when {
+                    markets.isEmpty() -> {
+                        revertButtonAppearance()
+                        speakTyped(
+                            "Ainda não tenho nenhum mercado salvo. Quer que eu crie um agora, ou prefere fazer isso pelo app?",
+                            TtsTone.QUESTION)
+                        endVoice()
+                    }
+                    markets.size == 1 -> {
+                        val market = markets.first().second
+                        serviceScope.launch(Dispatchers.IO) {
+                            val ok = writeShoppingItemsToDb(items, market)
+                            withContext(Dispatchers.Main) {
+                                revertButtonAppearance()
+                                if (ok) speakTyped(confirmShoppingPhrase(items, market), TtsTone.SUCCESS)
+                                else speakTyped("Não consegui salvar agora. Tente de novo.", TtsTone.ERROR)
+                                endVoice()
+                            }
+                        }
+                    }
+                    else -> {
+                        revertButtonAppearance()
+                        val names = markets.map { it.second }
+                        getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
+                            .putString(KEY_VOICE_STATE, VAL_AWAITING_MARKET_CHOICE)
+                            .putString("pending_shopping_items", items.joinToString("|"))
+                            .putString("pending_market_names", names.joinToString("|"))
+                            .putLong("voice_state_set_at", System.currentTimeMillis())
+                            .apply()
+                        speakTyped(
+                            "Você tem ${humanJoin(names)} salvos — em qual eu coloco ${humanJoin(items)}?",
+                            TtsTone.QUESTION)
+                        showToast("Segure o botão e diga o nome do mercado.")
+                        endVoice()
+                    }
+                }
+            }
+        }
+    }
+
+    // Casa a fala do usuário contra os nomes dos mercados. Tenta (a) nome contido
+    // (sem acento/caixa) e (b) ordinal falado. Retorna o índice OU null (nenhum/ambíguo).
+    private fun parseMarketChoice(transcript: String, marketNames: List<String>): Int? {
+        if (marketNames.isEmpty()) return null
+        val t = stripAccents(transcript.lowercase(java.util.Locale("pt", "BR")))
+        // (a) nome do mercado contido na fala
+        val nameMatches = marketNames.indices.filter { i ->
+            val n = stripAccents(marketNames[i].lowercase(java.util.Locale("pt", "BR")))
+            n.isNotEmpty() && t.contains(n)
+        }
+        if (nameMatches.size == 1) return nameMatches[0]
+        if (nameMatches.size > 1) return null // ambíguo
+        // (b) ordinal falado
+        val ordinal = when {
+            Regex("\\bprimeir").containsMatchIn(t) || Regex("\\bum\\b").containsMatchIn(t) -> 0
+            Regex("\\bsegund").containsMatchIn(t) || Regex("\\bdois\\b").containsMatchIn(t) -> 1
+            Regex("\\bterceir").containsMatchIn(t) || Regex("\\btres\\b").containsMatchIn(t) -> 2
+            Regex("\\bultim").containsMatchIn(t) -> marketNames.lastIndex
+            else -> -1
+        }
+        return if (ordinal in marketNames.indices) ordinal else null
+    }
+
+    // "Anotado — Leite e Pão na lista do Assaí." (1 item: sem o "e").
+    private fun confirmShoppingPhrase(items: List<String>, market: String): String =
+        "Anotado — ${humanJoin(items)} na lista do $market."
+
+    // Junta uma lista para fala natural: "A", "A e B", "A, B e C".
+    private fun humanJoin(list: List<String>): String = when (list.size) {
+        0 -> ""
+        1 -> list[0]
+        2 -> "${list[0]} e ${list[1]}"
+        else -> "${list.dropLast(1).joinToString(", ")} e ${list.last()}"
+    }
+
+    // Capitaliza cada palavra em pt-BR (mesma regra usada em writeEnvironmentToDb).
+    private fun capitalizePt(s: String): String = s.trim().split(" ").joinToString(" ") { w ->
+        w.lowercase(java.util.Locale("pt", "BR"))
+            .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
+    }
+
+    // Remove acentos para comparação tolerante (NFD + remove marcas diacríticas).
+    private fun stripAccents(s: String): String =
+        java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+            .replace(Regex("\\p{Mn}+"), "")
 
     // ─────────────────────────────────────────────────────────────────────────
     // Escrita direta no SQLite — sem abrir o app, sem Flutter Engine

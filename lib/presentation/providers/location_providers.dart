@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../domain/usecases/fire_triggers_use_case.dart';
+import '../../domain/usecases/show_market_list_use_case.dart';
 import '../../infrastructure/geofence/geofence_manager.dart';
 import '../../infrastructure/geofence/native_geofence_service.dart';
 import '../../infrastructure/location/native_location_service.dart';
@@ -30,6 +31,7 @@ final nativeGeofenceServiceProvider = Provider<NativeGeofenceService>((ref) {
 final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
   final envRepo         = ref.watch(environmentRepositoryProvider);
   final triggerRepo     = ref.watch(triggerRepositoryProvider);
+  final shoppingRepo    = ref.watch(shoppingListRepositoryProvider);
   final notifications   = ref.watch(notificationServiceProvider);
   final locationService = ref.watch(nativeLocationServiceProvider);
   final nativeGeofence  = ref.watch(nativeGeofenceServiceProvider);
@@ -45,9 +47,19 @@ final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
     () => ref.read(notificationCooldownMinutesProvider),  // cooldown
   );
 
+  // Mesmas preferências, mas para ambientes tipo Mercado (lista de compras).
+  final showMarketList = ShowMarketListUseCase(
+    shoppingRepo,
+    notifications,
+    () => ref.read(notificationsEnabledProvider),
+    () => ref.read(notificationSoundProvider),
+    () => ref.read(notificationCooldownMinutesProvider),
+  );
+
   final manager = GeofenceManager(
     envRepo,
     fireTriggers,
+    showMarketList,
     locationService,
     nativeGeofence,
   );

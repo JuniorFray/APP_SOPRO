@@ -4,10 +4,12 @@ import '../../data/database/sopro_database.dart';
 import '../../data/repositories/ble_encounter_repository.dart';
 import '../../data/repositories/context_card_repository.dart';
 import '../../data/repositories/environment_repository.dart';
+import '../../data/repositories/shopping_list_repository.dart';
 import '../../data/repositories/trigger_repository.dart';
 import '../../domain/repositories/i_ble_encounter_repository.dart';
 import '../../domain/repositories/i_context_card_repository.dart';
 import '../../domain/repositories/i_environment_repository.dart';
+import '../../domain/repositories/i_shopping_list_repository.dart';
 import '../../domain/repositories/i_trigger_repository.dart';
 
 // Provider do banco de dados principal.
@@ -27,6 +29,11 @@ final environmentRepositoryProvider = Provider<IEnvironmentRepository>((ref) {
 
 final triggerRepositoryProvider = Provider<ITriggerRepository>((ref) {
   return TriggerRepository(ref.watch(databaseProvider).triggersDao);
+});
+
+final shoppingListRepositoryProvider = Provider<IShoppingListRepository>((ref) {
+  return ShoppingListRepository(
+      ref.watch(databaseProvider).shoppingListItemsDao);
 });
 
 final contextCardRepositoryProvider = Provider<IContextCardRepository>((ref) {

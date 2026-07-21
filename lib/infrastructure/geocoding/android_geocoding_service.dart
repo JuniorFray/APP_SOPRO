@@ -137,23 +137,30 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     String liqQuery = liqHints.isNotEmpty
         ? '$cleanBrand ${liqHints.last}'
         : (cleanBrand.isNotEmpty ? cleanBrand : query);
-    // Injeção automática de cidade para queries curtas (≤2 tokens) sem
-    // hint de localização explícito. Ex.: "Assaí" → "Assaí Piracicaba".
-    // Evita que o LocationIQ busque no Brasil inteiro sem contexto geográfico.
+    // Injeção automática de cidade para queries curtas (≤2 tokens) sem hint de
+    // localização explícito. Ex.: "Assaí" → "Assaí Piracicaba". Evita que o
+    // LocationIQ busque no Brasil inteiro sem contexto geográfico.
     if (liqHints.isEmpty &&
         normalized.kind == QueryKind.establishment &&
         userLat != 0.0 && userLon != 0.0) {
-      final brandTokens = cleanBrand
+      // Base a enriquecer com a cidade. Categoria pura ("hospital", "farmácia",
+      // "academia") não tem marca; se _stripTrailingCategoryWords zerar a base,
+      // usa a query crua para não perder a palavra da categoria — senão a busca
+      // ficaria só " <cidade>", sem o QUÊ procurar.
+      final base = cleanBrand.isNotEmpty ? cleanBrand : query;
+      final baseTokens = base
           .trim()
           .split(RegExp(r'\s+'))
           .where((t) => t.isNotEmpty)
           .length;
-      if (brandTokens <= 2) {
+      if (baseTokens <= 2) {
+        // Mesmo mecanismo do estabelecimento com marca: reverse geocoding
+        // cacheado (last_known_city) via _getUserCity().
         final city = await _getUserCity(userLat, userLon);
         if (city.isNotEmpty) {
-          liqQuery = '$cleanBrand $city';
+          liqQuery = '$base $city';
           Logger.debug('locationiq_city_injected', payload: {
-            'original': cleanBrand,
+            'original': base,
             'enriched': liqQuery,
             'city':     city,
           }, feature: 'geocoding', action: 'city_inject');

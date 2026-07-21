@@ -10,11 +10,13 @@ import 'daos/ble_encounters_dao.dart';
 import 'daos/context_cards_dao.dart';
 import 'daos/environments_dao.dart';
 import 'daos/geocoding_cache_dao.dart';
+import 'daos/shopping_list_items_dao.dart';
 import 'daos/triggers_dao.dart';
 import 'tables/ble_encounters_table.dart';
 import 'tables/context_cards_table.dart';
 import 'tables/environments_table.dart';
 import 'tables/geocoding_cache_table.dart';
+import 'tables/shopping_list_items_table.dart';
 import 'tables/triggers_table.dart';
 
 // Arquivo gerado automaticamente pelo build_runner — não editar manualmente.
@@ -42,6 +44,7 @@ part 'sopro_database.g.dart';
 //   v5 (Sprint F3-1): nova tabela GeocodingCache — cache de resultados de geocoding
 //   v6 (Sprint F3-3): GeocodingCache ganha storagePolicy + placeId; remove expiresAt
 //   v7: title de Triggers deixa de ter comprimento mínimo (permite gatilho sem título)
+//   v8: Environments ganha isMarket; nova tabela ShoppingListItems (lista de compras)
 @DriftDatabase(
   tables: [
     Environments,
@@ -49,6 +52,7 @@ part 'sopro_database.g.dart';
     ContextCards,
     BleEncounters,
     GeocodingCache,
+    ShoppingListItems,
   ],
   daos: [
     EnvironmentsDao,
@@ -56,6 +60,7 @@ part 'sopro_database.g.dart';
     ContextCardsDao,
     BleEncountersDao,
     GeocodingCacheDao,
+    ShoppingListItemsDao,
   ],
 )
 class SoproDatabase extends _$SoproDatabase {
@@ -65,7 +70,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -107,6 +112,11 @@ class SoproDatabase extends _$SoproDatabase {
             // Sem usuários em produção → recria a tabela do zero (não preserva dados).
             await m.deleteTable('triggers');
             await m.createTable(triggers);
+          }
+          if (from < 8) {
+            // v8: lista de compras para ambientes tipo Mercado.
+            await m.createTable(shoppingListItems);
+            await m.addColumn(environments, environments.isMarket);
           }
         },
       );

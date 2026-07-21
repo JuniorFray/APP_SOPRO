@@ -17,6 +17,9 @@ class EnvironmentEntity {
   // Data de criação do registro
   final DateTime createdAt;
 
+  // Marca o ambiente como Mercado (lista de compras no lugar dos gatilhos)
+  final bool isMarket;
+
   const EnvironmentEntity({
     required this.id,
     required this.name,
@@ -24,5 +27,6 @@ class EnvironmentEntity {
     required this.longitude,
     required this.radiusMeters,
     required this.createdAt,
+    required this.isMarket,
   });
 }

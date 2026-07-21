@@ -45,6 +45,7 @@ class EnvironmentRepository implements IEnvironmentRepository {
         longitude: Value(entity.longitude),
         radiusMeters: Value(entity.radiusMeters),
         createdAt: Value(entity.createdAt),
+        isMarket: Value(entity.isMarket),
       ),
     );
   }
@@ -52,6 +53,11 @@ class EnvironmentRepository implements IEnvironmentRepository {
   @override
   Future<void> delete(String id) async {
     await _dao.deleteById(id);
+  }
+
+  @override
+  Future<void> updateIsMarket(String id, {required bool isMarket}) async {
+    await _dao.setIsMarket(id, isMarket: isMarket);
   }
 
   // Converte o row do banco para a entidade pura de domínio
@@ -62,5 +68,6 @@ class EnvironmentRepository implements IEnvironmentRepository {
         longitude: row.longitude,
         radiusMeters: row.radiusMeters,
         createdAt: row.createdAt,
+        isMarket: row.isMarket,
       );
 }

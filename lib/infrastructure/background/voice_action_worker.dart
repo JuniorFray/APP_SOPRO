@@ -121,6 +121,7 @@ Future<void> _createEnvironment(
     longitude:    lon,
     radiusMeters: radius,
     createdAt:    DateTime.now(),
+    isMarket:     false,
   );
 
   await EnvironmentRepository(db.environmentsDao).save(env);

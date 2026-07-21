@@ -18,4 +18,7 @@ abstract interface class IEnvironmentRepository {
 
   // Remove um environment e seus triggers em cascade
   Future<void> delete(String id);
+
+  // Atualiza somente a flag isMarket (corrigir tipo do ambiente a qualquer momento)
+  Future<void> updateIsMarket(String id, {required bool isMarket});
 }

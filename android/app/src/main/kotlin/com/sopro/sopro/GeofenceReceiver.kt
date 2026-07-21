@@ -76,6 +76,11 @@ class GeofenceReceiver : BroadcastReceiver() {
             correlationId = corrId)
 
         // Só processa ENTER — saída não gera notificação
+        // TODO upgrade: quando o evento EXIT for tratado, usar
+        // NotificationManagerCompat.cancel(geofence.requestId.hashCode()) aqui
+        // para remover a notificação de lista de compras ao sair do mercado
+        // (mesmo notification ID usado no ENTER, já calculado via
+        // requestId.hashCode()).
         val transition = event.geofenceTransition
         if (transition != Geofence.GEOFENCE_TRANSITION_ENTER) {
             val transitionName = when (transition) {
@@ -174,31 +179,70 @@ class GeofenceReceiver : BroadcastReceiver() {
             }
             val resolvedEnvName = envName ?: "um local Sopro"
 
-            // Lê o primeiro gatilho ativo do ambiente diretamente do SQLite
-            // (sem Flutter Engine) para construir a mensagem contextual.
-            val triggerTitle = readFirstTriggerTitle(context, geofence.requestId, corrId)
-            val notifBody    = buildNotificationBody(triggerTitle, resolvedEnvName)
+            // Mercado (is_market = 1) → notificação de LISTA DE COMPRAS (InboxStyle,
+            // equivalente nativo do InboxStyleInformation do Dart). Ambiente comum
+            // → notificação de gatilho (comportamento original preservado).
+            val isMarket = readIsMarket(context, geofence.requestId, corrId)
 
-            // Título: título do gatilho (se encontrado) ou "Sopro — envName"
-            val notifTitle = if (!triggerTitle.isNullOrEmpty()) triggerTitle
-                             else "Sopro — $resolvedEnvName"
+            val notification: android.app.Notification
+            // Nome usado só nos logs (título do gatilho, vazio no caso de mercado).
+            val logTriggerName: String
 
-            val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.notification_icon)
-                .setContentTitle(notifTitle)
-                .setContentText(notifBody)
-                // ticker força heads-up em OEMs restritivos (Motorola My UX, etc.)
-                .setTicker("Sopro — $resolvedEnvName")
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setAutoCancel(true)
-                .build()
+            if (isMarket) {
+                // Itens pendentes (não marcados). Lista vazia → não notifica, igual
+                // ao ShowMarketListUseCase do Dart.
+                val items = readPendingShoppingItems(context, geofence.requestId, corrId)
+                if (items.isEmpty()) {
+                    Logger.debug("market_list_empty", feature = "geofence", action = "onReceive",
+                        correlationId = corrId,
+                        payload = if (LoggerConfiguration.debugLogging)
+                            mapOf("environment_name" to resolvedEnvName) else null)
+                    return@forEach
+                }
+                val title = "Lista de compras — $resolvedEnvName"
+                val inbox = NotificationCompat.InboxStyle()
+                    .setBigContentTitle(title)
+                    .setSummaryText("${items.size} itens")
+                items.forEach { inbox.addLine(it) }
+                logTriggerName = ""
+                notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.notification_icon)
+                    .setContentTitle(title)
+                    .setContentText(items.joinToString(", "))
+                    .setStyle(inbox)
+                    .setTicker(title)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setAutoCancel(true)
+                    .build()
+            } else {
+                // Lê o primeiro gatilho ativo do ambiente diretamente do SQLite
+                // (sem Flutter Engine) para construir a mensagem contextual.
+                val triggerTitle = readFirstTriggerTitle(context, geofence.requestId, corrId)
+                val notifBody    = buildNotificationBody(triggerTitle, resolvedEnvName)
+
+                // Título: título do gatilho (se encontrado) ou "Sopro — envName"
+                val notifTitle = if (!triggerTitle.isNullOrEmpty()) triggerTitle
+                                 else "Sopro — $resolvedEnvName"
+                logTriggerName = triggerTitle ?: ""
+
+                notification = NotificationCompat.Builder(context, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.notification_icon)
+                    .setContentTitle(notifTitle)
+                    .setContentText(notifBody)
+                    // ticker força heads-up em OEMs restritivos (Motorola My UX, etc.)
+                    .setTicker("Sopro — $resolvedEnvName")
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setAutoCancel(true)
+                    .build()
+            }
 
             Logger.debug("notification_sending", feature = "geofence", action = "onReceive",
                 correlationId = corrId,
                 payload = if (LoggerConfiguration.debugLogging)
                     mapOf("environment_name" to resolvedEnvName,
-                        "trigger_name" to (triggerTitle ?: ""),
+                        "trigger_name" to logTriggerName,
                         "notification_id" to geofence.requestId.hashCode().toString())
                 else null)
 
@@ -210,7 +254,7 @@ class GeofenceReceiver : BroadcastReceiver() {
                     durationMs = System.currentTimeMillis() - notifStart,
                     payload = if (LoggerConfiguration.debugLogging)
                         mapOf("environment_name" to resolvedEnvName,
-                            "trigger_name" to (triggerTitle ?: ""),
+                            "trigger_name" to logTriggerName,
                             "notification_id" to geofence.requestId.hashCode().toString())
                     else mapOf("notification_id" to geofence.requestId.hashCode().toString()))
             } catch (e: SecurityException) {
@@ -292,6 +336,90 @@ class GeofenceReceiver : BroadcastReceiver() {
             }
         }
         return null
+    }
+
+    // Lê a coluna is_market do ambiente (1 = mercado). Mesmo padrão de acesso ao
+    // SQLite de readFirstTriggerTitle (read-only + finally close). false se ausente.
+    private fun readIsMarket(
+        context: Context,
+        environmentId: String,
+        corrId: String,
+    ): Boolean {
+        val dbPaths = listOf(
+            File(context.filesDir.parentFile, "app_flutter/sopro.db"),
+            context.getDatabasePath("sopro.db"),
+        )
+        for (dbFile in dbPaths) {
+            if (!dbFile.exists()) continue
+            var db: SQLiteDatabase? = null
+            try {
+                db = SQLiteDatabase.openDatabase(
+                    dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY
+                )
+                val cursor = db.rawQuery(
+                    "SELECT is_market FROM environments WHERE id = ? LIMIT 1",
+                    arrayOf(environmentId)
+                )
+                val isMarket = if (cursor.moveToFirst()) cursor.getInt(0) == 1 else false
+                cursor.close()
+                return isMarket
+            } catch (e: Exception) {
+                Logger.warn("sqlite_read_is_market_failed", feature = "geofence",
+                    action = "readIsMarket", correlationId = corrId, exception = e,
+                    payload = mapOf("path" to dbFile.name))
+            } finally {
+                try { db?.close() } catch (e: Exception) {
+                    Logger.warn("sqlite_close_failed", feature = "geofence",
+                        action = "readIsMarket", correlationId = corrId, exception = e)
+                }
+            }
+        }
+        return false
+    }
+
+    // Lê os nomes dos itens de compra PENDENTES (não marcados) do ambiente, na
+    // ordem de inserção — para montar a notificação de lista de compras (InboxStyle).
+    // Mesmo padrão obrigatório: read-only + finally close.
+    private fun readPendingShoppingItems(
+        context: Context,
+        environmentId: String,
+        corrId: String,
+    ): List<String> {
+        val dbPaths = listOf(
+            File(context.filesDir.parentFile, "app_flutter/sopro.db"),
+            context.getDatabasePath("sopro.db"),
+        )
+        for (dbFile in dbPaths) {
+            if (!dbFile.exists()) continue
+            var db: SQLiteDatabase? = null
+            try {
+                db = SQLiteDatabase.openDatabase(
+                    dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY
+                )
+                val cursor = db.rawQuery(
+                    "SELECT name FROM shopping_list_items " +
+                    "WHERE environment_id = ? AND is_checked = 0 " +
+                    "ORDER BY created_at ASC",
+                    arrayOf(environmentId)
+                )
+                val items = ArrayList<String>()
+                while (cursor.moveToNext()) {
+                    cursor.getString(0)?.let { if (it.isNotEmpty()) items.add(it) }
+                }
+                cursor.close()
+                return items
+            } catch (e: Exception) {
+                Logger.warn("sqlite_read_shopping_failed", feature = "geofence",
+                    action = "readPendingShoppingItems", correlationId = corrId, exception = e,
+                    payload = mapOf("path" to dbFile.name))
+            } finally {
+                try { db?.close() } catch (e: Exception) {
+                    Logger.warn("sqlite_close_failed", feature = "geofence",
+                        action = "readPendingShoppingItems", correlationId = corrId, exception = e)
+                }
+            }
+        }
+        return emptyList()
     }
 
     // Constrói a mensagem do corpo da notificação com base nas palavras-chave

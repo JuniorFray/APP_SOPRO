@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/usecases/fire_triggers_use_case.dart';
+import '../../domain/usecases/show_market_list_use_case.dart';
 import '../location/native_location_service.dart';
 import '../logging/core/correlation_manager.dart';
 import '../logging/core/logger.dart';
@@ -31,6 +33,8 @@ import 'native_geofence_service.dart';
 class GeofenceManager {
   final IEnvironmentRepository _envRepo;
   final FireTriggersUseCase _fireTriggers;
+  // Entrada em ambiente tipo Mercado dispara a lista de compras em vez dos gatilhos.
+  final ShowMarketListUseCase _showMarketList;
   final NativeLocationService _locationService;
   final NativeGeofenceService _nativeGeofence;
 
@@ -44,11 +48,20 @@ class GeofenceManager {
   // Reutilizado a cada cálculo para evitar instâncias desnecessárias
   static const _dist = Distance();
 
+  // Throttle da persistência de last_known_lat/lon a partir do stream (RAM só —
+  // não precisa sobreviver a restart). Grava quando passou o intervalo mínimo OU
+  // a posição andou o suficiente desde a última escrita.
+  DateTime? _lastPersistAt;
+  LatLng?   _lastPersistPos;
+  static const _persistMinInterval       = Duration(seconds: 60);
+  static const _persistMinDistanceMeters = 200.0;
+
   bool _running = false;
 
   GeofenceManager(
     this._envRepo,
     this._fireTriggers,
+    this._showMarketList,
     this._locationService,
     this._nativeGeofence,
   );
@@ -156,12 +169,62 @@ class GeofenceManager {
 
   bool get isRunning => _running;
 
+  // Persiste a última posição do stream nas MESMAS chaves lidas pelo
+  // GeocodingService (last_known_lat/lon) — assim a busca de local em qualquer
+  // tela herda um fix fresco, não só a tela Novo Ambiente ou o overlay de voz.
+  //
+  // THROTTLE: o stream emite a cada 2s/10m — granular demais para bias de busca.
+  // Só grava quando passou >= _persistMinInterval OU a posição andou
+  // >= _persistMinDistanceMeters desde a última escrita. Controle só em RAM.
+  Future<void> _persistLastKnown(LatLng pos) async {
+    final now  = DateTime.now();
+    final last = _lastPersistPos;
+    final movedEnough = last == null ||
+        _dist.as(LengthUnit.Meter, last, pos) >= _persistMinDistanceMeters;
+    final timeEnough = _lastPersistAt == null ||
+        now.difference(_lastPersistAt!) >= _persistMinInterval;
+    // Nenhum critério atingido → throttled, não grava (mantém o último valor).
+    if (!movedEnough && !timeEnough) return;
+
+    // Marca ANTES do await para não enfileirar gravações concorrentes do stream.
+    _lastPersistAt  = now;
+    _lastPersistPos = pos;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble('last_known_lat', pos.latitude);
+      await prefs.setDouble('last_known_lon', pos.longitude);
+      Logger.debug(
+        'last_known_location_persisted',
+        payload: {
+          'latitude':  pos.latitude,
+          'longitude': pos.longitude,
+          // Qual critério liberou a escrita (confere throttle nos logs).
+          'trigger':   timeEnough ? 'interval' : 'distance',
+        },
+        feature: 'geofence',
+        action:  'persist_last_known',
+      );
+    } catch (e, st) {
+      Logger.warn(
+        'last_known_persist_failed',
+        exception:  e,
+        stackTrace: st,
+        feature:    'geofence',
+        action:     'persist_last_known',
+      );
+    }
+  }
+
   // Callback do EventChannel — avaliado para cada posição recebida do GPS.
   Future<void> _onPosition(
     ({double latitude, double longitude, double accuracy}) pos,
   ) async {
     final envs    = await _envRepo.getAll();
     final current = LatLng(pos.latitude, pos.longitude);
+
+    // Mantém last_known_lat/lon fresco para o viés de busca em QUALQUER tela.
+    // unawaited: não bloqueia a avaliação de geofences abaixo (throttle interno).
+    unawaited(_persistLastKnown(current));
 
     // Limita o bônus de accuracy a 100 m para evitar disparos com GPS ruim
     final accuracyBonus = pos.accuracy.clamp(0.0, 100.0);
@@ -191,8 +254,12 @@ class GeofenceManager {
           action:        'enter',
           correlationId: CorrelationManager.correlationIdFor('geofence'),
         );
-        // Dispara as notificações dos triggers ativos do ambiente
-        await _fireTriggers(env.id, env.name);
+        // Mercado → lista de compras; ambiente comum → gatilhos ativos.
+        if (env.isMarket) {
+          await _showMarketList(env.id, env.name);
+        } else {
+          await _fireTriggers(env.id, env.name);
+        }
       } else if (!isNowInside && wasInside) {
         _inside.remove(env.id);
         Logger.info(
