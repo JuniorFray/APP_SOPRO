@@ -12,6 +12,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/constants/strings.dart';
@@ -76,7 +77,23 @@ Map<VoiceActionType, ActionHandler> buildActionHandlers(
       }
       // LOG TEMPORARIO CALIBRACAO (Fase 2.1) — ambiente novo sera criado.
       AppLogger.log('new_environment_detected', {'name': name});
-      if (loc == null) {
+      // [loc] só é capturado no início de uma GRAVAÇÃO DE VOZ. Comandos de TEXTO
+      // (composer bar) chegam com loc null. Nesse caso, usa o último GPS conhecido
+      // (last_known_lat/lon, mantido fresco pelo stream do GeofenceManager) — a
+      // mesma fonte do viés de geocoding. Só falha com "sem_gps" se também não
+      // houver last_known (0.0/ausente), como último recurso.
+      var resolvedLoc = loc;
+      var locSource = 'gps_current';
+      if (resolvedLoc == null) {
+        final prefs = await SharedPreferences.getInstance();
+        final lat = prefs.getDouble('last_known_lat') ?? 0.0;
+        final lng = prefs.getDouble('last_known_lon') ?? 0.0;
+        if (lat != 0.0 && lng != 0.0) {
+          resolvedLoc = (lat: lat, lng: lng);
+          locSource = 'last_known';
+        }
+      }
+      if (resolvedLoc == null) {
         // TEMP: remover após calibração da resolução de localização
         AppLogger.log('execution_handler_failed',
             {'action': 'create_environment', 'reason': 'sem_gps'});
@@ -85,15 +102,15 @@ Map<VoiceActionType, ActionHandler> buildActionHandlers(
       // TEMP: remover após auditoria da resolução de localização
       AppLogger.log('environment_coordinates_before_creation', {
         'environment': name,
-        'latitude':    loc.lat,
-        'longitude':   loc.lng,
-        'source':      'gps_current',
+        'latitude':    resolvedLoc.lat,
+        'longitude':   resolvedLoc.lng,
+        'source':      locSource,
       });
       final env = EnvironmentEntity(
         id:           const Uuid().v4(),
         name:         _capitalize(name),
-        latitude:     loc.lat,
-        longitude:    loc.lng,
+        latitude:     resolvedLoc.lat,
+        longitude:    resolvedLoc.lng,
         radiusMeters: 100,
         createdAt:    DateTime.now(),
         isMarket:     false,
@@ -103,7 +120,7 @@ Map<VoiceActionType, ActionHandler> buildActionHandlers(
         'environment': env.name,
         'lat':         env.latitude,
         'lng':         env.longitude,
-        'source':      'gps_current',
+        'source':      locSource,
       });
       // TEMP: remover após auditoria da resolução de localização
       AppLogger.log('environment_repository_save', {
@@ -130,8 +147,8 @@ Map<VoiceActionType, ActionHandler> buildActionHandlers(
       // TEMP: remover após calibração da resolução de localização
       AppLogger.log('location_resolution_result', {
         'resolved':              true,
-        'source':                'gps_current',
-        'used_current_location': true,
+        'source':                locSource,
+        'used_current_location': locSource == 'gps_current',
       });
       return 'ambiente_criado';
     },

@@ -24,6 +24,7 @@ import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../infrastructure/voice/action_handlers_builder.dart';
+import '../../../infrastructure/voice/execution_plan.dart';
 import '../../../infrastructure/voice/voice_action_executor.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/voice_providers.dart';
@@ -50,8 +51,9 @@ class _HomeComposerBarState extends ConsumerState<HomeComposerBar> {
   }
 
   // Estrutura o comando via Gemini (processTextAsPlan) e o executa
-  // (buildActionHandlers). Aceita qualquer comando do assistente, não só
-  // lembretes. Mostra o "reply" natural no SnackBar e limpa o campo ao concluir.
+  // (buildActionHandlers). Checa o ExecutionSummary REAL antes do feedback:
+  // só mostra sucesso quando nenhuma ação falhou; senão mostra erro amigável
+  // (mapeado do reason do handler), nunca a "reply" otimista do Gemini.
   Future<void> _submit() async {
     final text = _ctrl.text.trim();
     if (text.isEmpty || _sending) return;
@@ -66,19 +68,33 @@ class _HomeComposerBarState extends ConsumerState<HomeComposerBar> {
           );
       if (!mounted) return;
 
+      ExecutionSummary? summary;
       if (planRes.plan.isNotEmpty) {
-        await VoiceActionExecutor(buildActionHandlers(ref, context))
+        summary = await VoiceActionExecutor(buildActionHandlers(ref, context))
             .run(planRes.plan);
       }
       if (!mounted) return;
 
-      final reply = planRes.reply.trim();
-      final msg = reply.isNotEmpty
-          ? reply
-          : (planRes.plan.isNotEmpty
-              ? AppStrings.remindersCommandSuccess
-              : AppStrings.remindersCommandError);
-      _ctrl.clear();
+      final String msg;
+      if (summary != null && summary.failed > 0) {
+        // Alguma ação falhou: mensagem de ERRO pelo reason da 1ª falha.
+        final reason = summary.plan.actions
+            .firstWhere((a) => a.status == ActionStatus.failed)
+            .error;
+        msg = AppStrings.composerError(reason);
+      } else if (summary != null && summary.ok > 0) {
+        // Tudo certo: usa a "reply" natural do Gemini (fallback "Feito!").
+        final reply = planRes.reply.trim();
+        msg = reply.isNotEmpty ? reply : AppStrings.remindersCommandSuccess;
+      } else {
+        // Plano vazio (0 ações): follow-up do Gemini ou "não entendi".
+        final reply = planRes.reply.trim();
+        msg = reply.isNotEmpty ? reply : AppStrings.remindersCommandError;
+      }
+
+      // Só limpa o campo quando algo foi de fato concluído — em falha, preserva
+      // o texto para o usuário corrigir/tentar de novo.
+      if (summary == null || summary.failed == 0) _ctrl.clear();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(msg),
         behavior: SnackBarBehavior.floating,

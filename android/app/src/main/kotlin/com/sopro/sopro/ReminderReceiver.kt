@@ -8,8 +8,10 @@ import android.content.Context
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.sopro.sopro.logging.CorrelationManager
 import com.sopro.sopro.logging.Logger
 import com.sopro.sopro.logging.SessionManager
@@ -246,22 +248,38 @@ class ReminderReceiver : BroadcastReceiver() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
 
-        // Modo alarme: fullScreenIntent abre a Activity de tela cheia (quando a
-        // tela está bloqueada/desligada) e mostra a notificação normal caso
-        // contrário. setCategory(ALARM) reforça a prioridade do sistema.
+        // Modo alarme: caminho PRINCIPAL é a ReminderAlarmOverlayService (overlay
+        // TYPE_APPLICATION_OVERLAY), que aparece por cima de tudo mesmo com a tela
+        // desbloqueada e o usuário em outro app — cenário em que o fullScreenIntent
+        // pode ser suprimido pelo sistema (só heads-up). Fallback (overlay negado):
+        // fullScreenIntent + ReminderAlarmActivity, comportamento antigo.
         if (wantsAlarm) {
-            val alarmIntent = Intent(context, ReminderAlarmActivity::class.java).apply {
-                putExtra("title", notifTitle)
-                putExtra("content", notifBody)
-                putExtra("notif_id", notifId)
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_HISTORY
+            if (Settings.canDrawOverlays(context)) {
+                val svcIntent = Intent(context, ReminderAlarmOverlayService::class.java).apply {
+                    putExtra("title", notifTitle)
+                    putExtra("content", notifBody)
+                    putExtra("notif_id", notifId)
+                }
+                try {
+                    // Exceção de exact-alarm permite iniciar FGS a partir do background.
+                    ContextCompat.startForegroundService(context, svcIntent)
+                    Logger.info("alarm_overlay_service_started", feature = "reminders",
+                        action = "showNotification", correlationId = corrId,
+                        payload = mapOf("reminder_id" to reminderId))
+                    // Notificação de fundo segue normal (sem fullScreenIntent — o
+                    // overlay já cobre essa função).
+                } catch (e: Exception) {
+                    // Falha ao iniciar o serviço: cai no fullScreenIntent como rede
+                    // de segurança para não perder o alarme.
+                    Logger.error("alarm_overlay_service_failed", feature = "reminders",
+                        action = "showNotification", correlationId = corrId, exception = e,
+                        payload = mapOf("reminder_id" to reminderId))
+                    attachFullScreenIntent(context, builder, notifId, notifTitle, notifBody)
+                }
+            } else {
+                // Overlay não permitido → fullScreenIntent + Activity (comportamento antigo).
+                attachFullScreenIntent(context, builder, notifId, notifTitle, notifBody)
             }
-            val fullScreenPendingIntent = PendingIntent.getActivity(
-                context, notifId, alarmIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            builder
-                .setCategory(NotificationCompat.CATEGORY_ALARM)
-                .setFullScreenIntent(fullScreenPendingIntent, true)
         }
 
         val notification = builder.build()
@@ -276,5 +294,26 @@ class ReminderReceiver : BroadcastReceiver() {
                 action = "showNotification", correlationId = corrId, exception = e,
                 payload = mapOf("reminder_id" to reminderId))
         }
+    }
+
+    // Anexa o fullScreenIntent (ReminderAlarmActivity) à notificação — caminho de
+    // FALLBACK quando o overlay não está disponível. Comportamento idêntico ao
+    // que existia antes no bloco wantsAlarm.
+    private fun attachFullScreenIntent(
+        context: Context, builder: NotificationCompat.Builder,
+        notifId: Int, title: String, body: String
+    ) {
+        val alarmIntent = Intent(context, ReminderAlarmActivity::class.java).apply {
+            putExtra("title", title)
+            putExtra("content", body)
+            putExtra("notif_id", notifId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_HISTORY
+        }
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context, notifId, alarmIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        builder
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
     }
 }

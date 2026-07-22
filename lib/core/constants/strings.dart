@@ -63,6 +63,46 @@ class AppStrings {
   static const reminderDeleteConfirm = 'Remover este lembrete?';
   static const reminderAlertMinOne = 'Escolha ao menos um tipo de alerta';
 
+  // Composer bar — feedback de FALHA de execução, mapeado do reason do handler.
+  static const composerErrorGeneric = 'Não consegui fazer isso agora.';
+  static const composerErrorNoGps =
+      'Não consegui pegar sua localização. Tente novamente em instantes.';
+  static const composerErrorEnvNotFound = 'Não encontrei esse ambiente.';
+  static const composerErrorReminderNotFound = 'Não encontrei esse lembrete.';
+  static const composerErrorEmptyName = 'Faltou o nome do local.';
+  static const composerErrorEmptyTitle = 'Faltou o que lembrar.';
+
+  // Traduz o reason cru lançado por um handler numa mensagem amigável.
+  // Reason desconhecido cai no genérico.
+  static String composerError(String? reason) {
+    switch (reason) {
+      case 'sem_gps':
+        return composerErrorNoGps;
+      case 'ambiente_nao_encontrado':
+        return composerErrorEnvNotFound;
+      case 'lembrete_nao_encontrado':
+        return composerErrorReminderNotFound;
+      case 'nome_vazio':
+        return composerErrorEmptyName;
+      case 'titulo_vazio':
+        return composerErrorEmptyTitle;
+      default:
+        return composerErrorGeneric;
+    }
+  }
+
+  // Edição de lembrete (bottom sheet)
+  static const reminderEditTitle = 'Editar lembrete';
+  static const reminderTitleLabel = 'Título';
+  static const reminderContentLabel = 'Detalhe (opcional)';
+  static const reminderDateLabel = 'Data';
+  static const reminderTimeLabel = 'Horário';
+  static const reminderRepeatLabel = 'Repetir';
+  static const reminderRepeatNone = 'Não repetir';
+  static const reminderRepeatDaily = 'Todos os dias';
+  static const reminderRepeatWeekly = 'Dias da semana';
+  static const reminderUpdated = 'Lembrete atualizado';
+
   // Environments
   static const addEnvironmentTitle = 'Novo Ambiente';
   static const environmentNameLabel = 'Nome do local';

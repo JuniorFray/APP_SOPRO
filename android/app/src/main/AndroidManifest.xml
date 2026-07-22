@@ -21,6 +21,11 @@
          que acessam o microfone via SpeechRecognizer. Sem essa permissão + foregroundServiceType,
          startForeground() lança MissingForegroundServiceTypeException em targetSdk >= 34. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <!-- Tipo "mediaPlayback" exigido pelo Android 14+ (API 34+) para o
+         ReminderAlarmOverlayService, que toca o som do alarme em foreground.
+         Sem essa permissão + foregroundServiceType, startForeground() lança
+         MissingForegroundServiceTypeException em targetSdk >= 34. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
     <!-- Permite reiniciar o serviço após reboot do dispositivo -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
@@ -158,6 +163,18 @@
         <service
             android:name=".FloatingVoiceService"
             android:foregroundServiceType="microphone"
+            android:exported="false"/>
+
+        <!-- ReminderAlarmOverlayService — caminho PRINCIPAL do alarme (alert_mode
+             alarm/both): mostra a tela de alarme via overlay TYPE_APPLICATION_OVERLAY
+             (mesmo mecanismo do FloatingVoiceService), garantindo que apareça por
+             cima de tudo mesmo com a tela desbloqueada. Requer SYSTEM_ALERT_WINDOW
+             (verificado em runtime; sem ela cai no fullScreenIntent/Activity).
+             foregroundServiceType="mediaPlayback": toca o som do alarme em foreground.
+             android:exported="false": só o próprio app (ReminderReceiver) o inicia. -->
+        <service
+            android:name=".ReminderAlarmOverlayService"
+            android:foregroundServiceType="mediaPlayback"
             android:exported="false"/>
 
         <meta-data
