@@ -13,7 +13,7 @@ class SoproTextField extends StatelessWidget {
   const SoproTextField({
     super.key,
     this.controller,
-    required this.label,
+    this.label,
     this.hint,
     this.prefixIcon,
     this.suffixIcon,
@@ -35,7 +35,7 @@ class SoproTextField extends StatelessWidget {
   });
 
   final TextEditingController? controller;
-  final String label;
+  final String? label;
   final String? hint;
   final Widget? prefixIcon;
   final Widget? suffixIcon;
@@ -154,7 +154,7 @@ class SoproTextField extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  label,
+                  label ?? '',
                   style: AppTypography.bodySmall
                       .copyWith(color: AppColors.textSecondary),
                 ),

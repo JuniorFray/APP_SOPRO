@@ -9,15 +9,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'daos/ble_encounters_dao.dart';
 import 'daos/context_cards_dao.dart';
 import 'daos/environments_dao.dart';
+import 'daos/activity_log_dao.dart';
 import 'daos/geocoding_cache_dao.dart';
+import 'daos/scheduled_reminders_dao.dart';
 import 'daos/shopping_list_items_dao.dart';
 import 'daos/triggers_dao.dart';
+import 'daos/weather_cache_dao.dart';
+import 'tables/activity_log_table.dart';
 import 'tables/ble_encounters_table.dart';
 import 'tables/context_cards_table.dart';
 import 'tables/environments_table.dart';
 import 'tables/geocoding_cache_table.dart';
+import 'tables/scheduled_reminders_table.dart';
 import 'tables/shopping_list_items_table.dart';
 import 'tables/triggers_table.dart';
+import 'tables/weather_cache_table.dart';
+import 'tables/weather_forecast_cache_table.dart';
 
 // Arquivo gerado automaticamente pelo build_runner — não editar manualmente.
 // Execute: dart run build_runner build --delete-conflicting-outputs
@@ -45,6 +52,12 @@ part 'sopro_database.g.dart';
 //   v6 (Sprint F3-3): GeocodingCache ganha storagePolicy + placeId; remove expiresAt
 //   v7: title de Triggers deixa de ter comprimento mínimo (permite gatilho sem título)
 //   v8: Environments ganha isMarket; nova tabela ShoppingListItems (lista de compras)
+//   v9: nova tabela ScheduledReminders — lembretes com horário (repetição opcional)
+//   v10: nova tabela ActivityLogEntries — histórico de atividades ("Atividade Recente")
+//   v11: nova tabela WeatherCacheEntries — cache de clima (TTL 3h)
+//   v12: ScheduledReminders ganha alertMode (notification/alarm/both)
+//   v13: WeatherCacheEntries ganha humidity; nova tabela WeatherForecastCache
+//   v14: WeatherCacheEntries ganha cityName; flush do cache de clima/previsão
 @DriftDatabase(
   tables: [
     Environments,
@@ -53,6 +66,10 @@ part 'sopro_database.g.dart';
     BleEncounters,
     GeocodingCache,
     ShoppingListItems,
+    ScheduledReminders,
+    ActivityLogEntries,
+    WeatherCacheEntries,
+    WeatherForecastCache,
   ],
   daos: [
     EnvironmentsDao,
@@ -61,6 +78,9 @@ part 'sopro_database.g.dart';
     BleEncountersDao,
     GeocodingCacheDao,
     ShoppingListItemsDao,
+    ScheduledRemindersDao,
+    ActivityLogDao,
+    WeatherCacheDao,
   ],
 )
 class SoproDatabase extends _$SoproDatabase {
@@ -70,7 +90,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -117,6 +137,34 @@ class SoproDatabase extends _$SoproDatabase {
             // v8: lista de compras para ambientes tipo Mercado.
             await m.createTable(shoppingListItems);
             await m.addColumn(environments, environments.isMarket);
+          }
+          if (from < 9) {
+            // v9: lembretes com horário (independentes de ambiente/geofence).
+            await m.createTable(scheduledReminders);
+          }
+          if (from < 10) {
+            // v10: histórico de atividades visível ao usuário ("Atividade Recente").
+            await m.createTable(activityLogEntries);
+          }
+          if (from < 11) {
+            // v11: cache de clima (TTL 3h) para o card da Home.
+            await m.createTable(weatherCacheEntries);
+          }
+          if (from < 12) {
+            // v12: modo de alerta por lembrete (notification/alarm/both).
+            await m.addColumn(scheduledReminders, scheduledReminders.alertMode);
+          }
+          if (from < 13) {
+            // v13: umidade no cache de clima + nova tabela de previsão de dias.
+            await m.addColumn(weatherCacheEntries, weatherCacheEntries.humidity);
+            await m.createTable(weatherForecastCache);
+          }
+          if (from < 14) {
+            // v14: nome da cidade no cache de clima. Limpa o cache antigo para
+            // forçar um fetch fresco (humidity/cityName reais) sem esperar o TTL.
+            await m.addColumn(weatherCacheEntries, weatherCacheEntries.cityName);
+            await customStatement('DELETE FROM weather_cache_entries');
+            await customStatement('DELETE FROM weather_forecast_cache');
           }
         },
       );

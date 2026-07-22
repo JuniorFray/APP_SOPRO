@@ -515,11 +515,11 @@ class VoiceService {
       if (AppConstants.geminiApiKey.isEmpty) return VoicePlanResult.empty();
 
       final audioBase64 = base64Encode(audioBytes);
-      // Prompt = assistente + ambientes existentes (nome+ID) + contexto de conversa.
-      // Fase 2.1: usa _buildAssistantEnvContext (foco em reutilizar) em vez do
-      // _buildEnvContext generico do fluxo antigo.
+      // Prompt = assistente + ambientes existentes (nome+ID) + data/hora atual +
+      // contexto de conversa. _dateTimeContext é reaproveitado por processTextAsPlan.
       final prompt = AppConstants.geminiAssistantPrompt +
           _buildAssistantEnvContext(existingEnvironments, existingEnvironmentIds) +
+          _dateTimeContext +
           (contextSummary.isNotEmpty ? '\n$contextSummary' : '');
 
       final sw = Stopwatch()..start();
@@ -582,6 +582,105 @@ class VoiceService {
 
       if (httpStatus != 200) {
         debugPrint('[VoiceService] plan HTTP $httpStatus: $raw');
+        return (null, httpStatus);
+      }
+      return (raw, httpStatus);
+    } finally {
+      client.close();
+    }
+  }
+
+  // Trecho de DATA E HORA ATUAIS (com dia da semana pt-BR) injetado no prompt do
+  // assistente. Compartilhado por processAudioAsPlan e processTextAsPlan — o Gemini
+  // usa isto para resolver "hoje", "amanha", "segunda que vem", "dia 25", etc.
+  String get _dateTimeContext {
+    final now = DateTime.now();
+    const weekdayNames = ['segunda-feira', 'terca-feira', 'quarta-feira',
+        'quinta-feira', 'sexta-feira', 'sabado', 'domingo'];
+    return '\nDATA E HORA ATUAIS: ${now.year}-${now.month.toString().padLeft(2, '0')}'
+        '-${now.day.toString().padLeft(2, '0')} '
+        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')} '
+        '(${weekdayNames[now.weekday - 1]}). '
+        'Use isso para resolver "hoje", "amanha", "essa semana", nomes de dias '
+        'da semana e datas relativas.';
+  }
+
+  // Espelha processAudioAsPlan(), mas o comando JÁ é texto (sem STT/áudio). Usa o
+  // MESMO geminiAssistantPrompt + contexto de ambientes + _dateTimeContext, então
+  // aceita qualquer comando (lembrete/ambiente/gatilho), não só lembretes.
+  Future<VoicePlanResult> processTextAsPlan(
+    String transcript, {
+    List<String> existingEnvironments = const [],
+    List<String> existingEnvironmentIds = const [],
+    String contextSummary = '',
+  }) async {
+    final correlationId = CorrelationManager.beginOperation('voice_text');
+    try {
+      if (transcript.trim().isEmpty) return VoicePlanResult.empty();
+      if (AppConstants.geminiApiKey.isEmpty) return VoicePlanResult.empty();
+
+      final prompt = AppConstants.geminiAssistantPrompt +
+          _buildAssistantEnvContext(existingEnvironments, existingEnvironmentIds) +
+          _dateTimeContext +
+          (contextSummary.isNotEmpty ? '\n$contextSummary' : '');
+
+      final sw = Stopwatch()..start();
+      final (raw, status) = await _sendTextRaw(transcript, prompt);
+      Logger.info('text_plan_debug',
+          payload: {
+            'gemini_http': status,
+            'gemini_duration_ms': sw.elapsedMilliseconds,
+            'raw_len': raw?.length ?? 0,
+          },
+          feature: 'voice', action: 'text_plan',
+          correlationId: correlationId, durationMs: sw.elapsedMilliseconds);
+
+      if (status != 200 || raw == null) return VoicePlanResult.empty();
+      return _parsePlanResponse(raw);
+    } catch (e, st) {
+      Logger.error('text_plan_failed',
+          exception: e, stackTrace: st,
+          feature: 'voice', action: 'text_plan', correlationId: correlationId);
+      return VoicePlanResult.empty();
+    } finally {
+      CorrelationManager.endOperation('voice_text');
+    }
+  }
+
+  // Igual a _sendAudioRaw, mas envia o comando como TEXTO (sem inline_data de
+  // áudio). Mesmo endpoint/config. Devolve (rawJson, httpStatus).
+  Future<(String?, int?)> _sendTextRaw(String userText, String prompt) async {
+    final client = HttpClient();
+    client.connectionTimeout = const Duration(seconds: 30);
+    try {
+      final uri = Uri.parse(
+        '${AppConstants.geminiEndpoint}?key=${AppConstants.geminiApiKey}',
+      );
+      final request = await client.postUrl(uri);
+      request.headers.contentType = ContentType.json;
+
+      final body = jsonEncode({
+        'contents': [
+          {
+            'parts': [
+              {'text': '$prompt\n\nComando do usuario: "$userText"'},
+            ],
+          },
+        ],
+        'generationConfig': {'temperature': 0.2, 'maxOutputTokens': 2048},
+      });
+
+      final bodyBytes = utf8.encode(body);
+      request.contentLength = bodyBytes.length;
+      request.add(bodyBytes);
+
+      final response   = await request.close();
+      final httpStatus = response.statusCode;
+      final respBytes  = await consolidateHttpClientResponseBytes(response);
+      final raw        = utf8.decode(respBytes);
+
+      if (httpStatus != 200) {
+        debugPrint('[VoiceService] text plan HTTP $httpStatus: $raw');
         return (null, httpStatus);
       }
       return (raw, httpStatus);

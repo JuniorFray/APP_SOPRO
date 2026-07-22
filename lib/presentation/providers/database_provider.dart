@@ -4,11 +4,16 @@ import '../../data/database/sopro_database.dart';
 import '../../data/repositories/ble_encounter_repository.dart';
 import '../../data/repositories/context_card_repository.dart';
 import '../../data/repositories/environment_repository.dart';
+import '../../data/repositories/activity_log_repository.dart';
+import '../../data/repositories/scheduled_reminder_repository.dart';
 import '../../data/repositories/shopping_list_repository.dart';
 import '../../data/repositories/trigger_repository.dart';
+import '../../infrastructure/reminders/reminder_scheduler.dart';
+import '../../domain/repositories/i_activity_log_repository.dart';
 import '../../domain/repositories/i_ble_encounter_repository.dart';
 import '../../domain/repositories/i_context_card_repository.dart';
 import '../../domain/repositories/i_environment_repository.dart';
+import '../../domain/repositories/i_scheduled_reminder_repository.dart';
 import '../../domain/repositories/i_shopping_list_repository.dart';
 import '../../domain/repositories/i_trigger_repository.dart';
 
@@ -34,6 +39,18 @@ final triggerRepositoryProvider = Provider<ITriggerRepository>((ref) {
 final shoppingListRepositoryProvider = Provider<IShoppingListRepository>((ref) {
   return ShoppingListRepository(
       ref.watch(databaseProvider).shoppingListItemsDao);
+});
+
+final scheduledReminderRepositoryProvider =
+    Provider<IScheduledReminderRepository>((ref) {
+  return ScheduledReminderRepository(
+    ref.watch(databaseProvider).scheduledRemindersDao,
+    ReminderScheduler(),
+  );
+});
+
+final activityLogRepositoryProvider = Provider<IActivityLogRepository>((ref) {
+  return ActivityLogRepository(ref.watch(databaseProvider).activityLogDao);
 });
 
 final contextCardRepositoryProvider = Provider<IContextCardRepository>((ref) {

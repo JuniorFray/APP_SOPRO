@@ -10,11 +10,15 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_spacing.dart';
+// DEBUG TEMPORÁRIO — imports do motor de lembretes (remover com a seção de debug)
+import '../../../domain/entities/scheduled_reminder_entity.dart';
+import '../../providers/database_provider.dart';
 import '../../widgets/glass_surface.dart';
 
 // URL da tabela de benchmark no Supabase
@@ -625,6 +629,107 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
     });
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // DEBUG TEMPORÁRIO — remover após validar motor de lembretes
+  //
+  // Cria um ScheduledReminder de teste (+2min) via o repositório real, disparando
+  // toda a cadeia: upsert → ReminderScheduler nativo → alarme exato → notificação.
+  // Esta tela é StatefulWidget (não Consumer), então usamos um Consumer local só
+  // para obter o WidgetRef sem converter a tela inteira.
+  Widget _buildDebugRemindersSection() {
+    return Consumer(
+      builder: (context, ref, _) {
+        Future<void> createTest(ReminderRepeatRule rule) async {
+          final when = DateTime.now().add(const Duration(minutes: 2));
+          final repo = ref.read(scheduledReminderRepositoryProvider);
+          await repo.upsert(ScheduledReminderEntity(
+            id: '', // repositório gera UUID se vazio (mesmo padrão dos outros)
+            title: 'Teste de alarme',
+            content: 'Validando disparo com app fechado',
+            scheduledAt: when,
+            repeatRule: rule,
+            repeatDaysOfWeek: const [],
+            isActive: true,
+            createdAt: DateTime.now(),
+          ));
+          if (!context.mounted) return;
+          String p(int n) => n.toString().padLeft(2, '0');
+          final label = '${p(when.day)}/${p(when.month)} '
+              '${p(when.hour)}:${p(when.minute)}:${p(when.second)}';
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Lembrete (${rule.name}) agendado para $label'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ));
+        }
+
+        // Emergência: desativa e cancela o alarme nativo de todo lembrete ativo.
+        // setActive(id, false) chama scheduler.cancelReminder(id) internamente
+        // (cancela no AlarmManager, não só marca o banco) — sem alarme órfão.
+        Future<void> cancelAll() async {
+          final repo = ref.read(scheduledReminderRepositoryProvider);
+          final all = await repo.watchAllActive().first; // snapshot único
+          for (final reminder in all) {
+            await repo.setActive(reminder.id, false);
+          }
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('${all.length} lembretes cancelados'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 4),
+          ));
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'DEBUG — Lembretes (temporário)',
+              style:
+                  TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            ElevatedButton.icon(
+              onPressed: () => createTest(ReminderRepeatRule.none),
+              icon: const Icon(Icons.alarm_add),
+              label: const Text('Criar lembrete de teste (+2min)'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.tealAccent,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.gap14),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            ElevatedButton.icon(
+              onPressed: () => createTest(ReminderRepeatRule.daily),
+              icon: const Icon(Icons.repeat),
+              label: const Text('Criar lembrete diário de teste (+2min)'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.tealAccent,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.gap14),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            // Botão de perigo (vermelho) — cancela tudo, uso emergencial.
+            ElevatedButton.icon(
+              onPressed: cancelAll,
+              icon: const Icon(Icons.notifications_off),
+              label: const Text('Cancelar TODOS os lembretes'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.gap14),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+  // FIM DEBUG TEMPORÁRIO — lembretes
+  // ─────────────────────────────────────────────────────────────────────────────
+
   // ── UI ───────────────────────────────────────────────────────────────────────
 
   @override
@@ -702,6 +807,10 @@ class _GeocoderBenchmarkScreenState extends State<GeocoderBenchmarkScreen> {
             ),
           ),
         ],
+
+        // ─── DEBUG TEMPORÁRIO — remover após validar motor de lembretes ───
+        const SizedBox(height: AppSpacing.xl),
+        _buildDebugRemindersSection(),
 
         // ── Card de resumo após benchmark completo ─────────────────────────
         if (_results.isNotEmpty) ...[

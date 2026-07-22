@@ -16,6 +16,7 @@ import 'infrastructure/background/voice_action_worker.dart';
 import 'presentation/screens/dev/geocoder_benchmark_screen.dart';
 import 'presentation/screens/environment/environment_loader_screen.dart';
 import 'presentation/screens/home/home_screen.dart';
+import 'presentation/screens/shell/main_shell_screen.dart';
 import 'presentation/screens/onboarding/onboarding_screen.dart';
 import 'presentation/screens/profile/profile_screen.dart';
 import 'presentation/screens/settings/settings_screen.dart';
@@ -62,10 +63,11 @@ class SoproApp extends ConsumerWidget {
       // Usado pelo NotificationService ao tratar toques em notificações de trigger.
       navigatorKey: navigatorKey,
 
-      // HomeScreen verifica o onboarding e redireciona se necessário
-      home: const HomeScreen(),
+      // MainShellScreen: bottom nav de 4 abas. Verifica o onboarding e
+      // redireciona se necessário (herdado do antigo HomeScreen).
+      home: const MainShellScreen(),
       routes: {
-        '/home':       (_) => const HomeScreen(),
+        '/home':       (_) => const MainShellScreen(),
         '/onboarding': (_) => const OnboardingScreen(),
         '/profile':    (_) => const ProfileScreen(),
         '/settings':   (_) => const SettingsScreen(),

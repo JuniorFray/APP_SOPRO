@@ -2,8 +2,10 @@ package com.sopro.sopro
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.bluetooth.*
+import android.content.Context
 import android.bluetooth.le.*
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -82,7 +84,8 @@ class MainActivity : FlutterActivity() {
         private const val PREFS_GEOFENCE_NAMES  = GeofenceReceiver.PREFS_NAME
 
         // ── Overlay (botão flutuante de voz) ──────────────────────────────────
-        private const val OVERLAY_CHANNEL  = "com.sopro.sopro/overlay"
+        private const val OVERLAY_CHANNEL   = "com.sopro.sopro/overlay"
+        private const val REMINDERS_CHANNEL = "com.sopro.sopro/reminders"
         private const val PERM_REQUEST_MIC = 1004
         private const val TAG              = "MainActivity"
 
@@ -523,6 +526,69 @@ class MainActivity : FlutterActivity() {
             }
         Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
             payload = mapOf("channel" to GEOFENCE_CHANNEL))
+
+        // ── Lembretes agendados: MethodChannel ────────────────────────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, REMINDERS_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                Logger.debug("method_channel_call", feature = "reminders", action = call.method,
+                    payload = mapOf("channel" to REMINDERS_CHANNEL))
+                when (call.method) {
+                    "scheduleReminder" -> {
+                        val id = call.argument<String>("reminderId") ?: run {
+                            result.error("INVALID_ARGS", "reminderId ausente", null)
+                            return@setMethodCallHandler
+                        }
+                        // Dart int (ms) chega como Long/Integer — Number cobre ambos.
+                        val triggerAt = call.argument<Number>("triggerAtMillis")?.toLong() ?: run {
+                            result.error("INVALID_ARGS", "triggerAtMillis ausente", null)
+                            return@setMethodCallHandler
+                        }
+                        ReminderScheduler.scheduleExact(this, id, triggerAt)
+                        result.success(null)
+                    }
+                    "cancelReminder" -> {
+                        val id = call.argument<String>("reminderId") ?: run {
+                            result.error("INVALID_ARGS", "reminderId ausente", null)
+                            return@setMethodCallHandler
+                        }
+                        ReminderScheduler.cancel(this, id)
+                        result.success(null)
+                    }
+                    "hasExactAlarmPermission" -> {
+                        val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                            am.canScheduleExactAlarms() else true
+                        result.success(granted)
+                    }
+                    "openExactAlarmSettings" -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            val intent = Intent(
+                                Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                Uri.parse("package:$packageName")
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(intent)
+                        }
+                        result.success(null)
+                    }
+                    "scheduleWeatherNotification" -> {
+                        val hour   = call.argument<Number>("hour")?.toInt() ?: 8
+                        val minute = call.argument<Number>("minute")?.toInt() ?: 0
+                        WeatherNotificationScheduler.schedule(this, hour, minute)
+                        result.success(null)
+                    }
+                    "cancelWeatherNotification" -> {
+                        WeatherNotificationScheduler.cancel(this)
+                        result.success(null)
+                    }
+                    else -> {
+                        Logger.warn("method_channel_not_implemented", feature = "reminders",
+                            action = call.method, payload = mapOf("channel" to REMINDERS_CHANNEL))
+                        result.notImplemented()
+                    }
+                }
+            }
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to REMINDERS_CHANNEL))
 
         // ── Geocoder Benchmark Channel ────────────────────────────────────────
         // Canal temporário para testar o Geocoder nativo do Android.

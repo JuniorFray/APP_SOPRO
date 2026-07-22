@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../domain/entities/activity_log_entry_entity.dart';
+import '../../domain/repositories/i_activity_log_repository.dart';
 import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/usecases/fire_triggers_use_case.dart';
 import '../../domain/usecases/show_market_list_use_case.dart';
@@ -37,6 +39,8 @@ class GeofenceManager {
   final ShowMarketListUseCase _showMarketList;
   final NativeLocationService _locationService;
   final NativeGeofenceService _nativeGeofence;
+  // Histórico visível ao usuário — grava "Entrou em X" ao cruzar um geofence.
+  final IActivityLogRepository _activityLog;
 
   // Subscription ao stream de posições — cancelada em stop()
   StreamSubscription<({double latitude, double longitude, double accuracy})>?
@@ -64,6 +68,7 @@ class GeofenceManager {
     this._showMarketList,
     this._locationService,
     this._nativeGeofence,
+    this._activityLog,
   );
 
   /// Verifica/solicita permissão, registra geofences nativos e assina o GPS stream.
@@ -253,6 +258,13 @@ class GeofenceManager {
           feature:       'geofence',
           action:        'enter',
           correlationId: CorrelationManager.correlationIdFor('geofence'),
+        );
+        // Histórico visível ao usuário ("Atividade Recente").
+        await _activityLog.log(
+          type:          ActivityType.environmentEntered,
+          title:         'Entrou em ${env.name}',
+          subtitle:      'Raio de ${env.radiusMeters.toInt()}m',
+          environmentId: env.id,
         );
         // Mercado → lista de compras; ambiente comum → gatilhos ativos.
         if (env.isMarket) {

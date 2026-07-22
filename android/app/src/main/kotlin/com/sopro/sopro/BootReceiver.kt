@@ -99,6 +99,33 @@ class BootReceiver : BroadcastReceiver() {
                     Logger.debug("no_environments_to_register", feature = "boot",
                         action = "onReceive", correlationId = corrId)
                 }
+
+                // Reagenda lembretes ativos — o Android descarta alarmes exatos no
+                // reboot, igual aos geofences. Sem isso, lembretes pendentes nunca
+                // disparam até o app ser reaberto.
+                val reminders = readActiveRemindersFromDb(context, corrId)
+                reminders.forEach { r ->
+                    ReminderScheduler.scheduleExact(context, r.id, r.triggerAt)
+                }
+                if (reminders.isNotEmpty()) {
+                    Logger.info("reminders_boot_rescheduled", feature = "boot",
+                        action = "onReceive", correlationId = corrId,
+                        payload = mapOf("count" to reminders.size.toString()))
+                }
+
+                // Reagenda a notificação diária de clima se estava ativa — o
+                // Android descarta alarmes exatos no reboot, igual aos lembretes.
+                val fprefs = context.getSharedPreferences(
+                    "FlutterSharedPreferences", Context.MODE_PRIVATE)
+                if (fprefs.getBoolean("flutter.weather_notification_enabled", false)) {
+                    val hour = fprefs.getLong("flutter.weather_notification_hour", 8L).toInt()
+                    val minute = fprefs.getLong("flutter.weather_notification_minute", 0L).toInt()
+                    WeatherNotificationScheduler.schedule(context, hour, minute)
+                    Logger.info("weather_notification_boot_rescheduled", feature = "boot",
+                        action = "onReceive", correlationId = corrId,
+                        payload = mapOf("hour" to hour.toString(), "minute" to minute.toString()))
+                }
+
                 Logger.info("receiver_finished", feature = "boot", action = "onReceive",
                     correlationId = corrId,
                     durationMs = System.currentTimeMillis() - receiverStart,
@@ -174,6 +201,41 @@ class BootReceiver : BroadcastReceiver() {
             Logger.error("sqlite_read_environments_failed", feature = "boot",
                 action = "readEnvironmentsFromDb", correlationId = corrId, exception = e,
                 durationMs = System.currentTimeMillis() - dbStart)
+        }
+        return rows
+    }
+
+    // Lê os lembretes ATIVOS do banco (id + scheduled_at) para reagendar após
+    // reboot. Mesmo padrão de readEnvironmentsFromDb (READONLY + finally close).
+    private fun readActiveRemindersFromDb(context: Context, corrId: String): List<ReminderRow> {
+        val candidates = listOf(
+            File(context.filesDir.parentFile, "app_flutter/sopro.db"),
+            File(context.filesDir, "sopro.db"),
+            context.getDatabasePath("sopro.db"),
+        )
+        val dbFile = candidates.firstOrNull { it.exists() } ?: return emptyList()
+
+        val rows = mutableListOf<ReminderRow>()
+        var db: SQLiteDatabase? = null
+        try {
+            db = SQLiteDatabase.openDatabase(
+                dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            db.rawQuery(
+                "SELECT id, scheduled_at FROM scheduled_reminders WHERE is_active = 1",
+                null
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    // Drift grava scheduled_at em SEGUNDOS; scheduleExact espera MILLIS.
+                    rows.add(ReminderRow(
+                        id = cursor.getString(0),
+                        triggerAt = cursor.getLong(1) * 1000L))
+                }
+            }
+        } catch (e: Exception) {
+            Logger.warn("sqlite_read_reminders_failed", feature = "boot",
+                action = "readActiveRemindersFromDb", correlationId = corrId, exception = e)
+        } finally {
+            try { db?.close() } catch (_: Exception) {}
         }
         return rows
     }
@@ -301,5 +363,11 @@ class BootReceiver : BroadcastReceiver() {
         val lat:    Double,
         val lng:    Double,
         val radius: Float,
+    )
+
+    // Dados mínimos de um lembrete para reagendar o alarme após reboot
+    data class ReminderRow(
+        val id:        String,
+        val triggerAt: Long,
     )
 }

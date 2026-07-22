@@ -2416,6 +2416,1658 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
   }
 }
 
+class $ScheduledRemindersTable extends ScheduledReminders
+    with TableInfo<$ScheduledRemindersTable, ScheduledReminder> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ScheduledRemindersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _titleMeta = const VerificationMeta('title');
+  @override
+  late final GeneratedColumn<String> title = GeneratedColumn<String>(
+      'title', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 200),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _contentMeta =
+      const VerificationMeta('content');
+  @override
+  late final GeneratedColumn<String> content = GeneratedColumn<String>(
+      'content', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _scheduledAtMeta =
+      const VerificationMeta('scheduledAt');
+  @override
+  late final GeneratedColumn<DateTime> scheduledAt = GeneratedColumn<DateTime>(
+      'scheduled_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _repeatRuleMeta =
+      const VerificationMeta('repeatRule');
+  @override
+  late final GeneratedColumn<String> repeatRule = GeneratedColumn<String>(
+      'repeat_rule', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('none'));
+  static const VerificationMeta _repeatDaysOfWeekMeta =
+      const VerificationMeta('repeatDaysOfWeek');
+  @override
+  late final GeneratedColumn<String> repeatDaysOfWeek = GeneratedColumn<String>(
+      'repeat_days_of_week', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _isActiveMeta =
+      const VerificationMeta('isActive');
+  @override
+  late final GeneratedColumn<bool> isActive = GeneratedColumn<bool>(
+      'is_active', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_active" IN (0, 1))'),
+      defaultValue: const Constant(true));
+  static const VerificationMeta _alertModeMeta =
+      const VerificationMeta('alertMode');
+  @override
+  late final GeneratedColumn<String> alertMode = GeneratedColumn<String>(
+      'alert_mode', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('notification'));
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        title,
+        content,
+        scheduledAt,
+        repeatRule,
+        repeatDaysOfWeek,
+        isActive,
+        alertMode,
+        createdAt
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'scheduled_reminders';
+  @override
+  VerificationContext validateIntegrity(Insertable<ScheduledReminder> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('title')) {
+      context.handle(
+          _titleMeta, title.isAcceptableOrUnknown(data['title']!, _titleMeta));
+    } else if (isInserting) {
+      context.missing(_titleMeta);
+    }
+    if (data.containsKey('content')) {
+      context.handle(_contentMeta,
+          content.isAcceptableOrUnknown(data['content']!, _contentMeta));
+    }
+    if (data.containsKey('scheduled_at')) {
+      context.handle(
+          _scheduledAtMeta,
+          scheduledAt.isAcceptableOrUnknown(
+              data['scheduled_at']!, _scheduledAtMeta));
+    } else if (isInserting) {
+      context.missing(_scheduledAtMeta);
+    }
+    if (data.containsKey('repeat_rule')) {
+      context.handle(
+          _repeatRuleMeta,
+          repeatRule.isAcceptableOrUnknown(
+              data['repeat_rule']!, _repeatRuleMeta));
+    }
+    if (data.containsKey('repeat_days_of_week')) {
+      context.handle(
+          _repeatDaysOfWeekMeta,
+          repeatDaysOfWeek.isAcceptableOrUnknown(
+              data['repeat_days_of_week']!, _repeatDaysOfWeekMeta));
+    }
+    if (data.containsKey('is_active')) {
+      context.handle(_isActiveMeta,
+          isActive.isAcceptableOrUnknown(data['is_active']!, _isActiveMeta));
+    }
+    if (data.containsKey('alert_mode')) {
+      context.handle(_alertModeMeta,
+          alertMode.isAcceptableOrUnknown(data['alert_mode']!, _alertModeMeta));
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  ScheduledReminder map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ScheduledReminder(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      title: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}title'])!,
+      content: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}content'])!,
+      scheduledAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}scheduled_at'])!,
+      repeatRule: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}repeat_rule'])!,
+      repeatDaysOfWeek: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}repeat_days_of_week'])!,
+      isActive: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_active'])!,
+      alertMode: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}alert_mode'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+    );
+  }
+
+  @override
+  $ScheduledRemindersTable createAlias(String alias) {
+    return $ScheduledRemindersTable(attachedDatabase, alias);
+  }
+}
+
+class ScheduledReminder extends DataClass
+    implements Insertable<ScheduledReminder> {
+  final String id;
+  final String title;
+  final String content;
+  final DateTime scheduledAt;
+  final String repeatRule;
+  final String repeatDaysOfWeek;
+  final bool isActive;
+  final String alertMode;
+  final DateTime createdAt;
+  const ScheduledReminder(
+      {required this.id,
+      required this.title,
+      required this.content,
+      required this.scheduledAt,
+      required this.repeatRule,
+      required this.repeatDaysOfWeek,
+      required this.isActive,
+      required this.alertMode,
+      required this.createdAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['title'] = Variable<String>(title);
+    map['content'] = Variable<String>(content);
+    map['scheduled_at'] = Variable<DateTime>(scheduledAt);
+    map['repeat_rule'] = Variable<String>(repeatRule);
+    map['repeat_days_of_week'] = Variable<String>(repeatDaysOfWeek);
+    map['is_active'] = Variable<bool>(isActive);
+    map['alert_mode'] = Variable<String>(alertMode);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  ScheduledRemindersCompanion toCompanion(bool nullToAbsent) {
+    return ScheduledRemindersCompanion(
+      id: Value(id),
+      title: Value(title),
+      content: Value(content),
+      scheduledAt: Value(scheduledAt),
+      repeatRule: Value(repeatRule),
+      repeatDaysOfWeek: Value(repeatDaysOfWeek),
+      isActive: Value(isActive),
+      alertMode: Value(alertMode),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory ScheduledReminder.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ScheduledReminder(
+      id: serializer.fromJson<String>(json['id']),
+      title: serializer.fromJson<String>(json['title']),
+      content: serializer.fromJson<String>(json['content']),
+      scheduledAt: serializer.fromJson<DateTime>(json['scheduledAt']),
+      repeatRule: serializer.fromJson<String>(json['repeatRule']),
+      repeatDaysOfWeek: serializer.fromJson<String>(json['repeatDaysOfWeek']),
+      isActive: serializer.fromJson<bool>(json['isActive']),
+      alertMode: serializer.fromJson<String>(json['alertMode']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'title': serializer.toJson<String>(title),
+      'content': serializer.toJson<String>(content),
+      'scheduledAt': serializer.toJson<DateTime>(scheduledAt),
+      'repeatRule': serializer.toJson<String>(repeatRule),
+      'repeatDaysOfWeek': serializer.toJson<String>(repeatDaysOfWeek),
+      'isActive': serializer.toJson<bool>(isActive),
+      'alertMode': serializer.toJson<String>(alertMode),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  ScheduledReminder copyWith(
+          {String? id,
+          String? title,
+          String? content,
+          DateTime? scheduledAt,
+          String? repeatRule,
+          String? repeatDaysOfWeek,
+          bool? isActive,
+          String? alertMode,
+          DateTime? createdAt}) =>
+      ScheduledReminder(
+        id: id ?? this.id,
+        title: title ?? this.title,
+        content: content ?? this.content,
+        scheduledAt: scheduledAt ?? this.scheduledAt,
+        repeatRule: repeatRule ?? this.repeatRule,
+        repeatDaysOfWeek: repeatDaysOfWeek ?? this.repeatDaysOfWeek,
+        isActive: isActive ?? this.isActive,
+        alertMode: alertMode ?? this.alertMode,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  ScheduledReminder copyWithCompanion(ScheduledRemindersCompanion data) {
+    return ScheduledReminder(
+      id: data.id.present ? data.id.value : this.id,
+      title: data.title.present ? data.title.value : this.title,
+      content: data.content.present ? data.content.value : this.content,
+      scheduledAt:
+          data.scheduledAt.present ? data.scheduledAt.value : this.scheduledAt,
+      repeatRule:
+          data.repeatRule.present ? data.repeatRule.value : this.repeatRule,
+      repeatDaysOfWeek: data.repeatDaysOfWeek.present
+          ? data.repeatDaysOfWeek.value
+          : this.repeatDaysOfWeek,
+      isActive: data.isActive.present ? data.isActive.value : this.isActive,
+      alertMode: data.alertMode.present ? data.alertMode.value : this.alertMode,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ScheduledReminder(')
+          ..write('id: $id, ')
+          ..write('title: $title, ')
+          ..write('content: $content, ')
+          ..write('scheduledAt: $scheduledAt, ')
+          ..write('repeatRule: $repeatRule, ')
+          ..write('repeatDaysOfWeek: $repeatDaysOfWeek, ')
+          ..write('isActive: $isActive, ')
+          ..write('alertMode: $alertMode, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, title, content, scheduledAt, repeatRule,
+      repeatDaysOfWeek, isActive, alertMode, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ScheduledReminder &&
+          other.id == this.id &&
+          other.title == this.title &&
+          other.content == this.content &&
+          other.scheduledAt == this.scheduledAt &&
+          other.repeatRule == this.repeatRule &&
+          other.repeatDaysOfWeek == this.repeatDaysOfWeek &&
+          other.isActive == this.isActive &&
+          other.alertMode == this.alertMode &&
+          other.createdAt == this.createdAt);
+}
+
+class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
+  final Value<String> id;
+  final Value<String> title;
+  final Value<String> content;
+  final Value<DateTime> scheduledAt;
+  final Value<String> repeatRule;
+  final Value<String> repeatDaysOfWeek;
+  final Value<bool> isActive;
+  final Value<String> alertMode;
+  final Value<DateTime> createdAt;
+  final Value<int> rowid;
+  const ScheduledRemindersCompanion({
+    this.id = const Value.absent(),
+    this.title = const Value.absent(),
+    this.content = const Value.absent(),
+    this.scheduledAt = const Value.absent(),
+    this.repeatRule = const Value.absent(),
+    this.repeatDaysOfWeek = const Value.absent(),
+    this.isActive = const Value.absent(),
+    this.alertMode = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ScheduledRemindersCompanion.insert({
+    required String id,
+    required String title,
+    this.content = const Value.absent(),
+    required DateTime scheduledAt,
+    this.repeatRule = const Value.absent(),
+    this.repeatDaysOfWeek = const Value.absent(),
+    this.isActive = const Value.absent(),
+    this.alertMode = const Value.absent(),
+    required DateTime createdAt,
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        title = Value(title),
+        scheduledAt = Value(scheduledAt),
+        createdAt = Value(createdAt);
+  static Insertable<ScheduledReminder> custom({
+    Expression<String>? id,
+    Expression<String>? title,
+    Expression<String>? content,
+    Expression<DateTime>? scheduledAt,
+    Expression<String>? repeatRule,
+    Expression<String>? repeatDaysOfWeek,
+    Expression<bool>? isActive,
+    Expression<String>? alertMode,
+    Expression<DateTime>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (title != null) 'title': title,
+      if (content != null) 'content': content,
+      if (scheduledAt != null) 'scheduled_at': scheduledAt,
+      if (repeatRule != null) 'repeat_rule': repeatRule,
+      if (repeatDaysOfWeek != null) 'repeat_days_of_week': repeatDaysOfWeek,
+      if (isActive != null) 'is_active': isActive,
+      if (alertMode != null) 'alert_mode': alertMode,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ScheduledRemindersCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? title,
+      Value<String>? content,
+      Value<DateTime>? scheduledAt,
+      Value<String>? repeatRule,
+      Value<String>? repeatDaysOfWeek,
+      Value<bool>? isActive,
+      Value<String>? alertMode,
+      Value<DateTime>? createdAt,
+      Value<int>? rowid}) {
+    return ScheduledRemindersCompanion(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      content: content ?? this.content,
+      scheduledAt: scheduledAt ?? this.scheduledAt,
+      repeatRule: repeatRule ?? this.repeatRule,
+      repeatDaysOfWeek: repeatDaysOfWeek ?? this.repeatDaysOfWeek,
+      isActive: isActive ?? this.isActive,
+      alertMode: alertMode ?? this.alertMode,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (title.present) {
+      map['title'] = Variable<String>(title.value);
+    }
+    if (content.present) {
+      map['content'] = Variable<String>(content.value);
+    }
+    if (scheduledAt.present) {
+      map['scheduled_at'] = Variable<DateTime>(scheduledAt.value);
+    }
+    if (repeatRule.present) {
+      map['repeat_rule'] = Variable<String>(repeatRule.value);
+    }
+    if (repeatDaysOfWeek.present) {
+      map['repeat_days_of_week'] = Variable<String>(repeatDaysOfWeek.value);
+    }
+    if (isActive.present) {
+      map['is_active'] = Variable<bool>(isActive.value);
+    }
+    if (alertMode.present) {
+      map['alert_mode'] = Variable<String>(alertMode.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ScheduledRemindersCompanion(')
+          ..write('id: $id, ')
+          ..write('title: $title, ')
+          ..write('content: $content, ')
+          ..write('scheduledAt: $scheduledAt, ')
+          ..write('repeatRule: $repeatRule, ')
+          ..write('repeatDaysOfWeek: $repeatDaysOfWeek, ')
+          ..write('isActive: $isActive, ')
+          ..write('alertMode: $alertMode, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ActivityLogEntriesTable extends ActivityLogEntries
+    with TableInfo<$ActivityLogEntriesTable, ActivityLogEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ActivityLogEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _typeMeta = const VerificationMeta('type');
+  @override
+  late final GeneratedColumn<String> type = GeneratedColumn<String>(
+      'type', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _titleMeta = const VerificationMeta('title');
+  @override
+  late final GeneratedColumn<String> title = GeneratedColumn<String>(
+      'title', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _subtitleMeta =
+      const VerificationMeta('subtitle');
+  @override
+  late final GeneratedColumn<String> subtitle = GeneratedColumn<String>(
+      'subtitle', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _environmentIdMeta =
+      const VerificationMeta('environmentId');
+  @override
+  late final GeneratedColumn<String> environmentId = GeneratedColumn<String>(
+      'environment_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, type, title, subtitle, environmentId, createdAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'activity_log_entries';
+  @override
+  VerificationContext validateIntegrity(Insertable<ActivityLogEntry> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('type')) {
+      context.handle(
+          _typeMeta, type.isAcceptableOrUnknown(data['type']!, _typeMeta));
+    } else if (isInserting) {
+      context.missing(_typeMeta);
+    }
+    if (data.containsKey('title')) {
+      context.handle(
+          _titleMeta, title.isAcceptableOrUnknown(data['title']!, _titleMeta));
+    } else if (isInserting) {
+      context.missing(_titleMeta);
+    }
+    if (data.containsKey('subtitle')) {
+      context.handle(_subtitleMeta,
+          subtitle.isAcceptableOrUnknown(data['subtitle']!, _subtitleMeta));
+    }
+    if (data.containsKey('environment_id')) {
+      context.handle(
+          _environmentIdMeta,
+          environmentId.isAcceptableOrUnknown(
+              data['environment_id']!, _environmentIdMeta));
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  ActivityLogEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ActivityLogEntry(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      type: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}type'])!,
+      title: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}title'])!,
+      subtitle: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}subtitle'])!,
+      environmentId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}environment_id']),
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+    );
+  }
+
+  @override
+  $ActivityLogEntriesTable createAlias(String alias) {
+    return $ActivityLogEntriesTable(attachedDatabase, alias);
+  }
+}
+
+class ActivityLogEntry extends DataClass
+    implements Insertable<ActivityLogEntry> {
+  final String id;
+  final String type;
+  final String title;
+  final String subtitle;
+  final String? environmentId;
+  final DateTime createdAt;
+  const ActivityLogEntry(
+      {required this.id,
+      required this.type,
+      required this.title,
+      required this.subtitle,
+      this.environmentId,
+      required this.createdAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['type'] = Variable<String>(type);
+    map['title'] = Variable<String>(title);
+    map['subtitle'] = Variable<String>(subtitle);
+    if (!nullToAbsent || environmentId != null) {
+      map['environment_id'] = Variable<String>(environmentId);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  ActivityLogEntriesCompanion toCompanion(bool nullToAbsent) {
+    return ActivityLogEntriesCompanion(
+      id: Value(id),
+      type: Value(type),
+      title: Value(title),
+      subtitle: Value(subtitle),
+      environmentId: environmentId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(environmentId),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory ActivityLogEntry.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ActivityLogEntry(
+      id: serializer.fromJson<String>(json['id']),
+      type: serializer.fromJson<String>(json['type']),
+      title: serializer.fromJson<String>(json['title']),
+      subtitle: serializer.fromJson<String>(json['subtitle']),
+      environmentId: serializer.fromJson<String?>(json['environmentId']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'type': serializer.toJson<String>(type),
+      'title': serializer.toJson<String>(title),
+      'subtitle': serializer.toJson<String>(subtitle),
+      'environmentId': serializer.toJson<String?>(environmentId),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  ActivityLogEntry copyWith(
+          {String? id,
+          String? type,
+          String? title,
+          String? subtitle,
+          Value<String?> environmentId = const Value.absent(),
+          DateTime? createdAt}) =>
+      ActivityLogEntry(
+        id: id ?? this.id,
+        type: type ?? this.type,
+        title: title ?? this.title,
+        subtitle: subtitle ?? this.subtitle,
+        environmentId:
+            environmentId.present ? environmentId.value : this.environmentId,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  ActivityLogEntry copyWithCompanion(ActivityLogEntriesCompanion data) {
+    return ActivityLogEntry(
+      id: data.id.present ? data.id.value : this.id,
+      type: data.type.present ? data.type.value : this.type,
+      title: data.title.present ? data.title.value : this.title,
+      subtitle: data.subtitle.present ? data.subtitle.value : this.subtitle,
+      environmentId: data.environmentId.present
+          ? data.environmentId.value
+          : this.environmentId,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ActivityLogEntry(')
+          ..write('id: $id, ')
+          ..write('type: $type, ')
+          ..write('title: $title, ')
+          ..write('subtitle: $subtitle, ')
+          ..write('environmentId: $environmentId, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, type, title, subtitle, environmentId, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ActivityLogEntry &&
+          other.id == this.id &&
+          other.type == this.type &&
+          other.title == this.title &&
+          other.subtitle == this.subtitle &&
+          other.environmentId == this.environmentId &&
+          other.createdAt == this.createdAt);
+}
+
+class ActivityLogEntriesCompanion extends UpdateCompanion<ActivityLogEntry> {
+  final Value<String> id;
+  final Value<String> type;
+  final Value<String> title;
+  final Value<String> subtitle;
+  final Value<String?> environmentId;
+  final Value<DateTime> createdAt;
+  final Value<int> rowid;
+  const ActivityLogEntriesCompanion({
+    this.id = const Value.absent(),
+    this.type = const Value.absent(),
+    this.title = const Value.absent(),
+    this.subtitle = const Value.absent(),
+    this.environmentId = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ActivityLogEntriesCompanion.insert({
+    required String id,
+    required String type,
+    required String title,
+    this.subtitle = const Value.absent(),
+    this.environmentId = const Value.absent(),
+    required DateTime createdAt,
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        type = Value(type),
+        title = Value(title),
+        createdAt = Value(createdAt);
+  static Insertable<ActivityLogEntry> custom({
+    Expression<String>? id,
+    Expression<String>? type,
+    Expression<String>? title,
+    Expression<String>? subtitle,
+    Expression<String>? environmentId,
+    Expression<DateTime>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (type != null) 'type': type,
+      if (title != null) 'title': title,
+      if (subtitle != null) 'subtitle': subtitle,
+      if (environmentId != null) 'environment_id': environmentId,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ActivityLogEntriesCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? type,
+      Value<String>? title,
+      Value<String>? subtitle,
+      Value<String?>? environmentId,
+      Value<DateTime>? createdAt,
+      Value<int>? rowid}) {
+    return ActivityLogEntriesCompanion(
+      id: id ?? this.id,
+      type: type ?? this.type,
+      title: title ?? this.title,
+      subtitle: subtitle ?? this.subtitle,
+      environmentId: environmentId ?? this.environmentId,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (type.present) {
+      map['type'] = Variable<String>(type.value);
+    }
+    if (title.present) {
+      map['title'] = Variable<String>(title.value);
+    }
+    if (subtitle.present) {
+      map['subtitle'] = Variable<String>(subtitle.value);
+    }
+    if (environmentId.present) {
+      map['environment_id'] = Variable<String>(environmentId.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ActivityLogEntriesCompanion(')
+          ..write('id: $id, ')
+          ..write('type: $type, ')
+          ..write('title: $title, ')
+          ..write('subtitle: $subtitle, ')
+          ..write('environmentId: $environmentId, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WeatherCacheEntriesTable extends WeatherCacheEntries
+    with TableInfo<$WeatherCacheEntriesTable, WeatherCacheEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WeatherCacheEntriesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _latMeta = const VerificationMeta('lat');
+  @override
+  late final GeneratedColumn<double> lat = GeneratedColumn<double>(
+      'lat', aliasedName, false,
+      type: DriftSqlType.double, requiredDuringInsert: true);
+  static const VerificationMeta _lonMeta = const VerificationMeta('lon');
+  @override
+  late final GeneratedColumn<double> lon = GeneratedColumn<double>(
+      'lon', aliasedName, false,
+      type: DriftSqlType.double, requiredDuringInsert: true);
+  static const VerificationMeta _tempCelsiusMeta =
+      const VerificationMeta('tempCelsius');
+  @override
+  late final GeneratedColumn<double> tempCelsius = GeneratedColumn<double>(
+      'temp_celsius', aliasedName, false,
+      type: DriftSqlType.double, requiredDuringInsert: true);
+  static const VerificationMeta _conditionMeta =
+      const VerificationMeta('condition');
+  @override
+  late final GeneratedColumn<String> condition = GeneratedColumn<String>(
+      'condition', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _descriptionMeta =
+      const VerificationMeta('description');
+  @override
+  late final GeneratedColumn<String> description = GeneratedColumn<String>(
+      'description', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _iconCodeMeta =
+      const VerificationMeta('iconCode');
+  @override
+  late final GeneratedColumn<String> iconCode = GeneratedColumn<String>(
+      'icon_code', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _humidityMeta =
+      const VerificationMeta('humidity');
+  @override
+  late final GeneratedColumn<int> humidity = GeneratedColumn<int>(
+      'humidity', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _cityNameMeta =
+      const VerificationMeta('cityName');
+  @override
+  late final GeneratedColumn<String> cityName = GeneratedColumn<String>(
+      'city_name', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _fetchedAtMeta =
+      const VerificationMeta('fetchedAt');
+  @override
+  late final GeneratedColumn<int> fetchedAt = GeneratedColumn<int>(
+      'fetched_at', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _expiresAtMeta =
+      const VerificationMeta('expiresAt');
+  @override
+  late final GeneratedColumn<int> expiresAt = GeneratedColumn<int>(
+      'expires_at', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        lat,
+        lon,
+        tempCelsius,
+        condition,
+        description,
+        iconCode,
+        humidity,
+        cityName,
+        fetchedAt,
+        expiresAt
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'weather_cache_entries';
+  @override
+  VerificationContext validateIntegrity(Insertable<WeatherCacheEntry> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('lat')) {
+      context.handle(
+          _latMeta, lat.isAcceptableOrUnknown(data['lat']!, _latMeta));
+    } else if (isInserting) {
+      context.missing(_latMeta);
+    }
+    if (data.containsKey('lon')) {
+      context.handle(
+          _lonMeta, lon.isAcceptableOrUnknown(data['lon']!, _lonMeta));
+    } else if (isInserting) {
+      context.missing(_lonMeta);
+    }
+    if (data.containsKey('temp_celsius')) {
+      context.handle(
+          _tempCelsiusMeta,
+          tempCelsius.isAcceptableOrUnknown(
+              data['temp_celsius']!, _tempCelsiusMeta));
+    } else if (isInserting) {
+      context.missing(_tempCelsiusMeta);
+    }
+    if (data.containsKey('condition')) {
+      context.handle(_conditionMeta,
+          condition.isAcceptableOrUnknown(data['condition']!, _conditionMeta));
+    } else if (isInserting) {
+      context.missing(_conditionMeta);
+    }
+    if (data.containsKey('description')) {
+      context.handle(
+          _descriptionMeta,
+          description.isAcceptableOrUnknown(
+              data['description']!, _descriptionMeta));
+    } else if (isInserting) {
+      context.missing(_descriptionMeta);
+    }
+    if (data.containsKey('icon_code')) {
+      context.handle(_iconCodeMeta,
+          iconCode.isAcceptableOrUnknown(data['icon_code']!, _iconCodeMeta));
+    } else if (isInserting) {
+      context.missing(_iconCodeMeta);
+    }
+    if (data.containsKey('humidity')) {
+      context.handle(_humidityMeta,
+          humidity.isAcceptableOrUnknown(data['humidity']!, _humidityMeta));
+    }
+    if (data.containsKey('city_name')) {
+      context.handle(_cityNameMeta,
+          cityName.isAcceptableOrUnknown(data['city_name']!, _cityNameMeta));
+    }
+    if (data.containsKey('fetched_at')) {
+      context.handle(_fetchedAtMeta,
+          fetchedAt.isAcceptableOrUnknown(data['fetched_at']!, _fetchedAtMeta));
+    } else if (isInserting) {
+      context.missing(_fetchedAtMeta);
+    }
+    if (data.containsKey('expires_at')) {
+      context.handle(_expiresAtMeta,
+          expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta));
+    } else if (isInserting) {
+      context.missing(_expiresAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WeatherCacheEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WeatherCacheEntry(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      lat: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}lat'])!,
+      lon: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}lon'])!,
+      tempCelsius: attachedDatabase.typeMapping
+          .read(DriftSqlType.double, data['${effectivePrefix}temp_celsius'])!,
+      condition: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}condition'])!,
+      description: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}description'])!,
+      iconCode: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}icon_code'])!,
+      humidity: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}humidity'])!,
+      cityName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}city_name'])!,
+      fetchedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}fetched_at'])!,
+      expiresAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}expires_at'])!,
+    );
+  }
+
+  @override
+  $WeatherCacheEntriesTable createAlias(String alias) {
+    return $WeatherCacheEntriesTable(attachedDatabase, alias);
+  }
+}
+
+class WeatherCacheEntry extends DataClass
+    implements Insertable<WeatherCacheEntry> {
+  final String id;
+  final double lat;
+  final double lon;
+  final double tempCelsius;
+  final String condition;
+  final String description;
+  final String iconCode;
+  final int humidity;
+  final String cityName;
+  final int fetchedAt;
+  final int expiresAt;
+  const WeatherCacheEntry(
+      {required this.id,
+      required this.lat,
+      required this.lon,
+      required this.tempCelsius,
+      required this.condition,
+      required this.description,
+      required this.iconCode,
+      required this.humidity,
+      required this.cityName,
+      required this.fetchedAt,
+      required this.expiresAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['lat'] = Variable<double>(lat);
+    map['lon'] = Variable<double>(lon);
+    map['temp_celsius'] = Variable<double>(tempCelsius);
+    map['condition'] = Variable<String>(condition);
+    map['description'] = Variable<String>(description);
+    map['icon_code'] = Variable<String>(iconCode);
+    map['humidity'] = Variable<int>(humidity);
+    map['city_name'] = Variable<String>(cityName);
+    map['fetched_at'] = Variable<int>(fetchedAt);
+    map['expires_at'] = Variable<int>(expiresAt);
+    return map;
+  }
+
+  WeatherCacheEntriesCompanion toCompanion(bool nullToAbsent) {
+    return WeatherCacheEntriesCompanion(
+      id: Value(id),
+      lat: Value(lat),
+      lon: Value(lon),
+      tempCelsius: Value(tempCelsius),
+      condition: Value(condition),
+      description: Value(description),
+      iconCode: Value(iconCode),
+      humidity: Value(humidity),
+      cityName: Value(cityName),
+      fetchedAt: Value(fetchedAt),
+      expiresAt: Value(expiresAt),
+    );
+  }
+
+  factory WeatherCacheEntry.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WeatherCacheEntry(
+      id: serializer.fromJson<String>(json['id']),
+      lat: serializer.fromJson<double>(json['lat']),
+      lon: serializer.fromJson<double>(json['lon']),
+      tempCelsius: serializer.fromJson<double>(json['tempCelsius']),
+      condition: serializer.fromJson<String>(json['condition']),
+      description: serializer.fromJson<String>(json['description']),
+      iconCode: serializer.fromJson<String>(json['iconCode']),
+      humidity: serializer.fromJson<int>(json['humidity']),
+      cityName: serializer.fromJson<String>(json['cityName']),
+      fetchedAt: serializer.fromJson<int>(json['fetchedAt']),
+      expiresAt: serializer.fromJson<int>(json['expiresAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'lat': serializer.toJson<double>(lat),
+      'lon': serializer.toJson<double>(lon),
+      'tempCelsius': serializer.toJson<double>(tempCelsius),
+      'condition': serializer.toJson<String>(condition),
+      'description': serializer.toJson<String>(description),
+      'iconCode': serializer.toJson<String>(iconCode),
+      'humidity': serializer.toJson<int>(humidity),
+      'cityName': serializer.toJson<String>(cityName),
+      'fetchedAt': serializer.toJson<int>(fetchedAt),
+      'expiresAt': serializer.toJson<int>(expiresAt),
+    };
+  }
+
+  WeatherCacheEntry copyWith(
+          {String? id,
+          double? lat,
+          double? lon,
+          double? tempCelsius,
+          String? condition,
+          String? description,
+          String? iconCode,
+          int? humidity,
+          String? cityName,
+          int? fetchedAt,
+          int? expiresAt}) =>
+      WeatherCacheEntry(
+        id: id ?? this.id,
+        lat: lat ?? this.lat,
+        lon: lon ?? this.lon,
+        tempCelsius: tempCelsius ?? this.tempCelsius,
+        condition: condition ?? this.condition,
+        description: description ?? this.description,
+        iconCode: iconCode ?? this.iconCode,
+        humidity: humidity ?? this.humidity,
+        cityName: cityName ?? this.cityName,
+        fetchedAt: fetchedAt ?? this.fetchedAt,
+        expiresAt: expiresAt ?? this.expiresAt,
+      );
+  WeatherCacheEntry copyWithCompanion(WeatherCacheEntriesCompanion data) {
+    return WeatherCacheEntry(
+      id: data.id.present ? data.id.value : this.id,
+      lat: data.lat.present ? data.lat.value : this.lat,
+      lon: data.lon.present ? data.lon.value : this.lon,
+      tempCelsius:
+          data.tempCelsius.present ? data.tempCelsius.value : this.tempCelsius,
+      condition: data.condition.present ? data.condition.value : this.condition,
+      description:
+          data.description.present ? data.description.value : this.description,
+      iconCode: data.iconCode.present ? data.iconCode.value : this.iconCode,
+      humidity: data.humidity.present ? data.humidity.value : this.humidity,
+      cityName: data.cityName.present ? data.cityName.value : this.cityName,
+      fetchedAt: data.fetchedAt.present ? data.fetchedAt.value : this.fetchedAt,
+      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WeatherCacheEntry(')
+          ..write('id: $id, ')
+          ..write('lat: $lat, ')
+          ..write('lon: $lon, ')
+          ..write('tempCelsius: $tempCelsius, ')
+          ..write('condition: $condition, ')
+          ..write('description: $description, ')
+          ..write('iconCode: $iconCode, ')
+          ..write('humidity: $humidity, ')
+          ..write('cityName: $cityName, ')
+          ..write('fetchedAt: $fetchedAt, ')
+          ..write('expiresAt: $expiresAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, lat, lon, tempCelsius, condition,
+      description, iconCode, humidity, cityName, fetchedAt, expiresAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WeatherCacheEntry &&
+          other.id == this.id &&
+          other.lat == this.lat &&
+          other.lon == this.lon &&
+          other.tempCelsius == this.tempCelsius &&
+          other.condition == this.condition &&
+          other.description == this.description &&
+          other.iconCode == this.iconCode &&
+          other.humidity == this.humidity &&
+          other.cityName == this.cityName &&
+          other.fetchedAt == this.fetchedAt &&
+          other.expiresAt == this.expiresAt);
+}
+
+class WeatherCacheEntriesCompanion extends UpdateCompanion<WeatherCacheEntry> {
+  final Value<String> id;
+  final Value<double> lat;
+  final Value<double> lon;
+  final Value<double> tempCelsius;
+  final Value<String> condition;
+  final Value<String> description;
+  final Value<String> iconCode;
+  final Value<int> humidity;
+  final Value<String> cityName;
+  final Value<int> fetchedAt;
+  final Value<int> expiresAt;
+  final Value<int> rowid;
+  const WeatherCacheEntriesCompanion({
+    this.id = const Value.absent(),
+    this.lat = const Value.absent(),
+    this.lon = const Value.absent(),
+    this.tempCelsius = const Value.absent(),
+    this.condition = const Value.absent(),
+    this.description = const Value.absent(),
+    this.iconCode = const Value.absent(),
+    this.humidity = const Value.absent(),
+    this.cityName = const Value.absent(),
+    this.fetchedAt = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  WeatherCacheEntriesCompanion.insert({
+    required String id,
+    required double lat,
+    required double lon,
+    required double tempCelsius,
+    required String condition,
+    required String description,
+    required String iconCode,
+    this.humidity = const Value.absent(),
+    this.cityName = const Value.absent(),
+    required int fetchedAt,
+    required int expiresAt,
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        lat = Value(lat),
+        lon = Value(lon),
+        tempCelsius = Value(tempCelsius),
+        condition = Value(condition),
+        description = Value(description),
+        iconCode = Value(iconCode),
+        fetchedAt = Value(fetchedAt),
+        expiresAt = Value(expiresAt);
+  static Insertable<WeatherCacheEntry> custom({
+    Expression<String>? id,
+    Expression<double>? lat,
+    Expression<double>? lon,
+    Expression<double>? tempCelsius,
+    Expression<String>? condition,
+    Expression<String>? description,
+    Expression<String>? iconCode,
+    Expression<int>? humidity,
+    Expression<String>? cityName,
+    Expression<int>? fetchedAt,
+    Expression<int>? expiresAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (lat != null) 'lat': lat,
+      if (lon != null) 'lon': lon,
+      if (tempCelsius != null) 'temp_celsius': tempCelsius,
+      if (condition != null) 'condition': condition,
+      if (description != null) 'description': description,
+      if (iconCode != null) 'icon_code': iconCode,
+      if (humidity != null) 'humidity': humidity,
+      if (cityName != null) 'city_name': cityName,
+      if (fetchedAt != null) 'fetched_at': fetchedAt,
+      if (expiresAt != null) 'expires_at': expiresAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  WeatherCacheEntriesCompanion copyWith(
+      {Value<String>? id,
+      Value<double>? lat,
+      Value<double>? lon,
+      Value<double>? tempCelsius,
+      Value<String>? condition,
+      Value<String>? description,
+      Value<String>? iconCode,
+      Value<int>? humidity,
+      Value<String>? cityName,
+      Value<int>? fetchedAt,
+      Value<int>? expiresAt,
+      Value<int>? rowid}) {
+    return WeatherCacheEntriesCompanion(
+      id: id ?? this.id,
+      lat: lat ?? this.lat,
+      lon: lon ?? this.lon,
+      tempCelsius: tempCelsius ?? this.tempCelsius,
+      condition: condition ?? this.condition,
+      description: description ?? this.description,
+      iconCode: iconCode ?? this.iconCode,
+      humidity: humidity ?? this.humidity,
+      cityName: cityName ?? this.cityName,
+      fetchedAt: fetchedAt ?? this.fetchedAt,
+      expiresAt: expiresAt ?? this.expiresAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (lat.present) {
+      map['lat'] = Variable<double>(lat.value);
+    }
+    if (lon.present) {
+      map['lon'] = Variable<double>(lon.value);
+    }
+    if (tempCelsius.present) {
+      map['temp_celsius'] = Variable<double>(tempCelsius.value);
+    }
+    if (condition.present) {
+      map['condition'] = Variable<String>(condition.value);
+    }
+    if (description.present) {
+      map['description'] = Variable<String>(description.value);
+    }
+    if (iconCode.present) {
+      map['icon_code'] = Variable<String>(iconCode.value);
+    }
+    if (humidity.present) {
+      map['humidity'] = Variable<int>(humidity.value);
+    }
+    if (cityName.present) {
+      map['city_name'] = Variable<String>(cityName.value);
+    }
+    if (fetchedAt.present) {
+      map['fetched_at'] = Variable<int>(fetchedAt.value);
+    }
+    if (expiresAt.present) {
+      map['expires_at'] = Variable<int>(expiresAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WeatherCacheEntriesCompanion(')
+          ..write('id: $id, ')
+          ..write('lat: $lat, ')
+          ..write('lon: $lon, ')
+          ..write('tempCelsius: $tempCelsius, ')
+          ..write('condition: $condition, ')
+          ..write('description: $description, ')
+          ..write('iconCode: $iconCode, ')
+          ..write('humidity: $humidity, ')
+          ..write('cityName: $cityName, ')
+          ..write('fetchedAt: $fetchedAt, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $WeatherForecastCacheTable extends WeatherForecastCache
+    with TableInfo<$WeatherForecastCacheTable, WeatherForecastCacheData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WeatherForecastCacheTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _forecastJsonMeta =
+      const VerificationMeta('forecastJson');
+  @override
+  late final GeneratedColumn<String> forecastJson = GeneratedColumn<String>(
+      'forecast_json', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _fetchedAtMeta =
+      const VerificationMeta('fetchedAt');
+  @override
+  late final GeneratedColumn<int> fetchedAt = GeneratedColumn<int>(
+      'fetched_at', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _expiresAtMeta =
+      const VerificationMeta('expiresAt');
+  @override
+  late final GeneratedColumn<int> expiresAt = GeneratedColumn<int>(
+      'expires_at', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, forecastJson, fetchedAt, expiresAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'weather_forecast_cache';
+  @override
+  VerificationContext validateIntegrity(
+      Insertable<WeatherForecastCacheData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('forecast_json')) {
+      context.handle(
+          _forecastJsonMeta,
+          forecastJson.isAcceptableOrUnknown(
+              data['forecast_json']!, _forecastJsonMeta));
+    } else if (isInserting) {
+      context.missing(_forecastJsonMeta);
+    }
+    if (data.containsKey('fetched_at')) {
+      context.handle(_fetchedAtMeta,
+          fetchedAt.isAcceptableOrUnknown(data['fetched_at']!, _fetchedAtMeta));
+    } else if (isInserting) {
+      context.missing(_fetchedAtMeta);
+    }
+    if (data.containsKey('expires_at')) {
+      context.handle(_expiresAtMeta,
+          expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta));
+    } else if (isInserting) {
+      context.missing(_expiresAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  WeatherForecastCacheData map(Map<String, dynamic> data,
+      {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WeatherForecastCacheData(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      forecastJson: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}forecast_json'])!,
+      fetchedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}fetched_at'])!,
+      expiresAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}expires_at'])!,
+    );
+  }
+
+  @override
+  $WeatherForecastCacheTable createAlias(String alias) {
+    return $WeatherForecastCacheTable(attachedDatabase, alias);
+  }
+}
+
+class WeatherForecastCacheData extends DataClass
+    implements Insertable<WeatherForecastCacheData> {
+  final String id;
+  final String forecastJson;
+  final int fetchedAt;
+  final int expiresAt;
+  const WeatherForecastCacheData(
+      {required this.id,
+      required this.forecastJson,
+      required this.fetchedAt,
+      required this.expiresAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['forecast_json'] = Variable<String>(forecastJson);
+    map['fetched_at'] = Variable<int>(fetchedAt);
+    map['expires_at'] = Variable<int>(expiresAt);
+    return map;
+  }
+
+  WeatherForecastCacheCompanion toCompanion(bool nullToAbsent) {
+    return WeatherForecastCacheCompanion(
+      id: Value(id),
+      forecastJson: Value(forecastJson),
+      fetchedAt: Value(fetchedAt),
+      expiresAt: Value(expiresAt),
+    );
+  }
+
+  factory WeatherForecastCacheData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WeatherForecastCacheData(
+      id: serializer.fromJson<String>(json['id']),
+      forecastJson: serializer.fromJson<String>(json['forecastJson']),
+      fetchedAt: serializer.fromJson<int>(json['fetchedAt']),
+      expiresAt: serializer.fromJson<int>(json['expiresAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'forecastJson': serializer.toJson<String>(forecastJson),
+      'fetchedAt': serializer.toJson<int>(fetchedAt),
+      'expiresAt': serializer.toJson<int>(expiresAt),
+    };
+  }
+
+  WeatherForecastCacheData copyWith(
+          {String? id, String? forecastJson, int? fetchedAt, int? expiresAt}) =>
+      WeatherForecastCacheData(
+        id: id ?? this.id,
+        forecastJson: forecastJson ?? this.forecastJson,
+        fetchedAt: fetchedAt ?? this.fetchedAt,
+        expiresAt: expiresAt ?? this.expiresAt,
+      );
+  WeatherForecastCacheData copyWithCompanion(
+      WeatherForecastCacheCompanion data) {
+    return WeatherForecastCacheData(
+      id: data.id.present ? data.id.value : this.id,
+      forecastJson: data.forecastJson.present
+          ? data.forecastJson.value
+          : this.forecastJson,
+      fetchedAt: data.fetchedAt.present ? data.fetchedAt.value : this.fetchedAt,
+      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WeatherForecastCacheData(')
+          ..write('id: $id, ')
+          ..write('forecastJson: $forecastJson, ')
+          ..write('fetchedAt: $fetchedAt, ')
+          ..write('expiresAt: $expiresAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, forecastJson, fetchedAt, expiresAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WeatherForecastCacheData &&
+          other.id == this.id &&
+          other.forecastJson == this.forecastJson &&
+          other.fetchedAt == this.fetchedAt &&
+          other.expiresAt == this.expiresAt);
+}
+
+class WeatherForecastCacheCompanion
+    extends UpdateCompanion<WeatherForecastCacheData> {
+  final Value<String> id;
+  final Value<String> forecastJson;
+  final Value<int> fetchedAt;
+  final Value<int> expiresAt;
+  final Value<int> rowid;
+  const WeatherForecastCacheCompanion({
+    this.id = const Value.absent(),
+    this.forecastJson = const Value.absent(),
+    this.fetchedAt = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  WeatherForecastCacheCompanion.insert({
+    required String id,
+    required String forecastJson,
+    required int fetchedAt,
+    required int expiresAt,
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        forecastJson = Value(forecastJson),
+        fetchedAt = Value(fetchedAt),
+        expiresAt = Value(expiresAt);
+  static Insertable<WeatherForecastCacheData> custom({
+    Expression<String>? id,
+    Expression<String>? forecastJson,
+    Expression<int>? fetchedAt,
+    Expression<int>? expiresAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (forecastJson != null) 'forecast_json': forecastJson,
+      if (fetchedAt != null) 'fetched_at': fetchedAt,
+      if (expiresAt != null) 'expires_at': expiresAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  WeatherForecastCacheCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? forecastJson,
+      Value<int>? fetchedAt,
+      Value<int>? expiresAt,
+      Value<int>? rowid}) {
+    return WeatherForecastCacheCompanion(
+      id: id ?? this.id,
+      forecastJson: forecastJson ?? this.forecastJson,
+      fetchedAt: fetchedAt ?? this.fetchedAt,
+      expiresAt: expiresAt ?? this.expiresAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (forecastJson.present) {
+      map['forecast_json'] = Variable<String>(forecastJson.value);
+    }
+    if (fetchedAt.present) {
+      map['fetched_at'] = Variable<int>(fetchedAt.value);
+    }
+    if (expiresAt.present) {
+      map['expires_at'] = Variable<int>(expiresAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WeatherForecastCacheCompanion(')
+          ..write('id: $id, ')
+          ..write('forecastJson: $forecastJson, ')
+          ..write('fetchedAt: $fetchedAt, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$SoproDatabase extends GeneratedDatabase {
   _$SoproDatabase(QueryExecutor e) : super(e);
   $SoproDatabaseManager get managers => $SoproDatabaseManager(this);
@@ -2426,6 +4078,14 @@ abstract class _$SoproDatabase extends GeneratedDatabase {
   late final $GeocodingCacheTable geocodingCache = $GeocodingCacheTable(this);
   late final $ShoppingListItemsTable shoppingListItems =
       $ShoppingListItemsTable(this);
+  late final $ScheduledRemindersTable scheduledReminders =
+      $ScheduledRemindersTable(this);
+  late final $ActivityLogEntriesTable activityLogEntries =
+      $ActivityLogEntriesTable(this);
+  late final $WeatherCacheEntriesTable weatherCacheEntries =
+      $WeatherCacheEntriesTable(this);
+  late final $WeatherForecastCacheTable weatherForecastCache =
+      $WeatherForecastCacheTable(this);
   late final EnvironmentsDao environmentsDao =
       EnvironmentsDao(this as SoproDatabase);
   late final TriggersDao triggersDao = TriggersDao(this as SoproDatabase);
@@ -2437,6 +4097,12 @@ abstract class _$SoproDatabase extends GeneratedDatabase {
       GeocodingCacheDao(this as SoproDatabase);
   late final ShoppingListItemsDao shoppingListItemsDao =
       ShoppingListItemsDao(this as SoproDatabase);
+  late final ScheduledRemindersDao scheduledRemindersDao =
+      ScheduledRemindersDao(this as SoproDatabase);
+  late final ActivityLogDao activityLogDao =
+      ActivityLogDao(this as SoproDatabase);
+  late final WeatherCacheDao weatherCacheDao =
+      WeatherCacheDao(this as SoproDatabase);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -2447,7 +4113,11 @@ abstract class _$SoproDatabase extends GeneratedDatabase {
         contextCards,
         bleEncounters,
         geocodingCache,
-        shoppingListItems
+        shoppingListItems,
+        scheduledReminders,
+        activityLogEntries,
+        weatherCacheEntries,
+        weatherForecastCache
       ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
@@ -3896,6 +5566,871 @@ typedef $$ShoppingListItemsTableProcessedTableManager = ProcessedTableManager<
     ),
     ShoppingListItem,
     PrefetchHooks Function()>;
+typedef $$ScheduledRemindersTableCreateCompanionBuilder
+    = ScheduledRemindersCompanion Function({
+  required String id,
+  required String title,
+  Value<String> content,
+  required DateTime scheduledAt,
+  Value<String> repeatRule,
+  Value<String> repeatDaysOfWeek,
+  Value<bool> isActive,
+  Value<String> alertMode,
+  required DateTime createdAt,
+  Value<int> rowid,
+});
+typedef $$ScheduledRemindersTableUpdateCompanionBuilder
+    = ScheduledRemindersCompanion Function({
+  Value<String> id,
+  Value<String> title,
+  Value<String> content,
+  Value<DateTime> scheduledAt,
+  Value<String> repeatRule,
+  Value<String> repeatDaysOfWeek,
+  Value<bool> isActive,
+  Value<String> alertMode,
+  Value<DateTime> createdAt,
+  Value<int> rowid,
+});
+
+class $$ScheduledRemindersTableFilterComposer
+    extends Composer<_$SoproDatabase, $ScheduledRemindersTable> {
+  $$ScheduledRemindersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get content => $composableBuilder(
+      column: $table.content, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get scheduledAt => $composableBuilder(
+      column: $table.scheduledAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get repeatRule => $composableBuilder(
+      column: $table.repeatRule, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get repeatDaysOfWeek => $composableBuilder(
+      column: $table.repeatDaysOfWeek,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isActive => $composableBuilder(
+      column: $table.isActive, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get alertMode => $composableBuilder(
+      column: $table.alertMode, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$ScheduledRemindersTableOrderingComposer
+    extends Composer<_$SoproDatabase, $ScheduledRemindersTable> {
+  $$ScheduledRemindersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get content => $composableBuilder(
+      column: $table.content, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get scheduledAt => $composableBuilder(
+      column: $table.scheduledAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get repeatRule => $composableBuilder(
+      column: $table.repeatRule, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get repeatDaysOfWeek => $composableBuilder(
+      column: $table.repeatDaysOfWeek,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isActive => $composableBuilder(
+      column: $table.isActive, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get alertMode => $composableBuilder(
+      column: $table.alertMode, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$ScheduledRemindersTableAnnotationComposer
+    extends Composer<_$SoproDatabase, $ScheduledRemindersTable> {
+  $$ScheduledRemindersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get title =>
+      $composableBuilder(column: $table.title, builder: (column) => column);
+
+  GeneratedColumn<String> get content =>
+      $composableBuilder(column: $table.content, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get scheduledAt => $composableBuilder(
+      column: $table.scheduledAt, builder: (column) => column);
+
+  GeneratedColumn<String> get repeatRule => $composableBuilder(
+      column: $table.repeatRule, builder: (column) => column);
+
+  GeneratedColumn<String> get repeatDaysOfWeek => $composableBuilder(
+      column: $table.repeatDaysOfWeek, builder: (column) => column);
+
+  GeneratedColumn<bool> get isActive =>
+      $composableBuilder(column: $table.isActive, builder: (column) => column);
+
+  GeneratedColumn<String> get alertMode =>
+      $composableBuilder(column: $table.alertMode, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$ScheduledRemindersTableTableManager extends RootTableManager<
+    _$SoproDatabase,
+    $ScheduledRemindersTable,
+    ScheduledReminder,
+    $$ScheduledRemindersTableFilterComposer,
+    $$ScheduledRemindersTableOrderingComposer,
+    $$ScheduledRemindersTableAnnotationComposer,
+    $$ScheduledRemindersTableCreateCompanionBuilder,
+    $$ScheduledRemindersTableUpdateCompanionBuilder,
+    (
+      ScheduledReminder,
+      BaseReferences<_$SoproDatabase, $ScheduledRemindersTable,
+          ScheduledReminder>
+    ),
+    ScheduledReminder,
+    PrefetchHooks Function()> {
+  $$ScheduledRemindersTableTableManager(
+      _$SoproDatabase db, $ScheduledRemindersTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ScheduledRemindersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ScheduledRemindersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ScheduledRemindersTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> title = const Value.absent(),
+            Value<String> content = const Value.absent(),
+            Value<DateTime> scheduledAt = const Value.absent(),
+            Value<String> repeatRule = const Value.absent(),
+            Value<String> repeatDaysOfWeek = const Value.absent(),
+            Value<bool> isActive = const Value.absent(),
+            Value<String> alertMode = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ScheduledRemindersCompanion(
+            id: id,
+            title: title,
+            content: content,
+            scheduledAt: scheduledAt,
+            repeatRule: repeatRule,
+            repeatDaysOfWeek: repeatDaysOfWeek,
+            isActive: isActive,
+            alertMode: alertMode,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required String title,
+            Value<String> content = const Value.absent(),
+            required DateTime scheduledAt,
+            Value<String> repeatRule = const Value.absent(),
+            Value<String> repeatDaysOfWeek = const Value.absent(),
+            Value<bool> isActive = const Value.absent(),
+            Value<String> alertMode = const Value.absent(),
+            required DateTime createdAt,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ScheduledRemindersCompanion.insert(
+            id: id,
+            title: title,
+            content: content,
+            scheduledAt: scheduledAt,
+            repeatRule: repeatRule,
+            repeatDaysOfWeek: repeatDaysOfWeek,
+            isActive: isActive,
+            alertMode: alertMode,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$ScheduledRemindersTableProcessedTableManager = ProcessedTableManager<
+    _$SoproDatabase,
+    $ScheduledRemindersTable,
+    ScheduledReminder,
+    $$ScheduledRemindersTableFilterComposer,
+    $$ScheduledRemindersTableOrderingComposer,
+    $$ScheduledRemindersTableAnnotationComposer,
+    $$ScheduledRemindersTableCreateCompanionBuilder,
+    $$ScheduledRemindersTableUpdateCompanionBuilder,
+    (
+      ScheduledReminder,
+      BaseReferences<_$SoproDatabase, $ScheduledRemindersTable,
+          ScheduledReminder>
+    ),
+    ScheduledReminder,
+    PrefetchHooks Function()>;
+typedef $$ActivityLogEntriesTableCreateCompanionBuilder
+    = ActivityLogEntriesCompanion Function({
+  required String id,
+  required String type,
+  required String title,
+  Value<String> subtitle,
+  Value<String?> environmentId,
+  required DateTime createdAt,
+  Value<int> rowid,
+});
+typedef $$ActivityLogEntriesTableUpdateCompanionBuilder
+    = ActivityLogEntriesCompanion Function({
+  Value<String> id,
+  Value<String> type,
+  Value<String> title,
+  Value<String> subtitle,
+  Value<String?> environmentId,
+  Value<DateTime> createdAt,
+  Value<int> rowid,
+});
+
+class $$ActivityLogEntriesTableFilterComposer
+    extends Composer<_$SoproDatabase, $ActivityLogEntriesTable> {
+  $$ActivityLogEntriesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get type => $composableBuilder(
+      column: $table.type, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get subtitle => $composableBuilder(
+      column: $table.subtitle, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get environmentId => $composableBuilder(
+      column: $table.environmentId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$ActivityLogEntriesTableOrderingComposer
+    extends Composer<_$SoproDatabase, $ActivityLogEntriesTable> {
+  $$ActivityLogEntriesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get type => $composableBuilder(
+      column: $table.type, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get subtitle => $composableBuilder(
+      column: $table.subtitle, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get environmentId => $composableBuilder(
+      column: $table.environmentId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$ActivityLogEntriesTableAnnotationComposer
+    extends Composer<_$SoproDatabase, $ActivityLogEntriesTable> {
+  $$ActivityLogEntriesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get type =>
+      $composableBuilder(column: $table.type, builder: (column) => column);
+
+  GeneratedColumn<String> get title =>
+      $composableBuilder(column: $table.title, builder: (column) => column);
+
+  GeneratedColumn<String> get subtitle =>
+      $composableBuilder(column: $table.subtitle, builder: (column) => column);
+
+  GeneratedColumn<String> get environmentId => $composableBuilder(
+      column: $table.environmentId, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$ActivityLogEntriesTableTableManager extends RootTableManager<
+    _$SoproDatabase,
+    $ActivityLogEntriesTable,
+    ActivityLogEntry,
+    $$ActivityLogEntriesTableFilterComposer,
+    $$ActivityLogEntriesTableOrderingComposer,
+    $$ActivityLogEntriesTableAnnotationComposer,
+    $$ActivityLogEntriesTableCreateCompanionBuilder,
+    $$ActivityLogEntriesTableUpdateCompanionBuilder,
+    (
+      ActivityLogEntry,
+      BaseReferences<_$SoproDatabase, $ActivityLogEntriesTable,
+          ActivityLogEntry>
+    ),
+    ActivityLogEntry,
+    PrefetchHooks Function()> {
+  $$ActivityLogEntriesTableTableManager(
+      _$SoproDatabase db, $ActivityLogEntriesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ActivityLogEntriesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ActivityLogEntriesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ActivityLogEntriesTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> type = const Value.absent(),
+            Value<String> title = const Value.absent(),
+            Value<String> subtitle = const Value.absent(),
+            Value<String?> environmentId = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ActivityLogEntriesCompanion(
+            id: id,
+            type: type,
+            title: title,
+            subtitle: subtitle,
+            environmentId: environmentId,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required String type,
+            required String title,
+            Value<String> subtitle = const Value.absent(),
+            Value<String?> environmentId = const Value.absent(),
+            required DateTime createdAt,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ActivityLogEntriesCompanion.insert(
+            id: id,
+            type: type,
+            title: title,
+            subtitle: subtitle,
+            environmentId: environmentId,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$ActivityLogEntriesTableProcessedTableManager = ProcessedTableManager<
+    _$SoproDatabase,
+    $ActivityLogEntriesTable,
+    ActivityLogEntry,
+    $$ActivityLogEntriesTableFilterComposer,
+    $$ActivityLogEntriesTableOrderingComposer,
+    $$ActivityLogEntriesTableAnnotationComposer,
+    $$ActivityLogEntriesTableCreateCompanionBuilder,
+    $$ActivityLogEntriesTableUpdateCompanionBuilder,
+    (
+      ActivityLogEntry,
+      BaseReferences<_$SoproDatabase, $ActivityLogEntriesTable,
+          ActivityLogEntry>
+    ),
+    ActivityLogEntry,
+    PrefetchHooks Function()>;
+typedef $$WeatherCacheEntriesTableCreateCompanionBuilder
+    = WeatherCacheEntriesCompanion Function({
+  required String id,
+  required double lat,
+  required double lon,
+  required double tempCelsius,
+  required String condition,
+  required String description,
+  required String iconCode,
+  Value<int> humidity,
+  Value<String> cityName,
+  required int fetchedAt,
+  required int expiresAt,
+  Value<int> rowid,
+});
+typedef $$WeatherCacheEntriesTableUpdateCompanionBuilder
+    = WeatherCacheEntriesCompanion Function({
+  Value<String> id,
+  Value<double> lat,
+  Value<double> lon,
+  Value<double> tempCelsius,
+  Value<String> condition,
+  Value<String> description,
+  Value<String> iconCode,
+  Value<int> humidity,
+  Value<String> cityName,
+  Value<int> fetchedAt,
+  Value<int> expiresAt,
+  Value<int> rowid,
+});
+
+class $$WeatherCacheEntriesTableFilterComposer
+    extends Composer<_$SoproDatabase, $WeatherCacheEntriesTable> {
+  $$WeatherCacheEntriesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<double> get lat => $composableBuilder(
+      column: $table.lat, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<double> get lon => $composableBuilder(
+      column: $table.lon, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<double> get tempCelsius => $composableBuilder(
+      column: $table.tempCelsius, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get condition => $composableBuilder(
+      column: $table.condition, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get description => $composableBuilder(
+      column: $table.description, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get iconCode => $composableBuilder(
+      column: $table.iconCode, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get humidity => $composableBuilder(
+      column: $table.humidity, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get cityName => $composableBuilder(
+      column: $table.cityName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get fetchedAt => $composableBuilder(
+      column: $table.fetchedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get expiresAt => $composableBuilder(
+      column: $table.expiresAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$WeatherCacheEntriesTableOrderingComposer
+    extends Composer<_$SoproDatabase, $WeatherCacheEntriesTable> {
+  $$WeatherCacheEntriesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<double> get lat => $composableBuilder(
+      column: $table.lat, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<double> get lon => $composableBuilder(
+      column: $table.lon, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<double> get tempCelsius => $composableBuilder(
+      column: $table.tempCelsius, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get condition => $composableBuilder(
+      column: $table.condition, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get description => $composableBuilder(
+      column: $table.description, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get iconCode => $composableBuilder(
+      column: $table.iconCode, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get humidity => $composableBuilder(
+      column: $table.humidity, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get cityName => $composableBuilder(
+      column: $table.cityName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get fetchedAt => $composableBuilder(
+      column: $table.fetchedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get expiresAt => $composableBuilder(
+      column: $table.expiresAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$WeatherCacheEntriesTableAnnotationComposer
+    extends Composer<_$SoproDatabase, $WeatherCacheEntriesTable> {
+  $$WeatherCacheEntriesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<double> get lat =>
+      $composableBuilder(column: $table.lat, builder: (column) => column);
+
+  GeneratedColumn<double> get lon =>
+      $composableBuilder(column: $table.lon, builder: (column) => column);
+
+  GeneratedColumn<double> get tempCelsius => $composableBuilder(
+      column: $table.tempCelsius, builder: (column) => column);
+
+  GeneratedColumn<String> get condition =>
+      $composableBuilder(column: $table.condition, builder: (column) => column);
+
+  GeneratedColumn<String> get description => $composableBuilder(
+      column: $table.description, builder: (column) => column);
+
+  GeneratedColumn<String> get iconCode =>
+      $composableBuilder(column: $table.iconCode, builder: (column) => column);
+
+  GeneratedColumn<int> get humidity =>
+      $composableBuilder(column: $table.humidity, builder: (column) => column);
+
+  GeneratedColumn<String> get cityName =>
+      $composableBuilder(column: $table.cityName, builder: (column) => column);
+
+  GeneratedColumn<int> get fetchedAt =>
+      $composableBuilder(column: $table.fetchedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get expiresAt =>
+      $composableBuilder(column: $table.expiresAt, builder: (column) => column);
+}
+
+class $$WeatherCacheEntriesTableTableManager extends RootTableManager<
+    _$SoproDatabase,
+    $WeatherCacheEntriesTable,
+    WeatherCacheEntry,
+    $$WeatherCacheEntriesTableFilterComposer,
+    $$WeatherCacheEntriesTableOrderingComposer,
+    $$WeatherCacheEntriesTableAnnotationComposer,
+    $$WeatherCacheEntriesTableCreateCompanionBuilder,
+    $$WeatherCacheEntriesTableUpdateCompanionBuilder,
+    (
+      WeatherCacheEntry,
+      BaseReferences<_$SoproDatabase, $WeatherCacheEntriesTable,
+          WeatherCacheEntry>
+    ),
+    WeatherCacheEntry,
+    PrefetchHooks Function()> {
+  $$WeatherCacheEntriesTableTableManager(
+      _$SoproDatabase db, $WeatherCacheEntriesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WeatherCacheEntriesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WeatherCacheEntriesTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WeatherCacheEntriesTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<double> lat = const Value.absent(),
+            Value<double> lon = const Value.absent(),
+            Value<double> tempCelsius = const Value.absent(),
+            Value<String> condition = const Value.absent(),
+            Value<String> description = const Value.absent(),
+            Value<String> iconCode = const Value.absent(),
+            Value<int> humidity = const Value.absent(),
+            Value<String> cityName = const Value.absent(),
+            Value<int> fetchedAt = const Value.absent(),
+            Value<int> expiresAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              WeatherCacheEntriesCompanion(
+            id: id,
+            lat: lat,
+            lon: lon,
+            tempCelsius: tempCelsius,
+            condition: condition,
+            description: description,
+            iconCode: iconCode,
+            humidity: humidity,
+            cityName: cityName,
+            fetchedAt: fetchedAt,
+            expiresAt: expiresAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required double lat,
+            required double lon,
+            required double tempCelsius,
+            required String condition,
+            required String description,
+            required String iconCode,
+            Value<int> humidity = const Value.absent(),
+            Value<String> cityName = const Value.absent(),
+            required int fetchedAt,
+            required int expiresAt,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              WeatherCacheEntriesCompanion.insert(
+            id: id,
+            lat: lat,
+            lon: lon,
+            tempCelsius: tempCelsius,
+            condition: condition,
+            description: description,
+            iconCode: iconCode,
+            humidity: humidity,
+            cityName: cityName,
+            fetchedAt: fetchedAt,
+            expiresAt: expiresAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$WeatherCacheEntriesTableProcessedTableManager = ProcessedTableManager<
+    _$SoproDatabase,
+    $WeatherCacheEntriesTable,
+    WeatherCacheEntry,
+    $$WeatherCacheEntriesTableFilterComposer,
+    $$WeatherCacheEntriesTableOrderingComposer,
+    $$WeatherCacheEntriesTableAnnotationComposer,
+    $$WeatherCacheEntriesTableCreateCompanionBuilder,
+    $$WeatherCacheEntriesTableUpdateCompanionBuilder,
+    (
+      WeatherCacheEntry,
+      BaseReferences<_$SoproDatabase, $WeatherCacheEntriesTable,
+          WeatherCacheEntry>
+    ),
+    WeatherCacheEntry,
+    PrefetchHooks Function()>;
+typedef $$WeatherForecastCacheTableCreateCompanionBuilder
+    = WeatherForecastCacheCompanion Function({
+  required String id,
+  required String forecastJson,
+  required int fetchedAt,
+  required int expiresAt,
+  Value<int> rowid,
+});
+typedef $$WeatherForecastCacheTableUpdateCompanionBuilder
+    = WeatherForecastCacheCompanion Function({
+  Value<String> id,
+  Value<String> forecastJson,
+  Value<int> fetchedAt,
+  Value<int> expiresAt,
+  Value<int> rowid,
+});
+
+class $$WeatherForecastCacheTableFilterComposer
+    extends Composer<_$SoproDatabase, $WeatherForecastCacheTable> {
+  $$WeatherForecastCacheTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get forecastJson => $composableBuilder(
+      column: $table.forecastJson, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get fetchedAt => $composableBuilder(
+      column: $table.fetchedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get expiresAt => $composableBuilder(
+      column: $table.expiresAt, builder: (column) => ColumnFilters(column));
+}
+
+class $$WeatherForecastCacheTableOrderingComposer
+    extends Composer<_$SoproDatabase, $WeatherForecastCacheTable> {
+  $$WeatherForecastCacheTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get forecastJson => $composableBuilder(
+      column: $table.forecastJson,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get fetchedAt => $composableBuilder(
+      column: $table.fetchedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get expiresAt => $composableBuilder(
+      column: $table.expiresAt, builder: (column) => ColumnOrderings(column));
+}
+
+class $$WeatherForecastCacheTableAnnotationComposer
+    extends Composer<_$SoproDatabase, $WeatherForecastCacheTable> {
+  $$WeatherForecastCacheTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get forecastJson => $composableBuilder(
+      column: $table.forecastJson, builder: (column) => column);
+
+  GeneratedColumn<int> get fetchedAt =>
+      $composableBuilder(column: $table.fetchedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get expiresAt =>
+      $composableBuilder(column: $table.expiresAt, builder: (column) => column);
+}
+
+class $$WeatherForecastCacheTableTableManager extends RootTableManager<
+    _$SoproDatabase,
+    $WeatherForecastCacheTable,
+    WeatherForecastCacheData,
+    $$WeatherForecastCacheTableFilterComposer,
+    $$WeatherForecastCacheTableOrderingComposer,
+    $$WeatherForecastCacheTableAnnotationComposer,
+    $$WeatherForecastCacheTableCreateCompanionBuilder,
+    $$WeatherForecastCacheTableUpdateCompanionBuilder,
+    (
+      WeatherForecastCacheData,
+      BaseReferences<_$SoproDatabase, $WeatherForecastCacheTable,
+          WeatherForecastCacheData>
+    ),
+    WeatherForecastCacheData,
+    PrefetchHooks Function()> {
+  $$WeatherForecastCacheTableTableManager(
+      _$SoproDatabase db, $WeatherForecastCacheTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WeatherForecastCacheTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WeatherForecastCacheTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WeatherForecastCacheTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> forecastJson = const Value.absent(),
+            Value<int> fetchedAt = const Value.absent(),
+            Value<int> expiresAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              WeatherForecastCacheCompanion(
+            id: id,
+            forecastJson: forecastJson,
+            fetchedAt: fetchedAt,
+            expiresAt: expiresAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required String forecastJson,
+            required int fetchedAt,
+            required int expiresAt,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              WeatherForecastCacheCompanion.insert(
+            id: id,
+            forecastJson: forecastJson,
+            fetchedAt: fetchedAt,
+            expiresAt: expiresAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$WeatherForecastCacheTableProcessedTableManager
+    = ProcessedTableManager<
+        _$SoproDatabase,
+        $WeatherForecastCacheTable,
+        WeatherForecastCacheData,
+        $$WeatherForecastCacheTableFilterComposer,
+        $$WeatherForecastCacheTableOrderingComposer,
+        $$WeatherForecastCacheTableAnnotationComposer,
+        $$WeatherForecastCacheTableCreateCompanionBuilder,
+        $$WeatherForecastCacheTableUpdateCompanionBuilder,
+        (
+          WeatherForecastCacheData,
+          BaseReferences<_$SoproDatabase, $WeatherForecastCacheTable,
+              WeatherForecastCacheData>
+        ),
+        WeatherForecastCacheData,
+        PrefetchHooks Function()>;
 
 class $SoproDatabaseManager {
   final _$SoproDatabase _db;
@@ -3912,4 +6447,12 @@ class $SoproDatabaseManager {
       $$GeocodingCacheTableTableManager(_db, _db.geocodingCache);
   $$ShoppingListItemsTableTableManager get shoppingListItems =>
       $$ShoppingListItemsTableTableManager(_db, _db.shoppingListItems);
+  $$ScheduledRemindersTableTableManager get scheduledReminders =>
+      $$ScheduledRemindersTableTableManager(_db, _db.scheduledReminders);
+  $$ActivityLogEntriesTableTableManager get activityLogEntries =>
+      $$ActivityLogEntriesTableTableManager(_db, _db.activityLogEntries);
+  $$WeatherCacheEntriesTableTableManager get weatherCacheEntries =>
+      $$WeatherCacheEntriesTableTableManager(_db, _db.weatherCacheEntries);
+  $$WeatherForecastCacheTableTableManager get weatherForecastCache =>
+      $$WeatherForecastCacheTableTableManager(_db, _db.weatherForecastCache);
 }

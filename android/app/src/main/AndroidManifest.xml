@@ -24,6 +24,13 @@
     <!-- Permite reiniciar o serviço após reboot do dispositivo -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
+    <!-- Alarme exato para lembretes agendados (Fase Lembretes).
+         Android 12+/API 31+ exige SCHEDULE_EXACT_ALARM (usuário pode revogar);
+         USE_EXACT_ALARM (API 33+) é o caminho para apps de alarme/lembrete e não
+         exige diálogo em runtime. Incluídos os dois para máxima compatibilidade. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+
     <!-- ── BLE Social (Sprint 7) ─────────────────────────────────────────── -->
     <!-- Android 12+ (API 31+): permissões granulares por operação BLE.
          neverForLocation = não usamos BLE scan para inferir localização (privacidade). -->
@@ -115,6 +122,32 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
             </intent-filter>
         </receiver>
+
+        <!-- ReminderReceiver — acionado pelo AlarmManager no horário exato de um
+             lembrete agendado (funciona com o app fechado/morto). Lê o banco SQLite
+             direto e dispara a notificação; reagenda recorrentes (daily/weekly).
+             android:exported="false": só alarmes do próprio app o disparam. -->
+        <receiver
+            android:name=".ReminderReceiver"
+            android:exported="false"/>
+
+        <!-- WeatherNotificationReceiver — notificação diária de clima, disparada
+             pelo AlarmManager (app fechado). android:exported="false": só alarmes
+             do próprio app o disparam. -->
+        <receiver
+            android:name=".WeatherNotificationReceiver"
+            android:exported="false"/>
+
+        <!-- ReminderAlarmActivity — tela cheia de alarme (alert_mode alarm/both),
+             aberta pelo fullScreenIntent da notificação. showOnLockScreen cobre
+             pré-API 27 (flags no código cobrem 27+). android:exported="false":
+             só o próprio app a dispara. -->
+        <activity
+            android:name=".ReminderAlarmActivity"
+            android:exported="false"
+            android:showOnLockScreen="true"
+            android:launchMode="singleTop"
+            android:theme="@style/LaunchTheme"/>
 
         <!-- FloatingVoiceService — exibe botão flutuante de voz sobre outros apps.
              Requer SYSTEM_ALERT_WINDOW concedido pelo usuário (verificado em runtime).

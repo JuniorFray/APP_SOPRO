@@ -1,3 +1,5 @@
+import '../entities/activity_log_entry_entity.dart';
+import '../repositories/i_activity_log_repository.dart';
 import '../repositories/i_trigger_repository.dart';
 import '../../infrastructure/logging/core/logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
@@ -14,6 +16,8 @@ import '../../infrastructure/notifications/notification_service.dart';
 class FireTriggersUseCase {
   final ITriggerRepository _triggerRepo;
   final NotificationService _notifications;
+  // Histórico visível ao usuário — grava "gatilho disparado" após exibir a notificação.
+  final IActivityLogRepository _activityLog;
   final bool Function() _notificationsEnabled;
   final bool Function() _soundEnabled;
   final int Function() _cooldownMinutes;
@@ -30,6 +34,7 @@ class FireTriggersUseCase {
   FireTriggersUseCase(
     this._triggerRepo,
     this._notifications,
+    this._activityLog,
     this._notificationsEnabled,
     this._soundEnabled,
     this._cooldownMinutes,
@@ -105,6 +110,14 @@ class FireTriggersUseCase {
           'environment_id': environmentId,
           'with_sound':     withSound,
         }, feature: 'notification', action: 'display');
+
+        // Histórico visível ao usuário — só grava se a notificação foi exibida.
+        await _activityLog.log(
+          type:          ActivityType.triggerFired,
+          title:         trigger.title.isNotEmpty ? trigger.title : environmentName,
+          subtitle:      environmentName,
+          environmentId: environmentId,
+        );
       } catch (e, st) {
         Logger.error('notification_error', payload: {
           'trigger_id': trigger.id,

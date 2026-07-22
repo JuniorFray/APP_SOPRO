@@ -12,21 +12,21 @@
     {
       "id": "background",
       "type": "background",
-      "paint": { "background-color": "#0a1220" }
+      "paint": { "background-color": "#11141A" }
     },
     {
       "id": "water",
       "type": "fill",
       "source": "ofm",
       "source-layer": "water",
-      "paint": { "fill-color": "#060e1a" }
+      "paint": { "fill-color": "#256A8F" }
     },
     {
       "id": "waterway",
       "type": "line",
       "source": "ofm",
       "source-layer": "waterway",
-      "paint": { "line-color": "#060e1a", "line-width": 1 }
+      "paint": { "line-color": "#256A8F", "line-width": 1 }
     },
     {
       "id": "landcover",
@@ -40,7 +40,7 @@
       "type": "fill",
       "source": "ofm",
       "source-layer": "park",
-      "paint": { "fill-color": "#0c1525", "fill-opacity": 0.8 }
+      "paint": { "fill-color": "#1A3026", "fill-opacity": 0.8 }
     },
     {
       "id": "building",
@@ -61,7 +61,7 @@
       "source-layer": "transportation",
       "filter": ["in", "class", "path", "track"],
       "paint": {
-        "line-color": "#2a3a5a",
+        "line-color": "#2B303A",
         "line-width": ["interpolate", ["linear"], ["zoom"], 13, 0.5, 18, 1.5],
         "line-dasharray": [2, 2]
       }
@@ -73,7 +73,7 @@
       "source-layer": "transportation",
       "filter": ["in", "class", "minor", "service", "residential"],
       "paint": {
-        "line-color": "#b89a52",
+        "line-color": "#2B303A",
         "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 18, 2]
       }
     },
@@ -84,7 +84,7 @@
       "source-layer": "transportation",
       "filter": ["in", "class", "secondary", "tertiary"],
       "paint": {
-        "line-color": "#b89a52",
+        "line-color": "#2B303A",
         "line-width": ["interpolate", ["linear"], ["zoom"], 10, 1, 18, 5]
       }
     },
@@ -95,7 +95,7 @@
       "source-layer": "transportation",
       "filter": ["in", "class", "primary", "trunk", "motorway"],
       "paint": {
-        "line-color": "#d4b866",
+        "line-color": "#D6AA6C",
         "line-width": ["interpolate", ["linear"], ["zoom"], 8, 1.5, 18, 7]
       }
     },
@@ -130,8 +130,8 @@
         "text-max-angle": 30
       },
       "paint": {
-        "text-color": "#d4b866",
-        "text-halo-color": "#0a1220",
+        "text-color": "#D6AA6C",
+        "text-halo-color": "#11141A",
         "text-halo-width": 1.5
       }
     },

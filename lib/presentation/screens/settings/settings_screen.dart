@@ -18,6 +18,10 @@ import '../../../infrastructure/overlay/floating_voice_service_manager.dart';
 // Canal nativo para o FloatingVoiceService (botão flutuante de voz)
 const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
 
+// Canal nativo dos lembretes/alarmes — reaproveitado para a notificação diária
+// de clima (scheduleWeatherNotification / cancelWeatherNotification).
+const _remindersChannel = MethodChannel('com.sopro.sopro/reminders');
+
 // Tela de Configurações do Sopro.
 // Agrupa preferências de privacidade, notificações e dados.
 // Usa Riverpod para leitura/escrita em memória e SharedPreferences para persistência.
@@ -124,6 +128,9 @@ class SettingsScreen extends ConsumerWidget {
                   await prefs.setInt('notification_cooldown_minutes', v);
                 },
               ),
+              const _ItemDivider(),
+              // Notificação diária de clima (switch + horário) — self-contained.
+              const _WeatherNotifTile(),
             ],
           ),
 
@@ -315,6 +322,119 @@ class _SwitchTile extends StatelessWidget {
         onChanged: onChanged,
         activeColor: AppTheme.accent,
       ),
+    );
+  }
+}
+
+// Notificação diária de clima: switch + (quando ativo) seletor de horário.
+// Self-contained: lê/grava SharedPreferences e chama o canal nativo direto —
+// o WeatherNotificationReceiver dispara sem depender do Flutter Engine.
+class _WeatherNotifTile extends StatefulWidget {
+  const _WeatherNotifTile();
+
+  @override
+  State<_WeatherNotifTile> createState() => _WeatherNotifTileState();
+}
+
+class _WeatherNotifTileState extends State<_WeatherNotifTile> {
+  bool _enabled = false;
+  int _hour = 8;
+  int _minute = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _enabled = prefs.getBool('weather_notification_enabled') ?? false;
+      _hour = prefs.getInt('weather_notification_hour') ?? 8;
+      _minute = prefs.getInt('weather_notification_minute') ?? 0;
+    });
+  }
+
+  Future<void> _onToggle(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('weather_notification_enabled', v);
+    if (mounted) setState(() => _enabled = v);
+    try {
+      if (v) {
+        await _remindersChannel.invokeMethod('scheduleWeatherNotification',
+            {'hour': _hour, 'minute': _minute});
+      } else {
+        await _remindersChannel.invokeMethod('cancelWeatherNotification');
+      }
+    } catch (_) {/* canal indisponível — prefs já persistidas */}
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: _hour, minute: _minute),
+    );
+    if (picked == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('weather_notification_hour', picked.hour);
+    await prefs.setInt('weather_notification_minute', picked.minute);
+    if (mounted) {
+      setState(() {
+        _hour = picked.hour;
+        _minute = picked.minute;
+      });
+    }
+    // Reagenda no novo horário se estiver ativo.
+    if (_enabled) {
+      try {
+        await _remindersChannel.invokeMethod('scheduleWeatherNotification',
+            {'hour': _hour, 'minute': _minute});
+      } catch (_) {}
+    }
+  }
+
+  String get _timeLabel =>
+      '${_hour.toString().padLeft(2, '0')}:${_minute.toString().padLeft(2, '0')}';
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        _SwitchTile(
+          icon: Icons.wb_sunny_outlined,
+          title: AppStrings.settingsWeatherNotif,
+          subtitle: AppStrings.settingsWeatherNotifDesc,
+          value: _enabled,
+          onChanged: _onToggle,
+        ),
+        if (_enabled)
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
+            leading: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppTheme.backgroundElevated,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+              ),
+              child: const Icon(Icons.schedule, color: AppTheme.accent, size: 20),
+            ),
+            title: Text(
+              AppStrings.settingsWeatherNotifTime,
+              style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
+            ),
+            trailing: TextButton(
+              onPressed: _pickTime,
+              child: Text(
+                _timeLabel,
+                style: AppTypography.titleSmall.copyWith(color: AppTheme.accent),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

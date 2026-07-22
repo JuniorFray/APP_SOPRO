@@ -148,6 +148,11 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     final geminiKey = AppConstants.geminiApiKey;
     if (geminiKey.isNotEmpty) await prefs.setString('gemini_api_key', geminiKey);
 
+    // Persiste a chave OpenWeatherMap para o WeatherNotificationReceiver (Kotlin
+    // sem Flutter Engine) — nativo lê flutter.openweather_api_key.
+    final owKey = AppConstants.openWeatherKey;
+    if (owKey.isNotEmpty) await prefs.setString('openweather_api_key', owKey);
+
     final notifEnabled = prefs.getBool('notifications_enabled') ?? true;
     if (!notifEnabled) {
       ref.read(notificationsEnabledProvider.notifier).state = false;

@@ -21,6 +21,48 @@ class AppStrings {
   static const homeEmptySubtitle =
       'Crie um local para começar a receber sussurros';
 
+  // Navegação (bottom nav)
+  static const navHome         = 'Início';
+  static const navReminders    = 'Lembretes';
+  static const navEnvironments = 'Ambientes';
+  static const navProfile      = 'Perfil';
+
+  // Dashboard da aba Início
+  static const greetingMorning   = 'Bom dia';
+  static const greetingAfternoon = 'Boa tarde';
+  static const greetingEvening   = 'Boa noite';
+  static const homeToday     = 'Hoje';
+  static const homeTomorrow  = 'Amanhã';
+  static const homeYesterday = 'Ontem';
+  static const weatherSoon      = 'Previsão do tempo em breve';
+  static const nextReminderLabel = 'Próximo lembrete';
+  static const myEnvironments   = 'Meus Ambientes';
+  static const seeAll           = 'Ver todos';
+  static const recentActivity   = 'Atividade Recente';
+  static const createMenuTitle  = 'Criar';
+  static const newReminder      = 'Novo Lembrete';
+  static const newReminderSoon  = 'Em breve — crie por voz';
+
+  // Subtítulo da saudação: contagem de lembretes para hoje.
+  static String homeRemindersToday(int n) => n == 0
+      ? 'Nenhum lembrete para hoje'
+      : 'Você tem $n ${n == 1 ? 'lembrete' : 'lembretes'} para hoje';
+
+  // Aba Ambientes
+  static const environmentsTabTitle = 'Ambientes';
+
+  // Aba Lembretes
+  static const remindersTitle = 'Meus Lembretes';
+  static const remindersEmpty = 'Nenhum lembrete ainda';
+  static const remindersCommandLabel = 'Novo lembrete';
+  static const remindersCommandHint = 'Ex: hoje às 16h me lembre da reunião';
+  // Composer bar compartilhada (abas Início e Lembretes) — placeholder do campo.
+  static const homeComposerHint = 'Fale ou digite seu lembrete...';
+  static const remindersCommandSuccess = 'Feito!';
+  static const remindersCommandError = 'Não entendi. Tente reformular.';
+  static const reminderDeleteConfirm = 'Remover este lembrete?';
+  static const reminderAlertMinOne = 'Escolha ao menos um tipo de alerta';
+
   // Environments
   static const addEnvironmentTitle = 'Novo Ambiente';
   static const environmentNameLabel = 'Nome do local';
@@ -182,6 +224,13 @@ class AppStrings {
       'está em um local salvo. Abra as configurações do aplicativo para '
       'conceder a permissão.';
 
+  // Permissão de alarme exato negada (Android 12+) — lembretes agendados
+  static const reqExactAlarmTitle     = 'Permissão de alarme exato necessária';
+  static const reqExactAlarmBody      =
+      'Para disparar seus lembretes no horário certo, o Sopro precisa da '
+      'permissão de alarme exato. Abra as configurações e ative "Alarmes e '
+      'lembretes".';
+
   // Permissão Bluetooth negada
   static const reqPermBleTitle        = 'Permissão Bluetooth necessária';
   static const reqPermBleBody         =
@@ -278,6 +327,11 @@ class AppStrings {
   static const settingsNotifSoundDesc    = 'Toca som ao receber um sussurro';
   static const settingsNotifCooldown     = 'Frequência';
   static const settingsNotifCooldownDesc = 'Intervalo mínimo entre notificações';
+
+  // Notificação diária de clima
+  static const settingsWeatherNotif      = 'Previsão diária do tempo';
+  static const settingsWeatherNotifDesc  = 'Recebe o clima do dia num horário fixo';
+  static const settingsWeatherNotifTime  = 'Horário';
 
   // Perfil — foto
   static const profilePhotoTooltip = 'Alterar foto do perfil';

@@ -38,7 +38,12 @@ import '../../widgets/sopro_primary_button.dart';
 import '../../widgets/sopro_text_field.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
-  const ProfileScreen({super.key});
+  // showBackButton: true no push normal ('/profile', ícone da Home) — mostra a
+  // seta de voltar. false quando embutida como aba do MainShellScreen (não há
+  // "voltar" de uma aba), escondendo o leading do AppBar.
+  final bool showBackButton;
+
+  const ProfileScreen({super.key, this.showBackButton = true});
 
   @override
   ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
@@ -254,6 +259,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       backgroundColor: AppTheme.backgroundPrimary,
       appBar: AppBar(
         title: const Text(AppStrings.profileTitle),
+        // Sem seta de voltar quando renderizada como aba do shell.
+        automaticallyImplyLeading: widget.showBackButton,
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,

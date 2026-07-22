@@ -18,6 +18,11 @@ class AppConstants {
   static String get locationIqKey =>
       dotenv.env['LOCATIONIQ_KEY'] ?? '';
 
+  // Chave da OpenWeatherMap (clima do card da Home). Lida do .env em runtime.
+  // Conta grátis: 60 req/min. Vazia → card volta ao estado "em breve".
+  static String get openWeatherKey =>
+      dotenv.env['OPENWEATHER_API_KEY'] ?? '';
+
   // Endpoint de busca forward da LocationIQ (OSM + dados de endereço extras).
   static const locationIqEndpoint =
       'https://us1.locationiq.com/v1/search';
@@ -159,7 +164,10 @@ class AppConstants {
       'delete_all_triggers {"type":"delete_all_triggers","environment":"Local"}\n'
       'delete_environment {"type":"delete_environment","environment":"Local"}\n'
       'delete_all_environments {"type":"delete_all_environments"}\n'
-      'add_shopping_item {"type":"add_shopping_item","item":"Leite"}\n\n'
+      'add_shopping_item {"type":"add_shopping_item","item":"Leite"}\n'
+      'create_reminder {"type":"create_reminder","title":"texto curto",'
+      '"date":"AAAA-MM-DD","time":"HH:mm","repeat_rule":"none",'
+      '"repeat_days_of_week":"","alert_mode":"notification"}\n\n'
       'REGRAS:\n'
       '1) NUNCA invente ambiente. Use so locais ditos pelo usuario. Jamais crie '
       'Casa/Trabalho/Local/Destino se nao foram falados.\n'
@@ -180,7 +188,26 @@ class AppConstants {
       '11) Item para a LISTA DE COMPRAS do mercado ("adiciona X na lista", '
       '"poe X na lista do mercado", "preciso comprar X") = add_shopping_item '
       '{item}; NAO use create_trigger. Nao precisa nomear o ambiente: o app '
-      'escolhe o mercado.\n\n'
+      'escolhe o mercado.\n'
+      '12) Pedido de LEMBRETE POR HORARIO/DATA ("me lembre as 16h", "dia 25 as '
+      '9h", "todo dia as 8h", "toda segunda e quarta as 19h") = '
+      'create_reminder. title: SO a acao (mesmo padrao de create_trigger, '
+      'infinitivo, sem "me lembre"). date: SEMPRE formato AAAA-MM-DD, resolvido '
+      'a partir da DATA E HORA ATUAIS informada acima (ex.: "hoje"=data atual, '
+      '"amanha"=data atual+1, "dia 25"=proximo dia 25 a partir de hoje, '
+      '"segunda que vem"=proxima segunda-feira). time: SEMPRE HH:mm em 24h. '
+      'repeat_rule: "none" (padrao, sem mencao de repeticao), "daily" (todo '
+      'dia/diariamente), ou "weekly" (dias especificos da semana). '
+      'repeat_days_of_week: SO quando repeat_rule="weekly", lista de numeros '
+      'ISO separados por virgula (1=segunda...7=domingo), ex. "toda segunda e '
+      'quarta"="1,3". Vazio para "none"/"daily". NUNCA confundir com '
+      'create_trigger (que e vinculado a um LOCAL) — create_reminder e sempre '
+      'por TEMPO, sem ambiente.\n'
+      '13) alert_mode para create_reminder: "notification" (padrao, quando nao '
+      'especificado), "alarm" quando o usuario pedir algo como "me acorda", '
+      '"toca um alarme", "grita bem alto", "preciso acordar pra isso", "both" '
+      'quando pedir os dois explicitamente ("notificacao e alarme", "me avisa e '
+      'toca alarme"). Na duvida, use "notification".\n\n'
       'EXEMPLOS (E=ambientes existentes):\n'
       // 3 ambientes novos, 4 gatilhos, nada inventado (Caso 1 da validacao)
       '- "medico pegar exame, mercado comprar pao e ovo, escola falar com a professora" '
@@ -218,6 +245,24 @@ class AppConstants {
       '- "preciso comprar pao e cafe" -> "actions":['
       '{"type":"add_shopping_item","item":"Pao"},'
       '{"type":"add_shopping_item","item":"Cafe"}]\n'
+      // lembretes por tempo -> create_reminder (datas ilustram o FORMATO;
+      // resolver sempre a partir da DATA E HORA ATUAIS injetada no runtime)
+      '- "hoje as 16h tenho reuniao, me lembre" (data atual=2026-07-21) -> '
+      '"actions":[{"type":"create_reminder","title":"Reuniao","date":'
+      '"2026-07-21","time":"16:00","repeat_rule":"none","repeat_days_of_week":""}]\n'
+      '- "dia 25 as 9h tenho consulta, me lembra" (data atual=2026-07-21) -> '
+      '"actions":[{"type":"create_reminder","title":"Consulta","date":'
+      '"2026-07-25","time":"09:00","repeat_rule":"none","repeat_days_of_week":""}]\n'
+      '- "todo dia as 8h me lembra de tomar remedio" -> "actions":['
+      '{"type":"create_reminder","title":"Tomar remedio","date":"2026-07-21",'
+      '"time":"08:00","repeat_rule":"daily","repeat_days_of_week":""}]\n'
+      '- "toda segunda e quarta as 19h me lembra da academia" -> "actions":['
+      '{"type":"create_reminder","title":"Ir a academia","date":"2026-07-21",'
+      '"time":"19:00","repeat_rule":"weekly","repeat_days_of_week":"1,3"}]\n'
+      '- "amanha as 6h me acorda pra malhar" -> "actions":['
+      '{"type":"create_reminder","title":"Malhar","date":"2026-07-22",'
+      '"time":"06:00","repeat_rule":"none","repeat_days_of_week":"",'
+      '"alert_mode":"alarm"}]\n'
       // ambiguidade -> nao adivinha, pergunta (Regra 6/8)
       '- "quando chegar la me lembra de ligar" (sem contexto) -> "actions":[],'
       '"follow_up_question":"Qual lugar voce quer dizer?"\n'

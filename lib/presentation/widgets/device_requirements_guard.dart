@@ -5,7 +5,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/strings.dart';
 import '../../infrastructure/logging/core/logger.dart';
+import '../../infrastructure/reminders/reminder_scheduler.dart';
 import '../providers/ble_providers.dart';
+import '../providers/database_provider.dart';
 import '../providers/location_providers.dart';
 
 // Único ponto de verificação de requisitos do dispositivo.
@@ -120,6 +122,34 @@ class DeviceRequirementsGuard {
       }
     }
 
+    // ── 6. Alarme exato (Android 12+) — só se houver lembrete ativo ─────────
+    // Não incomoda quem não usa a feature: só verifica se existe ≥1 lembrete
+    // ativo no banco.
+    bool exactAlarmOk = true;
+    if (context.mounted) {
+      final activeReminders = await ref
+          .read(scheduledReminderRepositoryProvider)
+          .watchAllActive()
+          .first;
+      if (activeReminders.isNotEmpty) {
+        final scheduler = ReminderScheduler();
+        exactAlarmOk = await scheduler.hasExactAlarmPermission();
+        if (!exactAlarmOk && context.mounted) {
+          Logger.debug('exact_alarm_disabled',
+              feature: 'device_guard', action: 'check');
+          await _showDialog(
+            context,
+            title: AppStrings.reqExactAlarmTitle,
+            body: AppStrings.reqExactAlarmBody,
+            onOpenSettings: scheduler.openExactAlarmSettings,
+          );
+        } else if (exactAlarmOk) {
+          Logger.debug('exact_alarm_enabled',
+              feature: 'device_guard', action: 'check');
+        }
+      }
+    }
+
     // ── Log resultado ──────────────────────────────────────────────────────
     final allOk = hasLocation && gpsOk && hasBle && btOk && overlayOk;
     final event =
@@ -133,6 +163,7 @@ class DeviceRequirementsGuard {
         'gps': gpsOk.toString(),
         'bluetooth': btOk.toString(),
         'overlay': overlayOk.toString(),
+        'exact_alarm': exactAlarmOk.toString(),
         'location_permission': hasLocation.toString(),
         'ble_permission': hasBle.toString(),
       },

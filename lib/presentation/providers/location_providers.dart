@@ -32,6 +32,7 @@ final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
   final envRepo         = ref.watch(environmentRepositoryProvider);
   final triggerRepo     = ref.watch(triggerRepositoryProvider);
   final shoppingRepo    = ref.watch(shoppingListRepositoryProvider);
+  final activityLog     = ref.watch(activityLogRepositoryProvider);
   final notifications   = ref.watch(notificationServiceProvider);
   final locationService = ref.watch(nativeLocationServiceProvider);
   final nativeGeofence  = ref.watch(nativeGeofenceServiceProvider);
@@ -42,6 +43,7 @@ final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
   final fireTriggers = FireTriggersUseCase(
     triggerRepo,
     notifications,
+    activityLog,
     () => ref.read(notificationsEnabledProvider),        // toggle geral
     () => ref.read(notificationSoundProvider),            // som vs. silencioso
     () => ref.read(notificationCooldownMinutesProvider),  // cooldown
@@ -62,6 +64,7 @@ final geofenceManagerProvider = Provider<GeofenceManager>((ref) {
     showMarketList,
     locationService,
     nativeGeofence,
+    activityLog,
   );
 
   // Garante que o stream de GPS seja cancelado quando o provider for descartado

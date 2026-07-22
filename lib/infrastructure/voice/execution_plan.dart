@@ -21,6 +21,8 @@ enum VoiceActionType {
   updateEnvironment,
   // Adiciona um item à lista de compras de um ambiente tipo Mercado.
   addShoppingItem,
+  // Cria um lembrete por TEMPO (data/hora), independente de localização.
+  createReminder,
   // Ação não reconhecida — executor a marca como falha sem abortar o plano.
   unknown,
 }
@@ -75,6 +77,7 @@ class VoiceAction {
       case 'update_trigger':          return VoiceActionType.updateTrigger;
       case 'update_environment':      return VoiceActionType.updateEnvironment;
       case 'add_shopping_item':       return VoiceActionType.addShoppingItem;
+      case 'create_reminder':         return VoiceActionType.createReminder;
       default:                        return VoiceActionType.unknown;
     }
   }
