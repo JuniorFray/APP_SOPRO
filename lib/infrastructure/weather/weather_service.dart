@@ -15,6 +15,10 @@ class WeatherInfo {
   final String iconCode;    // código de ícone do OWM (ex.: "01d")
   final int humidity;       // umidade relativa em % (main.humidity)
   final String cityName;    // "name" do OWM (ex.: "Piracicaba")
+  // Chance de chuva "hoje/em breve" (0-100) — vem do 1º período do /forecast
+  // (mais próximo de agora). null quando previsão indisponível. O endpoint
+  // /weather não expõe pop; a apresentação injeta via getPopSoon().
+  final int? popToday;
   WeatherInfo({
     required this.tempCelsius,
     required this.condition,
@@ -22,7 +26,18 @@ class WeatherInfo {
     required this.iconCode,
     required this.humidity,
     required this.cityName,
+    this.popToday,
   });
+
+  WeatherInfo copyWith({int? popToday}) => WeatherInfo(
+        tempCelsius: tempCelsius,
+        condition: condition,
+        description: description,
+        iconCode: iconCode,
+        humidity: humidity,
+        cityName: cityName,
+        popToday: popToday ?? this.popToday,
+      );
 }
 
 // Um dia da previsão (endpoint /forecast agrupado por dia).
@@ -150,12 +165,8 @@ class WeatherService {
     final key = _cacheKey(lat, lon);
     final cached = await _cacheDao.findValidForecast(key);
     if (cached != null) {
-      try {
-        final list = jsonDecode(cached.forecastJson) as List<dynamic>;
-        return list
-            .map((e) => ForecastDay.fromJson(Map<String, dynamic>.from(e)))
-            .toList();
-      } catch (_) {/* JSON corrompido → refaz abaixo */}
+      final decoded = _decodeForecast(cached.forecastJson);
+      if (decoded != null) return decoded.$1;
     }
 
     final apiKey = AppConstants.openWeatherKey;
@@ -185,11 +196,16 @@ class WeatherService {
       final json = jsonDecode(body) as Map<String, dynamic>;
       final list = (json['list'] as List<dynamic>).cast<Map<String, dynamic>>();
       final days = _groupByDay(list);
+      final popSoon = _rawPopSoon(list);
 
       final now = DateTime.now().millisecondsSinceEpoch;
       await _cacheDao.upsertForecast(WeatherForecastCacheCompanion.insert(
         id: key,
-        forecastJson: jsonEncode(days.map((d) => d.toJson()).toList()),
+        // Guarda dias + pop "em breve" juntos no mesmo JSON de cache.
+        forecastJson: jsonEncode({
+          'days': days.map((d) => d.toJson()).toList(),
+          'popSoon': popSoon,
+        }),
         fetchedAt: now,
         expiresAt: now + const Duration(hours: 3).inMilliseconds,
       ));
@@ -198,6 +214,51 @@ class WeatherService {
       client?.close();
       return const [];
     }
+  }
+
+  // Chance de chuva "hoje/em breve" (0-100) para o card. Reaproveita o cache do
+  // /forecast (mesma TTL 3h): decodifica o popSoon guardado; se ausente, dispara
+  // getForecast (que popula o cache) e relê. null quando indisponível.
+  Future<int?> getPopSoon(double lat, double lon) async {
+    final key = _cacheKey(lat, lon);
+    final cached = await _cacheDao.findValidForecast(key);
+    if (cached != null) {
+      final decoded = _decodeForecast(cached.forecastJson);
+      if (decoded != null) return decoded.$2;
+    }
+    await getForecast(lat, lon); // popula o cache (dias + popSoon)
+    final again = await _cacheDao.findValidForecast(key);
+    if (again != null) return _decodeForecast(again.forecastJson)?.$2;
+    return null;
+  }
+
+  // pop do 1º período do /forecast (mais próximo de agora), em % (0-100).
+  int? _rawPopSoon(List<Map<String, dynamic>> list) {
+    if (list.isEmpty) return null;
+    final pop = (list.first['pop'] as num?) ?? 0;
+    return (pop * 100).round();
+  }
+
+  // Decodifica o cache do forecast tolerando ambos os formatos:
+  //   novo → {"days":[...], "popSoon":N}   ·   antigo → [ ...dias... ]
+  // Retorna (dias, popSoon) ou null se corrompido.
+  (List<ForecastDay>, int?)? _decodeForecast(String jsonStr) {
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is Map<String, dynamic>) {
+        final days = (decoded['days'] as List<dynamic>)
+            .map((e) => ForecastDay.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList();
+        return (days, (decoded['popSoon'] as num?)?.toInt());
+      }
+      if (decoded is List<dynamic>) {
+        final days = decoded
+            .map((e) => ForecastDay.fromJson(Map<String, dynamic>.from(e as Map)))
+            .toList();
+        return (days, null);
+      }
+    } catch (_) {/* JSON corrompido → caller refaz */}
+    return null;
   }
 
   // Agrupa a lista de 3h em dias. Exclui hoje. Até 5 dias.

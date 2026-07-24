@@ -46,6 +46,7 @@ class EnvironmentRepository implements IEnvironmentRepository {
         radiusMeters: Value(entity.radiusMeters),
         createdAt: Value(entity.createdAt),
         isMarket: Value(entity.isMarket),
+        pinImagePath: Value(entity.pinImagePath),
       ),
     );
   }
@@ -60,6 +61,11 @@ class EnvironmentRepository implements IEnvironmentRepository {
     await _dao.setIsMarket(id, isMarket: isMarket);
   }
 
+  @override
+  Future<void> updatePinImagePath(String id, String? path) async {
+    await _dao.setPinImagePath(id, path);
+  }
+
   // Converte o row do banco para a entidade pura de domínio
   EnvironmentEntity _toEntity(Environment row) => EnvironmentEntity(
         id: row.id,
@@ -69,5 +75,6 @@ class EnvironmentRepository implements IEnvironmentRepository {
         radiusMeters: row.radiusMeters,
         createdAt: row.createdAt,
         isMarket: row.isMarket,
+        pinImagePath: row.pinImagePath,
       );
 }

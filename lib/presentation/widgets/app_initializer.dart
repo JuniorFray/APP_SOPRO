@@ -195,6 +195,13 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
       ref.read(voiceSpeechRateProvider.notifier).state = voiceRate;
     }
 
+    // Restaura o toggle dos alertas inteligentes de clima (default false).
+    // O motor nativo (WeatherAlertEngine) reagenda a si mesmo; aqui só refletimos
+    // o estado no provider para o switch das Configurações aparecer correto.
+    if (prefs.getBool('weather_alerts_enabled') ?? false) {
+      ref.read(weatherAlertsEnabledProvider.notifier).state = true;
+    }
+
     // 7. Inicia o foreground service apenas se o onboarding já foi concluído.
     //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
     if (prefs.getBool('onboarding_done') ?? false) {

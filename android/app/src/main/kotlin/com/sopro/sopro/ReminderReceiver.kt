@@ -1,5 +1,6 @@
 package com.sopro.sopro
 
+import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -248,13 +249,32 @@ class ReminderReceiver : BroadcastReceiver() {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
 
-        // Modo alarme: caminho PRINCIPAL é a ReminderAlarmOverlayService (overlay
-        // TYPE_APPLICATION_OVERLAY), que aparece por cima de tudo mesmo com a tela
-        // desbloqueada e o usuário em outro app — cenário em que o fullScreenIntent
-        // pode ser suprimido pelo sistema (só heads-up). Fallback (overlay negado):
-        // fullScreenIntent + ReminderAlarmActivity, comportamento antigo.
+        // Modo alarme: a rota é escolhida pelo ESTADO REAL DA TELA no disparo, não
+        // só pela permissão. Overlays TYPE_APPLICATION_OVERLAY NUNCA aparecem sobre
+        // a tela de bloqueio segura (restrição do Android, sem workaround) — só uma
+        // Activity com FLAG_SHOW_WHEN_LOCKED (ReminderAlarmActivity) alcança o lock
+        // screen. Então:
+        //   - Tela BLOQUEADA (ou sem permissão de overlay) → fullScreenIntent +
+        //     ReminderAlarmActivity, único caminho que surge sobre o bloqueio.
+        //   - Tela DESBLOQUEADA + overlay permitido → ReminderAlarmOverlayService,
+        //     caminho confiável quando o usuário está em outro app (o
+        //     fullScreenIntent pode ser suprimido para só heads-up).
         if (wantsAlarm) {
-            if (Settings.canDrawOverlays(context)) {
+            val keyguardManager =
+                context.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            val isLocked = keyguardManager.isKeyguardLocked
+            val overlayAllowed = Settings.canDrawOverlays(context)
+            val useOverlay = !isLocked && overlayAllowed
+
+            // Log da rota escolhida — confirma nos testes qual caminho rodou.
+            Logger.info("reminder_alarm_route", feature = "reminders",
+                action = "showNotification", correlationId = corrId,
+                payload = mapOf("reminder_id" to reminderId,
+                    "locked" to isLocked.toString(),
+                    "route" to (if (useOverlay) "overlay" else "activity")))
+
+            if (useOverlay) {
+                // Tela desbloqueada, app em uso: overlay é o caminho confiável.
                 val svcIntent = Intent(context, ReminderAlarmOverlayService::class.java).apply {
                     putExtra("title", notifTitle)
                     putExtra("content", notifBody)
@@ -277,7 +297,8 @@ class ReminderReceiver : BroadcastReceiver() {
                     attachFullScreenIntent(context, builder, notifId, notifTitle, notifBody)
                 }
             } else {
-                // Overlay não permitido → fullScreenIntent + Activity (comportamento antigo).
+                // Tela bloqueada (overlay não alcança) OU sem permissão de overlay:
+                // fullScreenIntent + Activity, que aparece sobre o lock screen.
                 attachFullScreenIntent(context, builder, notifId, notifTitle, notifBody)
             }
         }

@@ -58,6 +58,7 @@ part 'sopro_database.g.dart';
 //   v12: ScheduledReminders ganha alertMode (notification/alarm/both)
 //   v13: WeatherCacheEntries ganha humidity; nova tabela WeatherForecastCache
 //   v14: WeatherCacheEntries ganha cityName; flush do cache de clima/previsão
+//   v15: Environments ganha pinImagePath — foto por ambiente na plaquinha 3D
 @DriftDatabase(
   tables: [
     Environments,
@@ -90,7 +91,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -165,6 +166,11 @@ class SoproDatabase extends _$SoproDatabase {
             await m.addColumn(weatherCacheEntries, weatherCacheEntries.cityName);
             await customStatement('DELETE FROM weather_cache_entries');
             await customStatement('DELETE FROM weather_forecast_cache');
+          }
+          if (from < 15) {
+            // v15: foto por ambiente na plaquinha 3D. Coluna nullable —
+            // ambientes antigos ficam null (arte Sopro padrão). Nenhum dado perdido.
+            await m.addColumn(environments, environments.pinImagePath);
           }
         },
       );

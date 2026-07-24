@@ -143,6 +143,14 @@
             android:name=".WeatherNotificationReceiver"
             android:exported="false"/>
 
+        <!-- WeatherAlertReceiver — motor adaptativo de alertas inteligentes de
+             clima (checagens periódicas ao longo do dia, intervalo 1h/3h). Disparado
+             pelo AlarmManager, se reagenda sozinho. android:exported="false": só
+             alarmes do próprio app o disparam. -->
+        <receiver
+            android:name=".WeatherAlertReceiver"
+            android:exported="false"/>
+
         <!-- ReminderAlarmActivity — tela cheia de alarme (alert_mode alarm/both),
              aberta pelo fullScreenIntent da notificação. showOnLockScreen cobre
              pré-API 27 (flags no código cobrem 27+). android:exported="false":

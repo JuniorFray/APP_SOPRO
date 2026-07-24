@@ -17,7 +17,13 @@ final currentWeatherProvider = FutureProvider<WeatherInfo?>((ref) async {
   final lat = prefs.getDouble('last_known_lat') ?? 0.0;
   final lon = prefs.getDouble('last_known_lon') ?? 0.0;
   if (lat == 0.0 && lon == 0.0) return null;
-  return ref.watch(weatherServiceProvider).getCurrentWeather(lat, lon);
+  final svc = ref.watch(weatherServiceProvider);
+  final info = await svc.getCurrentWeather(lat, lon);
+  if (info == null) return null;
+  // /weather não traz pop — busca a chance de chuva "em breve" do /forecast
+  // (cache compartilhado) e injeta no card.
+  final pop = await svc.getPopSoon(lat, lon);
+  return info.copyWith(popToday: pop);
 });
 
 // Previsão dos próximos dias para a tira do card da Home. Mesma fonte de

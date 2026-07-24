@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 
 import '../../../core/constants/strings.dart';
 import '../../../core/navigation/app_router.dart';
@@ -12,6 +14,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/utils/environment_icon_mapper.dart';
+import '../../../core/utils/pin_image_store.dart';
 import '../../../domain/entities/environment_entity.dart';
 import '../../../domain/entities/shopping_list_item_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
@@ -95,6 +98,9 @@ class EnvironmentDetailScreen extends ConsumerWidget {
           // Cobre falso positivo E falso negativo da classificação automática.
           _MarketToggle(environment: currentEnv),
 
+          // Foto do pin deste ambiente (usada na plaquinha 3D no mapa).
+          _PinImageTile(environment: currentEnv),
+
           // Corpo condicional: lista de compras (mercado) OU gatilhos (comum).
           Expanded(
             child: currentEnv.isMarket
@@ -172,6 +178,115 @@ class _EnvironmentInfoCard extends StatelessWidget {
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Tile "Imagem do pin" — escolhe/troca/remove a foto usada na plaquinha 3D
+// deste ambiente. Persiste no banco (updatePinImagePath); o mapa reflete na
+// próxima abertura. A foto é copiada para o app e nunca vai para servidor.
+class _PinImageTile extends ConsumerStatefulWidget {
+  final EnvironmentEntity environment;
+
+  const _PinImageTile({required this.environment});
+
+  @override
+  ConsumerState<_PinImageTile> createState() => _PinImageTileState();
+}
+
+class _PinImageTileState extends ConsumerState<_PinImageTile> {
+  bool _busy = false;
+
+  Future<void> _pick() async {
+    setState(() => _busy = true);
+    try {
+      final path = await PinImageStore.pickForEnvironment(
+        widget.environment.id,
+        previousPath: widget.environment.pinImagePath,
+      );
+      if (path != null) {
+        await ref
+            .read(environmentRepositoryProvider)
+            .updatePinImagePath(widget.environment.id, path);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _remove() async {
+    setState(() => _busy = true);
+    try {
+      await PinImageStore.remove(widget.environment.pinImagePath);
+      await ref
+          .read(environmentRepositoryProvider)
+          .updatePinImagePath(widget.environment.id, null);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final path = widget.environment.pinImagePath;
+    final hasImage = path != null && File(path).existsSync();
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: SoproCard(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+        child: Row(
+          children: [
+            // Preview: foto do usuário (recorte quadrado) ou ícone de pin.
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: hasImage
+                    ? Image.file(File(path), fit: BoxFit.cover)
+                    : Container(
+                        color: AppColors.iconTileBg,
+                        child: const Icon(LucideIcons.mapPin,
+                            color: AppColors.iconTileTint, size: 20),
+                      ),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.md),
+            Expanded(
+              child: Text(
+                AppStrings.pinImageLabel,
+                style: AppTypography.bodyMedium
+                    .copyWith(color: AppColors.textPrimary),
+              ),
+            ),
+            if (_busy)
+              const SizedBox(
+                width: 20, height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: AppColors.accent),
+              )
+            else ...[
+              if (hasImage)
+                IconButton(
+                  onPressed: _remove,
+                  tooltip: AppStrings.pinImageRemove,
+                  icon: const Icon(LucideIcons.trash2,
+                      color: AppColors.textSecondary, size: 18),
+                ),
+              TextButton(
+                onPressed: _pick,
+                child: Text(
+                  AppStrings.pinImageChoose,
+                  style: AppTypography.bodySmall
+                      .copyWith(color: AppColors.accent),
+                ),
+              ),
+            ],
           ],
         ),
       ),

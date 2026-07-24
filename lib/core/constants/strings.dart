@@ -241,6 +241,22 @@ class AppStrings {
   static const useCurrentLocation = 'Usar localização atual';
   static const map2D = 'Ver em 2D';
   static const map3D = 'Ver em 3D';
+  // ── Seletor de estilo do pin (Fase 1 — pins personalizados) ───────────────
+  // Tooltip do botão glass que abre o seletor de estilo do pin.
+  static const pinStyleTooltip   = 'Estilo do pin';
+  // Header (UPPERCASE) do bottom sheet de estilo do pin.
+  static const pinStyleTitle     = 'Estilo do pin';
+  // Rótulos das duas opções de pin.
+  static const pinStyleClassic   = 'Clássico';
+  static const pinStyle3D        = '3D';
+  // Seção de imagem quando o estilo 3D está selecionado.
+  static const pinImageLabel     = 'Imagem do pin';
+  static const pinImageChoose    = 'Escolher imagem';
+  static const pinImageRemove    = 'Remover imagem';
+  // Card de raio no rodapé flutuante do mapa
+  static const radiusActionLabel = 'Raio de ação';
+  static const radiusUnitShort = 'm';
+  static const radiusUnitLong = 'metros';
   static const locationPermissionDenied =
       'Permissão de localização negada. Habilite nas configurações do dispositivo.';
   static const locationError =
@@ -367,6 +383,9 @@ class AppStrings {
   static const settingsNotifSoundDesc    = 'Toca som ao receber um sussurro';
   static const settingsNotifCooldown     = 'Frequência';
   static const settingsNotifCooldownDesc = 'Intervalo mínimo entre notificações';
+  static const settingsWeatherAlerts     = 'Alertas inteligentes de clima';
+  static const settingsWeatherAlertsDesc =
+      'Avisos ao longo do dia: chuva, calor, ar seco e tempo severo';
 
   // Notificação diária de clima
   static const settingsWeatherNotif      = 'Previsão diária do tempo';

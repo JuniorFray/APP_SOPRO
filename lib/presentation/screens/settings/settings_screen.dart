@@ -45,6 +45,7 @@ class SettingsScreen extends ConsumerWidget {
     final notifEnabled  = ref.watch(notificationsEnabledProvider);
     final notifSound    = ref.watch(notificationSoundProvider);
     final notifCooldown = ref.watch(notificationCooldownMinutesProvider);
+    final weatherAlerts = ref.watch(weatherAlertsEnabledProvider);
     final voiceAudio        = ref.watch(voiceAudioResponseProvider);
     final voiceText         = ref.watch(voiceTextResponseProvider);
     final voiceRate         = ref.watch(voiceSpeechRateProvider);
@@ -140,6 +141,24 @@ class SettingsScreen extends ConsumerWidget {
               const _ItemDivider(),
               // Notificação diária de clima (switch + horário) — self-contained.
               const _WeatherNotifTile(),
+              const _ItemDivider(),
+              // Alertas inteligentes de clima — motor nativo adaptativo (checagens
+              // ao longo do dia). Opt-in; liga/desliga o alarme via MethodChannel.
+              _SwitchTile(
+                icon: LucideIcons.cloudLightning,
+                title: AppStrings.settingsWeatherAlerts,
+                subtitle: AppStrings.settingsWeatherAlertsDesc,
+                value: weatherAlerts,
+                onChanged: (v) async {
+                  ref.read(weatherAlertsEnabledProvider.notifier).state = v;
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('weather_alerts_enabled', v);
+                  try {
+                    await _remindersChannel.invokeMethod(
+                        v ? 'scheduleWeatherAlertEngine' : 'cancelWeatherAlertEngine');
+                  } catch (_) {/* canal indisponível — prefs já persistidas */}
+                },
+              ),
             ],
           ),
 

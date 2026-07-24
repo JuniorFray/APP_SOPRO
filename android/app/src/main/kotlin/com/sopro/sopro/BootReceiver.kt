@@ -126,6 +126,15 @@ class BootReceiver : BroadcastReceiver() {
                         payload = mapOf("hour" to hour.toString(), "minute" to minute.toString()))
                 }
 
+                // Reagenda o motor de alertas inteligentes de clima se estava ativo
+                // — o Android descarta alarmes exatos no reboot. Primeira checagem
+                // pós-boot em +5min (o motor se reagenda sozinho depois).
+                if (fprefs.getBoolean("flutter.weather_alerts_enabled", false)) {
+                    WeatherAlertScheduler.scheduleFirst(context)
+                    Logger.info("weather_alerts_boot_rescheduled", feature = "boot",
+                        action = "onReceive", correlationId = corrId)
+                }
+
                 Logger.info("receiver_finished", feature = "boot", action = "onReceive",
                     correlationId = corrId,
                     durationMs = System.currentTimeMillis() - receiverStart,

@@ -114,4 +114,10 @@ flutter:
     - assets/models/
     - assets/icon/
     - assets/map_style_sopro.json
+    # Pins 3D personalizados (Fase 1): plaquinha Sopro completa + moldura vazia
+    - assets/pin_3d_sopro.png
+    - assets/pin_3d_frame.png
+    # Pins clássicos (teardrop) por imagem: verde = seleção, azul = existentes
+    - assets/pin_teardrop_verde.png
+    - assets/pin_teardrop_azul.png
     - .env

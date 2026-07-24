@@ -307,6 +307,7 @@ Map<VoiceActionType, ActionHandler> buildActionHandlers(
         radiusMeters: radius,
         createdAt:    env.createdAt,
         isMarket:     env.isMarket,
+        pinImagePath: env.pinImagePath, // preserva a foto do pin ao atualizar raio
       );
       await envRepo.save(updated);
       await geofence.addSingleGeofence(updated);

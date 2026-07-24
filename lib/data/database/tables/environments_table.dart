@@ -25,6 +25,11 @@ class Environments extends Table {
   // por uma lista de compras gerenciável. Default false (ambiente comum).
   BoolColumn get isMarket => boolean().withDefault(const Constant(false))();
 
+  // Caminho local (diretório de documentos do app) da foto usada na plaquinha 3D
+  // deste ambiente. Nullable: sem foto → usa a arte Sopro padrão. Foto por
+  // ambiente (não global). Nunca sai do dispositivo.
+  TextColumn get pinImagePath => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

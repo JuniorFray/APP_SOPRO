@@ -56,9 +56,23 @@ class $EnvironmentsTable extends Environments
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('CHECK ("is_market" IN (0, 1))'),
       defaultValue: const Constant(false));
+  static const VerificationMeta _pinImagePathMeta =
+      const VerificationMeta('pinImagePath');
   @override
-  List<GeneratedColumn> get $columns =>
-      [id, name, latitude, longitude, radiusMeters, createdAt, isMarket];
+  late final GeneratedColumn<String> pinImagePath = GeneratedColumn<String>(
+      'pin_image_path', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        name,
+        latitude,
+        longitude,
+        radiusMeters,
+        createdAt,
+        isMarket,
+        pinImagePath
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -110,6 +124,12 @@ class $EnvironmentsTable extends Environments
       context.handle(_isMarketMeta,
           isMarket.isAcceptableOrUnknown(data['is_market']!, _isMarketMeta));
     }
+    if (data.containsKey('pin_image_path')) {
+      context.handle(
+          _pinImagePathMeta,
+          pinImagePath.isAcceptableOrUnknown(
+              data['pin_image_path']!, _pinImagePathMeta));
+    }
     return context;
   }
 
@@ -133,6 +153,8 @@ class $EnvironmentsTable extends Environments
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
       isMarket: attachedDatabase.typeMapping
           .read(DriftSqlType.bool, data['${effectivePrefix}is_market'])!,
+      pinImagePath: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}pin_image_path']),
     );
   }
 
@@ -150,6 +172,7 @@ class Environment extends DataClass implements Insertable<Environment> {
   final double radiusMeters;
   final DateTime createdAt;
   final bool isMarket;
+  final String? pinImagePath;
   const Environment(
       {required this.id,
       required this.name,
@@ -157,7 +180,8 @@ class Environment extends DataClass implements Insertable<Environment> {
       required this.longitude,
       required this.radiusMeters,
       required this.createdAt,
-      required this.isMarket});
+      required this.isMarket,
+      this.pinImagePath});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -168,6 +192,9 @@ class Environment extends DataClass implements Insertable<Environment> {
     map['radius_meters'] = Variable<double>(radiusMeters);
     map['created_at'] = Variable<DateTime>(createdAt);
     map['is_market'] = Variable<bool>(isMarket);
+    if (!nullToAbsent || pinImagePath != null) {
+      map['pin_image_path'] = Variable<String>(pinImagePath);
+    }
     return map;
   }
 
@@ -180,6 +207,9 @@ class Environment extends DataClass implements Insertable<Environment> {
       radiusMeters: Value(radiusMeters),
       createdAt: Value(createdAt),
       isMarket: Value(isMarket),
+      pinImagePath: pinImagePath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(pinImagePath),
     );
   }
 
@@ -194,6 +224,7 @@ class Environment extends DataClass implements Insertable<Environment> {
       radiusMeters: serializer.fromJson<double>(json['radiusMeters']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       isMarket: serializer.fromJson<bool>(json['isMarket']),
+      pinImagePath: serializer.fromJson<String?>(json['pinImagePath']),
     );
   }
   @override
@@ -207,6 +238,7 @@ class Environment extends DataClass implements Insertable<Environment> {
       'radiusMeters': serializer.toJson<double>(radiusMeters),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'isMarket': serializer.toJson<bool>(isMarket),
+      'pinImagePath': serializer.toJson<String?>(pinImagePath),
     };
   }
 
@@ -217,7 +249,8 @@ class Environment extends DataClass implements Insertable<Environment> {
           double? longitude,
           double? radiusMeters,
           DateTime? createdAt,
-          bool? isMarket}) =>
+          bool? isMarket,
+          Value<String?> pinImagePath = const Value.absent()}) =>
       Environment(
         id: id ?? this.id,
         name: name ?? this.name,
@@ -226,6 +259,8 @@ class Environment extends DataClass implements Insertable<Environment> {
         radiusMeters: radiusMeters ?? this.radiusMeters,
         createdAt: createdAt ?? this.createdAt,
         isMarket: isMarket ?? this.isMarket,
+        pinImagePath:
+            pinImagePath.present ? pinImagePath.value : this.pinImagePath,
       );
   Environment copyWithCompanion(EnvironmentsCompanion data) {
     return Environment(
@@ -238,6 +273,9 @@ class Environment extends DataClass implements Insertable<Environment> {
           : this.radiusMeters,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       isMarket: data.isMarket.present ? data.isMarket.value : this.isMarket,
+      pinImagePath: data.pinImagePath.present
+          ? data.pinImagePath.value
+          : this.pinImagePath,
     );
   }
 
@@ -250,14 +288,15 @@ class Environment extends DataClass implements Insertable<Environment> {
           ..write('longitude: $longitude, ')
           ..write('radiusMeters: $radiusMeters, ')
           ..write('createdAt: $createdAt, ')
-          ..write('isMarket: $isMarket')
+          ..write('isMarket: $isMarket, ')
+          ..write('pinImagePath: $pinImagePath')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
-      id, name, latitude, longitude, radiusMeters, createdAt, isMarket);
+  int get hashCode => Object.hash(id, name, latitude, longitude, radiusMeters,
+      createdAt, isMarket, pinImagePath);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -268,7 +307,8 @@ class Environment extends DataClass implements Insertable<Environment> {
           other.longitude == this.longitude &&
           other.radiusMeters == this.radiusMeters &&
           other.createdAt == this.createdAt &&
-          other.isMarket == this.isMarket);
+          other.isMarket == this.isMarket &&
+          other.pinImagePath == this.pinImagePath);
 }
 
 class EnvironmentsCompanion extends UpdateCompanion<Environment> {
@@ -279,6 +319,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
   final Value<double> radiusMeters;
   final Value<DateTime> createdAt;
   final Value<bool> isMarket;
+  final Value<String?> pinImagePath;
   final Value<int> rowid;
   const EnvironmentsCompanion({
     this.id = const Value.absent(),
@@ -288,6 +329,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     this.radiusMeters = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.isMarket = const Value.absent(),
+    this.pinImagePath = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   EnvironmentsCompanion.insert({
@@ -298,6 +340,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     required double radiusMeters,
     required DateTime createdAt,
     this.isMarket = const Value.absent(),
+    this.pinImagePath = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         name = Value(name),
@@ -313,6 +356,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     Expression<double>? radiusMeters,
     Expression<DateTime>? createdAt,
     Expression<bool>? isMarket,
+    Expression<String>? pinImagePath,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -323,6 +367,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       if (radiusMeters != null) 'radius_meters': radiusMeters,
       if (createdAt != null) 'created_at': createdAt,
       if (isMarket != null) 'is_market': isMarket,
+      if (pinImagePath != null) 'pin_image_path': pinImagePath,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -335,6 +380,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       Value<double>? radiusMeters,
       Value<DateTime>? createdAt,
       Value<bool>? isMarket,
+      Value<String?>? pinImagePath,
       Value<int>? rowid}) {
     return EnvironmentsCompanion(
       id: id ?? this.id,
@@ -344,6 +390,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       radiusMeters: radiusMeters ?? this.radiusMeters,
       createdAt: createdAt ?? this.createdAt,
       isMarket: isMarket ?? this.isMarket,
+      pinImagePath: pinImagePath ?? this.pinImagePath,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -372,6 +419,9 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     if (isMarket.present) {
       map['is_market'] = Variable<bool>(isMarket.value);
     }
+    if (pinImagePath.present) {
+      map['pin_image_path'] = Variable<String>(pinImagePath.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -388,6 +438,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
           ..write('radiusMeters: $radiusMeters, ')
           ..write('createdAt: $createdAt, ')
           ..write('isMarket: $isMarket, ')
+          ..write('pinImagePath: $pinImagePath, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4142,6 +4193,7 @@ typedef $$EnvironmentsTableCreateCompanionBuilder = EnvironmentsCompanion
   required double radiusMeters,
   required DateTime createdAt,
   Value<bool> isMarket,
+  Value<String?> pinImagePath,
   Value<int> rowid,
 });
 typedef $$EnvironmentsTableUpdateCompanionBuilder = EnvironmentsCompanion
@@ -4153,6 +4205,7 @@ typedef $$EnvironmentsTableUpdateCompanionBuilder = EnvironmentsCompanion
   Value<double> radiusMeters,
   Value<DateTime> createdAt,
   Value<bool> isMarket,
+  Value<String?> pinImagePath,
   Value<int> rowid,
 });
 
@@ -4206,6 +4259,9 @@ class $$EnvironmentsTableFilterComposer
   ColumnFilters<bool> get isMarket => $composableBuilder(
       column: $table.isMarket, builder: (column) => ColumnFilters(column));
 
+  ColumnFilters<String> get pinImagePath => $composableBuilder(
+      column: $table.pinImagePath, builder: (column) => ColumnFilters(column));
+
   Expression<bool> triggersRefs(
       Expression<bool> Function($$TriggersTableFilterComposer f) f) {
     final $$TriggersTableFilterComposer composer = $composerBuilder(
@@ -4258,6 +4314,10 @@ class $$EnvironmentsTableOrderingComposer
 
   ColumnOrderings<bool> get isMarket => $composableBuilder(
       column: $table.isMarket, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get pinImagePath => $composableBuilder(
+      column: $table.pinImagePath,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$EnvironmentsTableAnnotationComposer
@@ -4289,6 +4349,9 @@ class $$EnvironmentsTableAnnotationComposer
 
   GeneratedColumn<bool> get isMarket =>
       $composableBuilder(column: $table.isMarket, builder: (column) => column);
+
+  GeneratedColumn<String> get pinImagePath => $composableBuilder(
+      column: $table.pinImagePath, builder: (column) => column);
 
   Expression<T> triggersRefs<T extends Object>(
       Expression<T> Function($$TriggersTableAnnotationComposer a) f) {
@@ -4342,6 +4405,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             Value<double> radiusMeters = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<bool> isMarket = const Value.absent(),
+            Value<String?> pinImagePath = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EnvironmentsCompanion(
@@ -4352,6 +4416,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             radiusMeters: radiusMeters,
             createdAt: createdAt,
             isMarket: isMarket,
+            pinImagePath: pinImagePath,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4362,6 +4427,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             required double radiusMeters,
             required DateTime createdAt,
             Value<bool> isMarket = const Value.absent(),
+            Value<String?> pinImagePath = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EnvironmentsCompanion.insert(
@@ -4372,6 +4438,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             radiusMeters: radiusMeters,
             createdAt: createdAt,
             isMarket: isMarket,
+            pinImagePath: pinImagePath,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

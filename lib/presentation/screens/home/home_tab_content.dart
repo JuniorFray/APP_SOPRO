@@ -376,6 +376,19 @@ class _WeatherPlaceholder extends ConsumerWidget {
                   fontWeight: FontWeight.w700,
                 ),
               ),
+              // Chance de chuva — só quando relevante (>= 30%), no vão do Spacer,
+              // sem crescer o card. Fica de fora em dias secos (card limpo).
+              if (w.popToday != null && w.popToday! >= 30) ...[
+                const SizedBox(width: AppSpacing.sm),
+                const Icon(Icons.umbrella_outlined,
+                    size: 14, color: AppColors.textSecondary),
+                const SizedBox(width: 4),
+                Text(
+                  '${w.popToday}%',
+                  style: AppTypography.caption
+                      .copyWith(color: AppColors.textSecondary),
+                ),
+              ],
               const Spacer(),
               const Icon(Icons.water_drop_outlined,
                   size: 14, color: AppColors.textSecondary),
@@ -2609,6 +2622,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         radiusMeters: result.environmentRadius!.toDouble(),
         createdAt:    env.createdAt,
         isMarket:     env.isMarket,
+        pinImagePath: env.pinImagePath, // preserva a foto do pin ao atualizar raio
       );
       await ref.read(environmentRepositoryProvider).save(updated);
       if (!mounted) return;

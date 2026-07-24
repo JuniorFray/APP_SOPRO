@@ -37,6 +37,13 @@ class EnvironmentsDao extends DatabaseAccessor<SoproDatabase>
           .write(EnvironmentsCompanion(isMarket: Value(isMarket)))
           .then((count) => count > 0);
 
+  // Atualiza apenas o caminho da foto do pin (null remove a foto) sem tocar nos
+  // demais campos. Value(path) grava; Value(null) volta à arte Sopro padrão.
+  Future<bool> setPinImagePath(String id, String? path) =>
+      (update(environments)..where((e) => e.id.equals(id)))
+          .write(EnvironmentsCompanion(pinImagePath: Value(path)))
+          .then((count) => count > 0);
+
   // Remove um environment pelo ID; os triggers vinculados são removidos em
   // cascade pelo banco (definido em triggers_table.dart via onDelete: cascade)
   Future<int> deleteById(String id) =>

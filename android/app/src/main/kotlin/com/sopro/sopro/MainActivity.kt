@@ -580,6 +580,15 @@ class MainActivity : FlutterActivity() {
                         WeatherNotificationScheduler.cancel(this)
                         result.success(null)
                     }
+                    "scheduleWeatherAlertEngine" -> {
+                        // Liga o motor adaptativo: primeira checagem em +5min.
+                        WeatherAlertScheduler.scheduleFirst(this)
+                        result.success(null)
+                    }
+                    "cancelWeatherAlertEngine" -> {
+                        WeatherAlertScheduler.cancel(this)
+                        result.success(null)
+                    }
                     else -> {
                         Logger.warn("method_channel_not_implemented", feature = "reminders",
                             action = call.method, payload = mapOf("channel" to REMINDERS_CHANNEL))

@@ -21,4 +21,7 @@ abstract interface class IEnvironmentRepository {
 
   // Atualiza somente a flag isMarket (corrigir tipo do ambiente a qualquer momento)
   Future<void> updateIsMarket(String id, {required bool isMarket});
+
+  // Atualiza somente a foto do pin do ambiente (null remove, volta ao padrão)
+  Future<void> updatePinImagePath(String id, String? path);
 }

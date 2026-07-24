@@ -20,6 +20,10 @@ class EnvironmentEntity {
   // Marca o ambiente como Mercado (lista de compras no lugar dos gatilhos)
   final bool isMarket;
 
+  // Caminho local da foto da plaquinha 3D deste ambiente (null → arte padrão).
+  // Opcional para não quebrar construções existentes; nunca sai do dispositivo.
+  final String? pinImagePath;
+
   const EnvironmentEntity({
     required this.id,
     required this.name,
@@ -28,5 +32,6 @@ class EnvironmentEntity {
     required this.radiusMeters,
     required this.createdAt,
     required this.isMarket,
+    this.pinImagePath,
   });
 }
