@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_radius.dart';
-import '../../core/theme/app_shadows.dart';
 import 'glass_surface.dart';
 
 /// Card padrão do Sopro — Dark Glass V3.
@@ -46,24 +45,15 @@ class SoproCard extends StatelessWidget {
       );
     }
 
-    // Modo sólido (padrão)
+    // Modo sólido (padrão) — flat: cor única no meio-termo, sem gradiente/sombra.
     return Container(
       margin: margin,
       decoration: BoxDecoration(
         borderRadius: borderRadius,
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.backgroundCardHighlight,
-            AppColors.backgroundCard,
-          ],
-          stops: [0.0, 0.7],
-        ),
+        color: AppColors.backgroundCardSolid,
         border: bordered
             ? Border.all(color: AppColors.border, width: 0.5)
             : null,
-        boxShadow: const [AppShadows.card],
       ),
       child: ClipRRect(
         borderRadius: borderRadius,

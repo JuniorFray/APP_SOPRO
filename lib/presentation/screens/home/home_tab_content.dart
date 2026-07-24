@@ -17,6 +17,7 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -64,6 +65,7 @@ import '../ble/people_nearby_screen.dart';
 import '../environment/add_environment_screen.dart';
 import '../environment/environment_detail_screen.dart';
 import '../settings/settings_screen.dart';
+
 
 // Conteúdo da aba "Início" — AppBar (BLE Social, Perfil, Configurações) +
 // lista de ambientes + FABs (voz hold-to-record + Novo Ambiente).
@@ -190,31 +192,39 @@ class _HomeDashboard extends ConsumerWidget {
     final name = card?.displayName.trim() ?? '';
     final todayCount = reminders.where((r) => _isToday(r.scheduledAt)).length;
 
+    // Ritmo fixo: 32px entre seções (AppSpacing.section), 12px entre título de
+    // seção e conteúdo (AppSpacing.titleGap).
+    final sections = <Widget>[
+      _greeting(name, todayCount),
+      const SizedBox(height: AppSpacing.lg),
+      const _WeatherPlaceholder(),
+      if (nextReminder != null) ...[
+        const SizedBox(height: AppSpacing.md),
+        _NextReminderCard(reminder: nextReminder),
+      ],
+      const SizedBox(height: AppSpacing.section),
+      _sectionHeader(
+        AppStrings.myEnvironments,
+        action: AppStrings.seeAll,
+        onAction: () => onNavigateToTab(_environmentsTabIndex),
+      ),
+      const SizedBox(height: AppSpacing.titleGap),
+      _environmentsStrip(context, environments),
+      if (activity.isNotEmpty) ...[
+        const SizedBox(height: AppSpacing.section),
+        _sectionHeader(AppStrings.recentActivity),
+        const SizedBox(height: AppSpacing.titleGap),
+        ...activity.take(5).map((a) => _ActivityTile(entry: a)),
+      ],
+    ];
+
     return ListView(
       physics: const BouncingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, AppSpacing.md, 16, AppSpacing.md),
       children: [
-        _greeting(name, todayCount),
-        const SizedBox(height: AppSpacing.lg),
-        const _WeatherPlaceholder(),
-        if (nextReminder != null) ...[
-          const SizedBox(height: AppSpacing.lg),
-          _NextReminderCard(reminder: nextReminder),
-        ],
-        const SizedBox(height: AppSpacing.lg),
-        _sectionHeader(
-          AppStrings.myEnvironments,
-          action: AppStrings.seeAll,
-          onAction: () => onNavigateToTab(_environmentsTabIndex),
-        ),
-        const SizedBox(height: AppSpacing.sm),
-        _environmentsStrip(context, environments),
-        if (activity.isNotEmpty) ...[
-          const SizedBox(height: AppSpacing.lg),
-          _sectionHeader(AppStrings.recentActivity),
-          const SizedBox(height: AppSpacing.sm),
-          ...activity.take(5).map((a) => _ActivityTile(entry: a)),
-        ],
+        // Entrada escalonada por seção: fade-in + slide de 8px.
+        for (var i = 0; i < sections.length; i++)
+          _EntranceItem(index: i, child: sections[i]),
       ],
     );
   }
@@ -231,11 +241,13 @@ class _HomeDashboard extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Saudação — maior e mais leve (28px / w400).
         Text(
           title,
           style: AppTypography.titleLarge.copyWith(
             color: AppColors.textPrimary,
-            fontWeight: FontWeight.w700,
+            fontSize: 28,
+            fontWeight: FontWeight.w400,
           ),
         ),
         const SizedBox(height: 4),
@@ -249,15 +261,18 @@ class _HomeDashboard extends ConsumerWidget {
     );
   }
 
-  // Cabeçalho de seção com ação opcional ("Ver todos").
+  // Cabeçalho de seção — label premium: UPPERCASE, 12px, tracking 1.2, cinza ~60%
+  // (mesmo padrão de "PRÓXIMO LEMBRETE"). "Ver todos" é discreto: 13px, sem bold.
   Widget _sectionHeader(String title, {String? action, VoidCallback? onAction}) {
     return Row(
       children: [
         Text(
-          title,
-          style: AppTypography.titleSmall.copyWith(
-            color: AppColors.textPrimary,
+          title.toUpperCase(),
+          style: const TextStyle(
+            color: AppColors.textDisabled,
+            fontSize: 12,
             fontWeight: FontWeight.w700,
+            letterSpacing: 1.2,
           ),
         ),
         const Spacer(),
@@ -266,9 +281,10 @@ class _HomeDashboard extends ConsumerWidget {
             onTap: onAction,
             child: Text(
               action,
-              style: AppTypography.labelLarge.copyWith(
-                color: AppColors.accent,
-                fontWeight: FontWeight.w600,
+              style: const TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                fontWeight: FontWeight.w400,
               ),
             ),
           ),
@@ -318,8 +334,8 @@ class _WeatherPlaceholder extends ConsumerWidget {
     final forecast = ref.watch(currentForecastProvider).valueOrNull ?? const [];
     return SoproCard(
       glass: true,
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.sm),
+      // Card mais compacto (~20% menos padding) — hierarquia premium.
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: weather == null ? _placeholder() : _content(weather, forecast),
     );
   }
@@ -327,7 +343,7 @@ class _WeatherPlaceholder extends ConsumerWidget {
   // Estado neutro (placeholder original).
   Widget _placeholder() => Row(
         children: [
-          const Icon(Icons.wb_cloudy_outlined,
+          const Icon(LucideIcons.cloud,
               color: AppColors.textSecondary, size: 22),
           const SizedBox(width: AppSpacing.md),
           Expanded(
@@ -343,14 +359,15 @@ class _WeatherPlaceholder extends ConsumerWidget {
   // Clima real, compacto: linha 1 = emoji + temperatura à esquerda, umidade à
   // direita; linha 2 = cidade · descrição juntas (sem competir com a
   // temperatura); e a tira de previsão (quando houver) logo abaixo.
-  Widget _content(WeatherInfo w, List<ForecastDay> forecast) => Column(
+  Widget _content(WeatherInfo w, List<ForecastDay> forecast) {
+    final main = _weatherVisual(w.iconCode);
+    return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Linha 1 — emoji + temperatura (esquerda) · umidade (direita).
+          // Linha 1 — ícone Lucide colorido + temperatura (esquerda) · umidade (direita).
           Row(
             children: [
-              Text(_weatherEmoji(w.iconCode),
-                  style: const TextStyle(fontSize: 30)),
+              Icon(main.icon, size: 28, color: main.color),
               const SizedBox(width: AppSpacing.sm),
               Text(
                 '${w.tempCelsius.round()}°',
@@ -392,9 +409,10 @@ class _WeatherPlaceholder extends ConsumerWidget {
             ],
           ),
           if (forecast.isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.sm),
-            const Divider(color: AppColors.border, height: 1),
+            // Tira de previsão mais compacta (menos espaço vertical).
             const SizedBox(height: AppSpacing.xs),
+            const Divider(color: AppColors.border, height: 1),
+            const SizedBox(height: AppSpacing.xxs),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: forecast.map(_forecastCol).toList(),
@@ -402,50 +420,62 @@ class _WeatherPlaceholder extends ConsumerWidget {
           ],
         ],
       );
+  }
 
-  // Coluna compacta de um dia da previsão: dia abreviado + emoji + max°/min°.
-  Widget _forecastCol(ForecastDay d) => Column(
+  // Coluna compacta de um dia da previsão: dia abreviado + ícone Lucide + max°/min°.
+  Widget _forecastCol(ForecastDay d) {
+    final vi = _weatherVisual(d.iconCode);
+    return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             _weekdayAbbr(d.date),
             style: AppTypography.caption.copyWith(color: AppColors.textSecondary),
           ),
-          const SizedBox(height: 2),
-          Text(_weatherEmoji(d.iconCode), style: const TextStyle(fontSize: 22)),
-          const SizedBox(height: 2),
+          const SizedBox(height: 1),
+          Icon(vi.icon, size: 20, color: vi.color),
+          const SizedBox(height: 1),
           Text(
             '${d.tempMax.round()}°/${d.tempMin.round()}°',
             style: AppTypography.caption.copyWith(color: AppColors.textPrimary),
           ),
         ],
       );
+  }
 
-  // Emoji de clima a partir do iconCode do OWM (sem rede — nunca falha).
-  // Sufixo 'n' = noite. Reaproveitado no ícone principal e na tira.
-  String _weatherEmoji(String iconCode) {
+  // Ícone Lucide + cor a partir do iconCode do OWM (sem rede — nunca falha).
+  // Sufixo 'n' = noite. Reaproveitado no ícone principal e na tira de previsão.
+  ({IconData icon, Color color}) _weatherVisual(String iconCode) {
     final night = iconCode.endsWith('n');
     final c = iconCode.length >= 2 ? iconCode.substring(0, 2) : iconCode;
+    const amber = Color(0xFFFFC857);      // âmbar (sol / tempestade)
+    const amberSoft = Color(0xFFE8C77E);  // âmbar suave (parcialmente nublado)
+    const moonBlue = Color(0xFF8FB8FF);   // azul-claro (lua / neve)
+    const cloudGray = Color(0xFF9BA8C4);  // cinza-azulado (nublado / neblina)
+    const rainBlue = Color(0xFF6FA8FF);   // azul (chuva)
     switch (c) {
       case '01':
-        return night ? '🌙' : '☀️';
+        return night
+            ? (icon: LucideIcons.moon, color: moonBlue)
+            : (icon: LucideIcons.sun, color: amber);
       case '02':
-        return night ? '☁️' : '🌤️';
+        return night
+            ? (icon: LucideIcons.cloud, color: cloudGray)
+            : (icon: LucideIcons.cloudSun, color: amberSoft);
       case '03':
       case '04':
-        return '☁️';
+        return (icon: LucideIcons.cloud, color: cloudGray);
       case '09':
-        return '🌧️';
       case '10':
-        return night ? '🌧️' : '🌦️';
+        return (icon: LucideIcons.cloudRain, color: rainBlue);
       case '11':
-        return '⛈️';
+        return (icon: LucideIcons.cloudLightning, color: amber);
       case '13':
-        return '❄️';
+        return (icon: LucideIcons.cloudSnow, color: moonBlue);
       case '50':
-        return '🌫️';
+        return (icon: LucideIcons.cloudFog, color: cloudGray);
       default:
-        return '🌡️';
+        return (icon: LucideIcons.cloud, color: cloudGray);
     }
   }
 
@@ -507,10 +537,11 @@ class _NextReminderCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppSpacing.sm),
+          // Timestamp discreto — pequeno e apagado, não compete com o título.
           Text(
             _reminderDateLabel(reminder.scheduledAt),
             style:
-                AppTypography.caption.copyWith(color: AppColors.textSecondary),
+                AppTypography.caption.copyWith(color: AppColors.textDisabled),
           ),
         ],
       ),
@@ -525,7 +556,7 @@ class _EnvironmentPreviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visual = EnvironmentIconMapper.getVisual(environment.name);
+    final envIcon = EnvironmentIconMapper.iconFor(environment.name);
     return SizedBox(
       width: 132,
       child: SoproCard(
@@ -540,21 +571,17 @@ class _EnvironmentPreviewCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              // Tile de ícone uniforme (branco ~6%) — Lucide monocromático.
               Container(
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  // ignore: deprecated_member_use
-                  color: visual.color.withOpacity(0.12),
+                  color: AppColors.iconTileBg,
                   borderRadius: BorderRadius.circular(AppRadius.card),
-                  border: Border.all(
-                    // ignore: deprecated_member_use
-                    color: visual.color.withOpacity(0.20),
-                    width: 0.5,
-                  ),
+                  border: Border.all(color: AppColors.border, width: 0.5),
                 ),
                 alignment: Alignment.center,
-                child: Text(visual.emoji, style: const TextStyle(fontSize: 22)),
+                child: Icon(envIcon, size: 22, color: AppColors.iconTileTint),
               ),
               Text(
                 environment.name,
@@ -615,13 +642,40 @@ class _ActivityTile extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppSpacing.sm),
+          // Timestamp discreto — pequeno e apagado.
           Text(
             _relativeTime(entry.createdAt),
             style:
-                AppTypography.caption.copyWith(color: AppColors.textSecondary),
+                AppTypography.caption.copyWith(color: AppColors.textDisabled),
           ),
         ],
       ),
+    );
+  }
+}
+
+// Entrada escalonada por seção — fade-in + slide de 8px (sem pacotes novos).
+// A duração cresce com o índice para dar sensação de cascata; anima só na
+// montagem (TweenAnimationBuilder não re-anima em rebuild com o mesmo destino).
+class _EntranceItem extends StatelessWidget {
+  final int index;
+  final Widget child;
+  const _EntranceItem({required this.index, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Duration(milliseconds: 220 + index * 60),
+      curve: Curves.easeOut,
+      builder: (_, t, child) => Opacity(
+        opacity: t.clamp(0.0, 1.0),
+        child: Transform.translate(
+          offset: Offset(0, (1 - t) * 8),
+          child: child,
+        ),
+      ),
+      child: child,
     );
   }
 }
@@ -664,7 +718,7 @@ String _capitalize(String s) =>
 IconData _activityIcon(ActivityType type) {
   switch (type) {
     case ActivityType.environmentEntered:
-      return Icons.location_on;
+      return LucideIcons.mapPin; // entrada em ambiente (cor coral no tile)
     case ActivityType.triggerFired:
       return Icons.notifications;
     case ActivityType.reminderCompleted:

@@ -24,7 +24,7 @@ class EnvironmentCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final triggersAsync =
         ref.watch(triggersByEnvironmentProvider(environment.id));
-    final visual = EnvironmentIconMapper.getVisual(environment.name);
+    final envIcon = EnvironmentIconMapper.iconFor(environment.name);
 
     return Dismissible(
       key: ValueKey(environment.id),
@@ -47,25 +47,18 @@ class EnvironmentCard extends ConsumerWidget {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Ícone: 64×64 squircle, cor semântica do mapper
+                // Ícone: 64×64 squircle — fundo uniforme (branco ~6%) para todos,
+                // ícone Lucide monocromático com tinta única.
                 Container(
                   width: 64,
                   height: 64,
                   decoration: BoxDecoration(
-                    // ignore: deprecated_member_use
-                    color: visual.color.withOpacity(0.12),
+                    color: AppColors.iconTileBg,
                     borderRadius: BorderRadius.circular(AppRadius.card),
-                    border: Border.all(
-                      // ignore: deprecated_member_use
-                      color: visual.color.withOpacity(0.20),
-                      width: 0.5,
-                    ),
+                    border: Border.all(color: AppColors.border, width: 0.5),
                   ),
                   alignment: Alignment.center,
-                  child: Text(
-                    visual.emoji,
-                    style: const TextStyle(fontSize: 30),
-                  ),
+                  child: Icon(envIcon, size: 26, color: AppColors.iconTileTint),
                 ),
                 const SizedBox(width: 16),
 
@@ -206,25 +199,15 @@ class _TriggerCountBadge extends StatelessWidget {
   }
 }
 
-/// Background de exclusão (swipe endToStart) — gradiente danger direcionado.
+/// Background de exclusão (swipe endToStart) — flat: cor danger sólida.
 class _DeleteBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: [
-            Color(0x33FF5B5B), // danger 20%
-            Color(0xD9FF5B5B), // danger 85%
-          ],
-        ),
+        color: AppColors.danger,
         borderRadius: BorderRadius.all(Radius.circular(AppRadius.card)),
-        border: Border.fromBorderSide(
-          BorderSide(color: Color(0x4DFF5B5B), width: 0.5), // danger 30%
-        ),
       ),
       alignment: Alignment.centerRight,
       padding: const EdgeInsets.only(right: 20),

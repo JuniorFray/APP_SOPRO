@@ -158,6 +158,7 @@ class _HomeComposerBarState extends ConsumerState<HomeComposerBar> {
       enabled: !_sending,
       textInputAction: TextInputAction.send,
       onSubmitted: (_) => _submit(),
+      // Ícone de enviar só aparece quando há texto digitado (fade suave).
       suffixIcon: _sending
           ? const Padding(
               padding: EdgeInsets.all(12),
@@ -170,9 +171,23 @@ class _HomeComposerBarState extends ConsumerState<HomeComposerBar> {
                 ),
               ),
             )
-          : IconButton(
-              icon: const Icon(Icons.send_rounded, color: AppColors.accent),
-              onPressed: _submit,
+          : ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _ctrl,
+              builder: (_, value, __) {
+                final hasText = value.text.trim().isNotEmpty;
+                return AnimatedOpacity(
+                  duration: const Duration(milliseconds: 180),
+                  opacity: hasText ? 1 : 0,
+                  child: IgnorePointer(
+                    ignoring: !hasText,
+                    child: IconButton(
+                      icon: const Icon(Icons.send_rounded,
+                          color: AppColors.accent),
+                      onPressed: _submit,
+                    ),
+                  ),
+                );
+              },
             ),
     );
   }

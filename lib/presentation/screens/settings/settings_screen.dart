@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lucide_icons/lucide_icons.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/constants/strings.dart';
+import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
@@ -21,6 +23,13 @@ const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
 // Canal nativo dos lembretes/alarmes — reaproveitado para a notificação diária
 // de clima (scheduleWeatherNotification / cancelWeatherNotification).
 const _remindersChannel = MethodChannel('com.sopro.sopro/reminders');
+
+// ── Métricas visuais compartilhadas (densidade iOS Settings) ────────────────
+const double _leadingSize = 36;          // lado do tile de ícone neutro
+const double _rowPadH     = AppSpacing.sm; // padding horizontal das linhas
+const double _rowPadV     = AppSpacing.sm; // padding vertical das linhas (~12px)
+// Divisor começa alinhado ao título (após o tile de ícone + gap).
+const double _dividerIndent = _rowPadH + _leadingSize + AppSpacing.sm;
 
 // Tela de Configurações do Sopro.
 // Agrupa preferências de privacidade, notificações e dados.
@@ -63,7 +72,7 @@ class SettingsScreen extends ConsumerWidget {
           _SectionCard(
             children: [
               _SwitchTile(
-                icon: Icons.bluetooth,
+                icon: LucideIcons.bluetooth,
                 title: AppStrings.settingsBleVisible,
                 subtitle: AppStrings.settingsBleVisibleDesc,
                 value: bleVisible,
@@ -92,7 +101,7 @@ class SettingsScreen extends ConsumerWidget {
           _SectionCard(
             children: [
               _SwitchTile(
-                icon: Icons.notifications_outlined,
+                icon: LucideIcons.bell,
                 title: AppStrings.settingsNotifEnabled,
                 subtitle: AppStrings.settingsNotifEnabledDesc,
                 value: notifEnabled,
@@ -108,7 +117,7 @@ class SettingsScreen extends ConsumerWidget {
               // Toggle de som — ativo mesmo quando notificações estão desabilitadas
               // para que o usuário pré-configure antes de reativar
               _SwitchTile(
-                icon: Icons.volume_up_outlined,
+                icon: LucideIcons.volume2,
                 title: AppStrings.settingsNotifSound,
                 subtitle: AppStrings.settingsNotifSoundDesc,
                 value: notifSound,
@@ -139,7 +148,7 @@ class SettingsScreen extends ConsumerWidget {
           _SectionCard(
             children: [
               _SwitchTile(
-                icon: Icons.record_voice_over_outlined,
+                icon: LucideIcons.mic,
                 title: AppStrings.voiceAudioResponse,
                 subtitle: AppStrings.voiceAudioResponseDesc,
                 value: voiceAudio,
@@ -151,7 +160,7 @@ class SettingsScreen extends ConsumerWidget {
               ),
               const _ItemDivider(),
               _SwitchTile(
-                icon: Icons.subtitles_outlined,
+                icon: LucideIcons.messageSquare,
                 title: AppStrings.voiceTextResponse,
                 subtitle: AppStrings.voiceTextResponseDesc,
                 value: voiceText,
@@ -224,7 +233,7 @@ class SettingsScreen extends ConsumerWidget {
               children: [
                 Expanded(
                   child: _ShortcutBlock(
-                    icon: Icons.shield_rounded,
+                    icon: LucideIcons.shield,
                     label: AppStrings.settingsShortcutPrivacy,
                     // TODO: navegar para tela de Privacidade quando existir
                     onTap: () => _comingSoon(context),
@@ -233,7 +242,7 @@ class SettingsScreen extends ConsumerWidget {
                 const SizedBox(width: AppSpacing.md),
                 Expanded(
                   child: _ShortcutBlock(
-                    icon: Icons.support_agent_rounded,
+                    icon: LucideIcons.lifeBuoy,
                     label: AppStrings.settingsShortcutSupport,
                     // TODO: navegar para tela de Suporte quando existir
                     onTap: () => _comingSoon(context),
@@ -260,9 +269,9 @@ class SettingsScreen extends ConsumerWidget {
   }
 }
 
-// ─── Widgets internos ─────────────────────────────────────────────────────────
+// ─── Componentes base (linguagem iOS Settings) ─────────────────────────────────
 
-// Cabeçalho de seção com texto em maiúsculas
+// Cabeçalho de seção — cinza ~60%, UPPERCASE 12px tracking 1.2 (igual à Home).
 class _SectionHeader extends StatelessWidget {
   final String label;
 
@@ -271,16 +280,184 @@ class _SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.lg, AppSpacing.md, AppSpacing.gap6),
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.lg, AppSpacing.md, AppSpacing.titleGap),
       child: Text(
         label.toUpperCase(),
-        style: AppTypography.labelMedium.copyWith(color: AppTheme.accent),
+        style: const TextStyle(
+          color: AppColors.textDisabled,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.2,
+        ),
       ),
     );
   }
 }
 
-// Linha de configuração com ícone, título, subtítulo e Switch
+// Tile neutro atrás do ícone: fundo branco ~6% + tinta única (nunca coral).
+class _LeadingIcon extends StatelessWidget {
+  final IconData icon;
+  const _LeadingIcon(this.icon);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: _leadingSize,
+      height: _leadingSize,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: AppColors.iconTileBg,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+      ),
+      child: Icon(icon, color: AppColors.iconTileTint, size: 18),
+    );
+  }
+}
+
+// Estilo unificado dos subtítulos: 12.5px, cinza ~50%, altura consistente.
+const TextStyle _subtitleStyle = TextStyle(
+  color: AppColors.textDisabled,
+  fontSize: 12.5,
+  height: 1.35,
+);
+
+// Linha genérica de configuração: ícone neutro + título/subtítulo + trailing.
+// Compacta (padding vertical ~12px, gap título→descrição de 2px).
+class _SettingRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final Widget trailing;
+  final VoidCallback? onTap;
+
+  const _SettingRow({
+    required this.icon,
+    required this.title,
+    required this.trailing,
+    this.subtitle,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(
+          horizontal: _rowPadH, vertical: _rowPadV),
+      child: Row(
+        children: [
+          _LeadingIcon(icon),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  style: AppTypography.titleSmall
+                      .copyWith(color: AppColors.textPrimary),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 2),
+                  Text(subtitle!, style: _subtitleStyle),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          trailing,
+        ],
+      ),
+    );
+
+    if (onTap == null) return row;
+    return InkWell(onTap: onTap, child: row);
+  }
+}
+
+// Switch com contraste ON/OFF explícito: ligado coral, desligado neutro
+// (trilho cinza-escuro + thumb cinza), sem outline residual.
+class _SettingSwitch extends StatelessWidget {
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  const _SettingSwitch({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Switch(
+      value: value,
+      onChanged: onChanged,
+      activeColor: AppColors.textPrimary,
+      activeTrackColor: AppColors.accent,
+      inactiveThumbColor: AppColors.textDisabled,
+      inactiveTrackColor: AppColors.backgroundElevated,
+      trackOutlineColor:
+          const WidgetStatePropertyAll(Colors.transparent),
+    );
+  }
+}
+
+// Dropdown padronizado: valor cinza-claro (~70%) + chevron discreto.
+class _SettingDropdown<T> extends StatelessWidget {
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T> onChanged;
+
+  const _SettingDropdown({
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButton<T>(
+      value: value,
+      items: items,
+      onChanged: (v) => onChanged(v as T),
+      dropdownColor: AppTheme.backgroundElevated,
+      underline: const SizedBox.shrink(),
+      isDense: true,
+      borderRadius: BorderRadius.circular(AppRadius.card),
+      // Chevron cinza no lugar da seta padrão do Material.
+      icon: const Padding(
+        padding: EdgeInsets.only(left: 2),
+        child: Icon(LucideIcons.chevronDown,
+            size: 16, color: AppColors.textDisabled),
+      ),
+      style: AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary),
+    );
+  }
+}
+
+// Valor clicável (ex.: horário) — cinza-claro + chevronRight discreto.
+class _ValueChevron extends StatelessWidget {
+  final String label;
+  const _ValueChevron(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style:
+              AppTypography.bodyMedium.copyWith(color: AppColors.textSecondary),
+        ),
+        const SizedBox(width: 2),
+        const Icon(LucideIcons.chevronRight,
+            size: 16, color: AppColors.textDisabled),
+      ],
+    );
+  }
+}
+
+// ─── Tiles concretos ───────────────────────────────────────────────────────────
+
+// Linha de configuração com Switch.
 class _SwitchTile extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -298,30 +475,11 @@ class _SwitchTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-        ),
-        child: Icon(icon, color: AppTheme.accent, size: 20),
-      ),
-      title: Text(
-        title,
-        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
-      ),
-      subtitle: Text(
-        subtitle,
-        style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
-      ),
-      trailing: Switch(
-        value: value,
-        onChanged: onChanged,
-        activeColor: AppTheme.accent,
-      ),
+    return _SettingRow(
+      icon: icon,
+      title: title,
+      subtitle: subtitle,
+      trailing: _SettingSwitch(value: value, onChanged: onChanged),
     );
   }
 }
@@ -403,43 +561,28 @@ class _WeatherNotifTileState extends State<_WeatherNotifTile> {
     return Column(
       children: [
         _SwitchTile(
-          icon: Icons.wb_sunny_outlined,
+          icon: LucideIcons.sun,
           title: AppStrings.settingsWeatherNotif,
           subtitle: AppStrings.settingsWeatherNotifDesc,
           value: _enabled,
           onChanged: _onToggle,
         ),
-        if (_enabled)
-          ListTile(
-            contentPadding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
-            leading: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: AppTheme.backgroundElevated,
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-              ),
-              child: const Icon(Icons.schedule, color: AppTheme.accent, size: 20),
-            ),
-            title: Text(
-              AppStrings.settingsWeatherNotifTime,
-              style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
-            ),
-            trailing: TextButton(
-              onPressed: _pickTime,
-              child: Text(
-                _timeLabel,
-                style: AppTypography.titleSmall.copyWith(color: AppTheme.accent),
-              ),
-            ),
+        // Horário desaparece quando a previsão diária está desligada.
+        if (_enabled) ...[
+          const _ItemDivider(),
+          _SettingRow(
+            icon: LucideIcons.clock,
+            title: AppStrings.settingsWeatherNotifTime,
+            onTap: _pickTime,
+            trailing: _ValueChevron(_timeLabel),
           ),
+        ],
       ],
     );
   }
 }
 
-// Seletor de potência de transmissão BLE com DropdownButton.
+// Seletor de potência de transmissão BLE (alcance de detecção).
 // 0=ULTRA_LOW (~2m), 1=LOW (~5m), 2=MEDIUM (~10m), 3=HIGH (~20m+)
 class _BlePowerTile extends StatelessWidget {
   final int value;
@@ -449,43 +592,25 @@ class _BlePowerTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-        ),
-        child: const Icon(Icons.settings_input_antenna, color: AppTheme.accent, size: 20),
-      ),
-      title: Text(
-        AppStrings.settingsBleTxPower,
-        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
-      ),
-      subtitle: Text(
-        AppStrings.settingsBleTxPowerDesc,
-        style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
-      ),
-      trailing: DropdownButton<int>(
+    return _SettingRow(
+      icon: LucideIcons.radar,
+      title: AppStrings.settingsBleTxPower,
+      subtitle: AppStrings.settingsBleTxPowerDesc,
+      trailing: _SettingDropdown<int>(
         value: value,
-        dropdownColor: AppTheme.backgroundElevated,
-        underline: const SizedBox.shrink(),
-        style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
+        onChanged: onChanged,
         items: const [
           DropdownMenuItem(value: 0, child: Text(AppStrings.bleTxPowerMin)),
           DropdownMenuItem(value: 1, child: Text(AppStrings.bleTxPowerLow)),
           DropdownMenuItem(value: 2, child: Text(AppStrings.bleTxPowerMed)),
           DropdownMenuItem(value: 3, child: Text(AppStrings.bleTxPowerHigh)),
         ],
-        onChanged: (v) => onChanged(v!),
       ),
     );
   }
 }
 
-// Seletor de frequência de notificação com DropdownButton
+// Seletor de frequência mínima entre notificações.
 class _CooldownTile extends StatelessWidget {
   final int value;
   final ValueChanged<int> onChanged;
@@ -494,31 +619,13 @@ class _CooldownTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-        ),
-        child: const Icon(Icons.timer_outlined, color: AppTheme.accent, size: 20),
-      ),
-      title: Text(
-        AppStrings.settingsNotifCooldown,
-        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
-      ),
-      subtitle: Text(
-        AppStrings.settingsNotifCooldownDesc,
-        style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
-      ),
-      // DropdownButton integrado ao trailing do ListTile
-      trailing: DropdownButton<int>(
+    return _SettingRow(
+      icon: LucideIcons.timer,
+      title: AppStrings.settingsNotifCooldown,
+      subtitle: AppStrings.settingsNotifCooldownDesc,
+      trailing: _SettingDropdown<int>(
         value: value,
-        dropdownColor: AppTheme.backgroundElevated,
-        underline: const SizedBox.shrink(),
-        style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
+        onChanged: onChanged,
         items: const [
           DropdownMenuItem(value: 0,  child: Text('Sempre')),
           DropdownMenuItem(value: 5,  child: Text('5 min')),
@@ -526,7 +633,6 @@ class _CooldownTile extends StatelessWidget {
           DropdownMenuItem(value: 30, child: Text('30 min')),
           DropdownMenuItem(value: 60, child: Text('1 hora')),
         ],
-        onChanged: (v) => onChanged(v!),
       ),
     );
   }
@@ -541,32 +647,17 @@ class _VoiceRateTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-        ),
-        child: const Icon(Icons.speed_outlined, color: AppTheme.accent, size: 20),
-      ),
-      title: Text(
-        AppStrings.voiceSpeechRate,
-        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
-      ),
-      trailing: DropdownButton<double>(
+    return _SettingRow(
+      icon: LucideIcons.gauge,
+      title: AppStrings.voiceSpeechRate,
+      trailing: _SettingDropdown<double>(
         value: value,
-        dropdownColor: AppTheme.backgroundElevated,
-        underline: const SizedBox.shrink(),
-        style: AppTypography.bodyMedium.copyWith(color: AppTheme.textSecondary),
+        onChanged: onChanged,
         items: const [
           DropdownMenuItem(value: 0.3, child: Text(AppStrings.voiceRateSlow)),
           DropdownMenuItem(value: 0.5, child: Text(AppStrings.voiceRateNormal)),
           DropdownMenuItem(value: 0.7, child: Text(AppStrings.voiceRateFast)),
         ],
-        onChanged: (v) => onChanged(v!),
       ),
     );
   }
@@ -588,23 +679,24 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-// Divisória fina e discreta ENTRE itens de um mesmo card.
+// Divisória fina entre itens: branco 8%, alinhada ao título (indent à esquerda,
+// sem indent à direita).
 class _ItemDivider extends StatelessWidget {
   const _ItemDivider();
 
   @override
   Widget build(BuildContext context) {
     return const Divider(
-      color: AppTheme.borderColor,
+      color: AppColors.border,
       height: 1,
       thickness: 1,
-      indent: AppSpacing.md,
-      endIndent: AppSpacing.md,
+      indent: _dividerIndent,
+      endIndent: 0,
     );
   }
 }
 
-// Bloco quadrado de atalho (Privacidade / Suporte): ícone + label centralizados.
+// Bloco quadrado de atalho (Privacidade / Suporte): ícone neutro + label.
 class _ShortcutBlock extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -635,12 +727,12 @@ class _ShortcutBlock extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Icon(icon, color: AppTheme.accent, size: 40),
+                Icon(icon, color: AppColors.iconTileTint, size: 40),
                 const SizedBox(height: AppSpacing.sm),
                 Text(
                   label,
                   style: AppTypography.titleSmall
-                      .copyWith(color: AppTheme.textPrimary),
+                      .copyWith(color: AppColors.textPrimary),
                 ),
               ],
             ),
@@ -665,31 +757,11 @@ class _OverlayToggleTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: AppSpacing.xxs),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: AppTheme.backgroundElevated,
-          borderRadius: BorderRadius.circular(AppRadius.lg),
-        ),
-        child: const Icon(Icons.mic_external_on_outlined,
-            color: AppTheme.accent, size: 20),
-      ),
-      title: Text(
-        AppStrings.settingsOverlayEnabled,
-        style: AppTypography.titleSmall.copyWith(color: AppTheme.textPrimary),
-      ),
-      subtitle: Text(
-        AppStrings.settingsOverlayEnabledDesc,
-        style: AppTypography.bodySmall.copyWith(color: AppTheme.textSecondary),
-      ),
-      trailing: Switch(
-        value: value,
-        onChanged: (v) => onChanged(v),
-        activeColor: AppTheme.accent,
-      ),
+    return _SettingRow(
+      icon: LucideIcons.messageCircle,
+      title: AppStrings.settingsOverlayEnabled,
+      subtitle: AppStrings.settingsOverlayEnabledDesc,
+      trailing: _SettingSwitch(value: value, onChanged: (v) => onChanged(v)),
     );
   }
 }

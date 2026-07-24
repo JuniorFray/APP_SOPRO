@@ -205,15 +205,15 @@ class AppStrings {
   // Tela de Perfil
   static const profileTitle          = 'Meu Perfil';
   static const profileName           = 'Nome';
-  static const profileNameHint       = 'Como você quer ser chamado';
+  static const profileNameHint       = 'Seu nome';
   static const profileRole           = 'Cargo';
   static const profileRoleHint       = 'Ex: Desenvolvedor, Designer, Estudante';
   static const profileCompany        = 'Empresa / Organização';
-  static const profileCompanyHint    = 'Ex: Google, USP, Freelancer';
+  static const profileCompanyHint    = 'Google, USP...';
   static const profileInterests      = 'Interesses';
-  static const profileInterestsHint  = 'Ex: tecnologia, música, café';
+  static const profileInterestsHint  = 'tecnologia, música...';
   static const profileNote           = 'Nota pessoal';
-  static const profileNoteHint       = 'O que você está fazendo aqui? O que busca?';
+  static const profileNoteHint       = 'O que você busca?';
   static const profilePhone          = 'WhatsApp / Telefone';
   static const profilePhoneHint      = 'Ex: 11999998888 (apenas dígitos)';
   static const profileSectionContact = 'Contato';

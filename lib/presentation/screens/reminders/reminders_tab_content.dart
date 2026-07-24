@@ -127,7 +127,7 @@ class _ReminderTile extends ConsumerWidget {
                 Text(
                   _formatDateTime(reminder.scheduledAt),
                   style: AppTypography.caption.copyWith(
-                    color: AppColors.textSecondary,
+                    color: AppColors.textDisabled,
                   ),
                 ),
               ],

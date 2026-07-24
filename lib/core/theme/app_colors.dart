@@ -8,6 +8,7 @@ abstract final class AppColors {
   static const Color backgroundSurface       = Color(0xFF0B1220); // painéis, AppBar
   static const Color backgroundCard          = Color(0xFF0F1A32); // glass base opaco
   static const Color backgroundCardHighlight = Color(0xFF142240); // brilho do topo do card
+  static const Color backgroundCardSolid     = Color(0xFF111E39); // card sólido flat (meio-termo, sem gradiente)
   static const Color backgroundInput         = Color(0xFF111A30); // campos de texto
   static const Color backgroundElevated      = Color(0xFF0F1828); // popovers, dropdowns
 
@@ -45,6 +46,10 @@ abstract final class AppColors {
   static const Color textPrimary   = Color(0xFFFFFFFF);
   static const Color textSecondary = Color(0xFFB7C0D6);
   static const Color textDisabled  = Color(0xFF7E879C);
+
+  // ── Tiles de ícone (ambientes) — fundo uniforme, sem cor por tipo ──────────
+  static const Color iconTileBg   = Color(0x0FFFFFFF); // white ~6% (igual p/ todos)
+  static const Color iconTileTint = Color(0xFFC3CDE6); // tinta única, monocromática
 
   // ── Bordas — Glass (branco translúcido) ───────────────────────────────────
   static const Color border         = Color(0x14FFFFFF); // white 8%

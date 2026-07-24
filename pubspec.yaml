@@ -1,4 +1,4 @@
-﻿name: sopro
+name: sopro
 description: "O sussurro certo. No lugar certo."
 publish_to: "none"
 version: 0.1.0+1
@@ -75,6 +75,7 @@ dependencies:
   # Mapa vetorial GPU (OpenFreeMap) com estilo noturno custom para a tela
   # Novo Ambiente. flutter_map mantido: outras telas ainda o usam.
   maplibre_gl: ^0.22.0
+  lucide_icons: ^0.257.0
 
 dependency_overrides:
   # record_platform_interface >=1.3.0 torna startStream ABSTRATO; record_linux 0.7.2

@@ -11,6 +11,10 @@ abstract final class AppSpacing {
   static const double xl  = 24;   // padding horizontal do rodapé de onboarding
   static const double xxl = 32;   // padding horizontal das páginas de onboarding
 
+  // ── Ritmo de seções (dashboards / telas com blocos titulados) ──────────────
+  static const double section  = 32;  // espaço vertical fixo ENTRE seções
+  static const double titleGap  = 12;  // espaço entre título de seção e conteúdo
+
   // ── Valores fora da grade usados nas telas ─────────────────────────────────
   static const double gap6  =  6;  // gap título→subtitle em sheets e cards
   static const double gap10 = 10;  // padding lateral da barra de busca

@@ -7,21 +7,11 @@ import 'app_colors.dart';
 abstract final class AppShadows {
   // ── Cards ─────────────────────────────────────────────────────────────────
 
-  /// Sombra padrão de card: suave, difusa, mínimo spread.
-  static const BoxShadow card = BoxShadow(
-    color: Color(0x1A000000),
-    blurRadius: 20,
-    spreadRadius: 0,
-    offset: Offset(0, 6),
-  );
+    /// Sombra padrão de card — visual flat: transparente (sem sombra).
+  static const BoxShadow card = BoxShadow(color: Color(0x00000000));
 
-  /// Sombra mais intensa para cards em foco / hover.
-  static const BoxShadow cardElevated = BoxShadow(
-    color: Color(0x26000000),
-    blurRadius: 32,
-    spreadRadius: 0,
-    offset: Offset(0, 10),
-  );
+  /// Sombra de card em foco / hover — visual flat: transparente (sem sombra).
+  static const BoxShadow cardElevated = BoxShadow(color: Color(0x00000000));
 
   // ── FAB de voz ────────────────────────────────────────────────────────────
 

@@ -135,7 +135,7 @@ class _EnvironmentInfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visual = EnvironmentIconMapper.getVisual(environment.name);
+    final envIcon = EnvironmentIconMapper.iconFor(environment.name);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -143,8 +143,8 @@ class _EnvironmentInfoCard extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: AppSpacing.sm),
         child: Row(
           children: [
-            // Emoji ilustrativo do ambiente com cor do mapper
-            Text(visual.emoji, style: const TextStyle(fontSize: 18)),
+            // Ícone Lucide monocromático do ambiente (tinta única)
+            Icon(envIcon, size: 18, color: AppColors.iconTileTint),
             const SizedBox(width: AppSpacing.gap10),
             Expanded(
               child: Text(

@@ -14,7 +14,7 @@ enum GlassEdges { all, bottom, top, none }
 /// para garantir consistência e evitar duplicação da receita.
 ///
 /// Hierarquia (exigida): ClipRRect → BackdropFilter → Container(corpo+borda)
-///                        → foregroundDecoration(especular+profundidade) → child.
+///                        → child.
 ///
 /// Performance: UM único BackdropFilter. Todas as demais camadas são pintura de
 /// decoração (custo desprezível). Sem filtro aninhado, sem RepaintBoundary novo,
@@ -25,7 +25,7 @@ class GlassSurface extends StatelessWidget {
     required this.child,
     this.borderRadius,
     this.margin,
-    this.blurSigma = 24,
+    this.blurSigma = 32,
     this.edges = GlassEdges.all,
     this.shadows,
     this.specular = true,
@@ -49,14 +49,11 @@ class GlassSurface extends StatelessWidget {
   /// Sombras externas de profundidade. null → sem sombra (AppBars/painéis full-bleed).
   final List<BoxShadow>? shadows;
 
-  /// Reflexo especular superior + profundidade na base (foregroundDecoration).
+  /// Mantido por compatibilidade — o specular foi removido do design.
   final bool specular;
 
-  /// Sombras premium padrão de cartão: ambiente difusa + contato curto.
-  static const List<BoxShadow> cardShadows = [
-    BoxShadow(color: Color(0x33000000), blurRadius: 28, spreadRadius: -2, offset: Offset(0, 12)),
-    BoxShadow(color: Color(0x1F000000), blurRadius: 8, spreadRadius: -4, offset: Offset(0, 3)),
-  ];
+    /// Sombras de cartão — visual flat: sem sombra.
+  static const List<BoxShadow> cardShadows = [];
 
   // Borda direcional conforme [edges]: topo brilha (luz de cima), base escurece.
   Border? _border() {
@@ -64,12 +61,9 @@ class GlassSurface extends StatelessWidget {
       case GlassEdges.none:
         return null;
       case GlassEdges.all:
-        return const Border(
-          top: BorderSide(color: Color(0x4DFFFFFF), width: 1.0), // white 30% — rim de luz
-          left: BorderSide(color: Color(0x1FFFFFFF), width: 0.5), // white 12%
-          right: BorderSide(color: Color(0x1FFFFFFF), width: 0.5), // white 12%
-          bottom: BorderSide(color: Color(0x0D000000), width: 1.0), // black 5% — espessura
-        );
+        // Borda uniforme de vidro — fina e clara em todos os lados
+        // (aresta do vidro que captura luz, padrão glassmorphism/iOS).
+        return Border.all(color: const Color(0x1FFFFFFF), width: 1.0); // white 12%
       case GlassEdges.bottom:
         return const Border(
           top: BorderSide(color: Color(0x1FFFFFFF), width: 0.5), // white 12% — rim superior
@@ -100,7 +94,7 @@ class GlassSurface extends StatelessWidget {
         child: Stack(
           children: [
 
-            // ── Camada 1: blur do fundo (BackdropFilter
+                        // ── Camada 1: blur do fundo (BackdropFilter
             //    isolado — sem content dentro dele).
             //    Evita o save layer do Android engolir
             //    os filhos e torná-los invisíveis.
@@ -111,16 +105,9 @@ class GlassSurface extends StatelessWidget {
                 child: Container(
                   decoration: BoxDecoration(
                     borderRadius: radius,
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        Color(0x24FFFFFF),
-                        Color(0x0FFFFFFF),
-                        Color(0x08FFFFFF),
-                      ],
-                      stops: [0.0, 0.55, 1.0],
-                    ),
+                    // Preenchimento uniforme (flat) — sem gradiente, sem
+                    // canto mais claro que o outro.
+                    color: const Color(0x0DFFFFFF), // white 5%
                     border: _border(),
                   ),
                 ),
@@ -131,28 +118,9 @@ class GlassSurface extends StatelessWidget {
             //    BackdropFilter — sem conflito de layer).
             child,
 
-            // ── Camada 3: reflexo especular (overlay
-            //    semi-transparente, não bloqueia toques).
-            if (specular)
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [
-                          Color(0x38FFFFFF),
-                          Color(0x0AFFFFFF),
-                          Color(0x00FFFFFF),
-                          Color(0x0F000000),
-                        ],
-                        stops: [0.0, 0.12, 0.5, 1.0],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+            // ── Camada 3 (removida): o specular criava brilho artificial no
+            //    topo. No glassmorphism atual, o brilho vem do fundo desfocado
+            //    (GlowBackground) + borda de vidro — não de tinta pintada.
           ],
         ),
       ),
