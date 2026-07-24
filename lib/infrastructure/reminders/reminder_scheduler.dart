@@ -49,4 +49,20 @@ class ReminderScheduler {
   Future<void> openExactAlarmSettings() async {
     await _channel.invokeMethod<void>('openExactAlarmSettings');
   }
+
+  // true se o app pode usar fullScreenIntent (canUseFullScreenIntent()).
+  // Sempre true em Android < 14 (API < 34), onde a permissão não existe.
+  // Sem ela, o alarme de tela cheia é rebaixado para notificação heads-up.
+  Future<bool> hasFullScreenIntentPermission() async {
+    return await _channel
+            .invokeMethod<bool>('hasFullScreenIntentPermission') ??
+        true;
+  }
+
+  // Abre Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT para o usuário
+  // conceder a permissão de tela cheia (Android 14+). No-op em versões
+  // anteriores.
+  Future<void> openFullScreenIntentSettings() async {
+    await _channel.invokeMethod<void>('openFullScreenIntentSettings');
+  }
 }

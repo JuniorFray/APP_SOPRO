@@ -3,6 +3,7 @@ package com.sopro.sopro
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlarmManager
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.bluetooth.*
 import android.content.Context
@@ -565,6 +566,34 @@ class MainActivity : FlutterActivity() {
                             val intent = Intent(
                                 Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
                                 Uri.parse("package:$packageName")
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(intent)
+                        }
+                        result.success(null)
+                    }
+                    // Android 14+ (API 34+): a permissão USE_FULL_SCREEN_INTENT precisa
+                    // ser concedida explicitamente pelo usuário; sem ela o sistema
+                    // rebaixa silenciosamente o fullScreenIntent para heads-up (alarme
+                    // não abre sozinho sobre a tela bloqueada). Em versões anteriores a
+                    // permissão não existe como conceito → sempre concedida.
+                    "hasFullScreenIntentPermission" -> {
+                        val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            (getSystemService(NotificationManager::class.java)
+                                as NotificationManager).canUseFullScreenIntent()
+                        } else true
+                        Logger.info("fullscreen_intent_check", feature = "reminders",
+                            action = "hasFullScreenIntentPermission",
+                            payload = mapOf("sdk_int" to Build.VERSION.SDK_INT.toString(),
+                                "can_use_full_screen_intent" to granted.toString()))
+                        result.success(granted)
+                    }
+                    "openFullScreenIntentSettings" -> {
+                        // Só chamado após hasFullScreenIntentPermission == false, o que
+                        // só ocorre em API 34+. No-op defensivo em versões anteriores.
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                            val intent = Intent(
+                                Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                Uri.fromParts("package", packageName, null)
                             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             startActivity(intent)
                         }

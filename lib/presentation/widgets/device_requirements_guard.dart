@@ -1,3 +1,4 @@
+import 'package:auto_start_flutter/auto_start_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -150,6 +151,79 @@ class DeviceRequirementsGuard {
       }
     }
 
+    // ── 7. Tela cheia (Android 14+) — sempre ───────────────────────────────
+    // A permissão USE_FULL_SCREEN_INTENT precisa ser concedida em runtime no
+    // Android 14+; sem ela o alarme não abre sozinho sobre a tela bloqueada.
+    // Roda no fluxo padrão como os demais itens (não depende de já existir
+    // lembrete configurado). No-op (sempre concedida) em Android < 14.
+    bool fsIntentOk = true;
+    if (context.mounted) {
+      final scheduler = ReminderScheduler();
+      fsIntentOk = await scheduler.hasFullScreenIntentPermission();
+      if (!fsIntentOk && context.mounted) {
+        Logger.debug('fullscreen_intent_disabled',
+            feature: 'device_guard', action: 'check');
+        await _showDialog(
+          context,
+          title: AppStrings.reqFullScreenIntentTitle,
+          body: AppStrings.reqFullScreenIntentBody,
+          onOpenSettings: scheduler.openFullScreenIntentSettings,
+        );
+      } else if (fsIntentOk) {
+        Logger.debug('fullscreen_intent_enabled',
+            feature: 'device_guard', action: 'check');
+      }
+    }
+
+    // ── 8. Autostart / bateria do fabricante — HEURÍSTICO (melhor esforço) ──
+    // Xiaomi "Autostart", Samsung "Apps em hibernação", etc. NÃO têm API
+    // oficial: não dá pra checar se está concedido, só abrir a tela e pedir
+    // pro usuário verificar manualmente. Por isso este passo:
+    //   - só mostra um AVISO (nunca marca como "concedido" — não há como);
+    //   - persiste 'autostart_warning_shown' pra não repetir a cada abertura;
+    //   - é 100% pulável, nunca bloqueia o app.
+    // Cobertura depende do pacote auto_start_flutter (nem todo fabricante é
+    // reconhecido) — em Android stock/Pixel isAutoStartAvailable é false e o
+    // passo é pulado em silêncio.
+    if (context.mounted) {
+      final prefs = await SharedPreferences.getInstance();
+      final alreadyWarned = prefs.getBool('autostart_warning_shown') ?? false;
+      final available = (await isAutoStartAvailable) ?? false;
+      if (available && !alreadyWarned) {
+        final manufacturer =
+            (await getDeviceManufacturer())?.toLowerCase() ?? '';
+        final isSamsung = manufacturer.contains('samsung');
+        final body = AppStrings.reqAutoStartBody +
+            (isSamsung ? AppStrings.reqAutoStartBodySamsung : '');
+        Logger.debug('autostart_warning_shown',
+            feature: 'device_guard', action: 'check',
+            payload: {'manufacturer': manufacturer});
+        if (context.mounted) {
+          final check = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => AlertDialog(
+              title: const Text(AppStrings.reqAutoStartTitle),
+              content: Text(body),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text(AppStrings.reqAutoStartSkip),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text(AppStrings.reqAutoStartCheck),
+                ),
+              ],
+            ),
+          );
+          // Marca como avisado só depois de exibir — NÃO significa "concedido".
+          await prefs.setBool('autostart_warning_shown', true);
+          if (check == true) await getAutoStartPermission();
+        }
+      }
+    }
+
     // ── Log resultado ──────────────────────────────────────────────────────
     final allOk = hasLocation && gpsOk && hasBle && btOk && overlayOk;
     final event =
@@ -164,6 +238,7 @@ class DeviceRequirementsGuard {
         'bluetooth': btOk.toString(),
         'overlay': overlayOk.toString(),
         'exact_alarm': exactAlarmOk.toString(),
+        'fullscreen_intent': fsIntentOk.toString(),
         'location_permission': hasLocation.toString(),
         'ble_permission': hasBle.toString(),
       },

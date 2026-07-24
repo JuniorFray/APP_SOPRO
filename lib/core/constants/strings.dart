@@ -287,6 +287,28 @@ class AppStrings {
       'permissão de alarme exato. Abra as configurações e ative "Alarmes e '
       'lembretes".';
 
+  // Permissão de tela cheia negada (Android 14+) — alarme sobre tela bloqueada
+  static const reqFullScreenIntentTitle = 'Permissão de tela cheia necessária';
+  static const reqFullScreenIntentBody  =
+      'Para o alarme abrir sozinho sobre a tela bloqueada, o Sopro precisa da '
+      'permissão de tela cheia. Abra as configurações e ative "Notificações em '
+      'tela cheia".';
+
+  // Autostart / economia de energia do fabricante — heurístico, melhor esforço.
+  // NÃO há API oficial: o app não consegue confirmar se foi realmente ativado.
+  static const reqAutoStartTitle      = 'Configuração extra de bateria';
+  static const reqAutoStartBody       =
+      'Alguns fabricantes têm uma configuração extra de bateria que pode '
+      'impedir alarmes de tocar direito. Toque abaixo para verificar — pode '
+      'não se aplicar ao seu aparelho.';
+  // Complemento específico Samsung (caminho validado manualmente).
+  static const reqAutoStartBodySamsung =
+      '\n\nNo seu Samsung, verifique também: Configurações > Cuidados com o '
+      'dispositivo > Bateria > Limites de uso em segundo plano > "Apps em '
+      'hibernação" — e remova o Sopro dessa lista.';
+  static const reqAutoStartCheck      = 'Verificar configuração';
+  static const reqAutoStartSkip       = 'Pular por agora';
+
   // Permissão Bluetooth negada
   static const reqPermBleTitle        = 'Permissão Bluetooth necessária';
   static const reqPermBleBody         =
