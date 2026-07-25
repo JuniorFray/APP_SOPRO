@@ -10,6 +10,7 @@ import 'package:record/record.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:sopro/core/constants/app_constants.dart';
+import 'package:sopro/infrastructure/conversation/prompt_engine.dart';
 import 'package:sopro/infrastructure/logging/core/correlation_manager.dart';
 import 'package:sopro/infrastructure/logging/core/logger.dart';
 import 'package:sopro/infrastructure/voice/execution_plan.dart';
@@ -505,6 +506,10 @@ class VoiceService {
     // sprint: enviar nome + ID ao Gemini para ele decidir reutilizar vs criar.
     List<String> existingEnvironmentIds = const [],
     String contextSummary = '',
+    // Preâmbulo de continuação (Planner.continuationPreamble): quando o usuário
+    // responde a um follow-up, enquadra o áudio como resposta ao comando
+    // original. Vazio em comando direto → prompt inalterado.
+    String continuation = '',
   }) async {
     final file = File(filePath);
     final correlationId = CorrelationManager.beginOperation('voice');
@@ -516,11 +521,18 @@ class VoiceService {
 
       final audioBase64 = base64Encode(audioBytes);
       // Prompt = assistente + ambientes existentes (nome+ID) + data/hora atual +
-      // contexto de conversa. _dateTimeContext é reaproveitado por processTextAsPlan.
-      final prompt = AppConstants.geminiAssistantPrompt +
-          _buildAssistantEnvContext(existingEnvironments, existingEnvironmentIds) +
-          _dateTimeContext +
-          (contextSummary.isNotEmpty ? '\n$contextSummary' : '');
+      // contexto de conversa. Montado pelo PromptEngine (Estágio 5) — mesma saída.
+      final basePrompt = const PromptEngine().build(
+        systemPersona: AppConstants.geminiAssistantPrompt,
+        environmentContext:
+            _buildAssistantEnvContext(existingEnvironments, existingEnvironmentIds),
+        dateTimeContext: _dateTimeContext,
+        memorySummary: contextSummary,
+      );
+      // Continuação de follow-up entra por último (logo antes do áudio, ao qual
+      // o preâmbulo se refere). Não toca promptSummary/contextSummary.
+      final prompt =
+          continuation.isEmpty ? basePrompt : '$basePrompt\n\n$continuation';
 
       final sw = Stopwatch()..start();
       final (raw, status) = await _sendAudioRaw(audioBase64, prompt);
@@ -619,10 +631,14 @@ class VoiceService {
       if (transcript.trim().isEmpty) return VoicePlanResult.empty();
       if (AppConstants.geminiApiKey.isEmpty) return VoicePlanResult.empty();
 
-      final prompt = AppConstants.geminiAssistantPrompt +
-          _buildAssistantEnvContext(existingEnvironments, existingEnvironmentIds) +
-          _dateTimeContext +
-          (contextSummary.isNotEmpty ? '\n$contextSummary' : '');
+      // Mesma montagem do processAudioAsPlan via PromptEngine (Estágio 5).
+      final prompt = const PromptEngine().build(
+        systemPersona: AppConstants.geminiAssistantPrompt,
+        environmentContext:
+            _buildAssistantEnvContext(existingEnvironments, existingEnvironmentIds),
+        dateTimeContext: _dateTimeContext,
+        memorySummary: contextSummary,
+      );
 
       final sw = Stopwatch()..start();
       final (raw, status) = await _sendTextRaw(transcript, prompt);

@@ -6,6 +6,7 @@ import 'package:drift/drift.dart' show Value;
 import '../../core/constants/app_constants.dart';
 import '../../data/database/daos/weather_cache_dao.dart';
 import '../../data/database/sopro_database.dart';
+import '../providers/i_weather_provider.dart';
 
 // Resultado de clima ATUAL exposto à apresentação (sem acoplamento a Drift).
 class WeatherInfo {
@@ -75,7 +76,7 @@ class ForecastDay {
 
 // Busca e cacheia clima atual + previsão de dias via OpenWeatherMap.
 // Chamada HTTP pura (sem código nativo) — mesmo serviço serve Android e iOS.
-class WeatherService {
+class WeatherService implements IWeatherProvider {
   final WeatherCacheDao _cacheDao;
   WeatherService(this._cacheDao);
 
@@ -84,6 +85,7 @@ class WeatherService {
   String _cacheKey(double lat, double lon) =>
       '${lat.toStringAsFixed(2)}:${lon.toStringAsFixed(2)}';
 
+  @override
   Future<WeatherInfo?> getCurrentWeather(double lat, double lon) async {
     final key = _cacheKey(lat, lon);
     final cached = await _cacheDao.findValid(key);
@@ -161,6 +163,7 @@ class WeatherService {
   // entradas de 3-em-3h por dia, tirando min/max de temperatura e o ícone do
   // horário mais próximo do meio-dia como representativo. Retorna até 5 dias
   // futuros (exclui hoje, que já aparece no clima atual). Cache TTL 3h.
+  @override
   Future<List<ForecastDay>> getForecast(double lat, double lon) async {
     final key = _cacheKey(lat, lon);
     final cached = await _cacheDao.findValidForecast(key);
@@ -219,6 +222,7 @@ class WeatherService {
   // Chance de chuva "hoje/em breve" (0-100) para o card. Reaproveita o cache do
   // /forecast (mesma TTL 3h): decodifica o popSoon guardado; se ausente, dispara
   // getForecast (que popula o cache) e relê. null quando indisponível.
+  @override
   Future<int?> getPopSoon(double lat, double lon) async {
     final key = _cacheKey(lat, lon);
     final cached = await _cacheDao.findValidForecast(key);

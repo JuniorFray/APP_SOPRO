@@ -1,6 +1,14 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-// ConversationContext — memória temporária de conversa do assistente de voz.
+// Conversation State — memória temporária de conversa do assistente de voz.
+//
+// Formaliza o spec voice_structure_doc/architecture/02-Conversation-State.md:
+// mantém o contexto da conversa SEM depender do histórico enviado ao LLM.
+// O "estado mínimo" do doc mapeia para os campos abaixo:
+//   - Skill ativa / Etapa atual  → state (enum) + pendingLocationStage
+//   - Dados coletados            → lastEnvironment / lastTrigger / lastIntent
+//   - Dados pendentes            → pendingEnvName / lastQuestion
+//   - Última interação           → _updatedAt (base do TTL)
 //
 // Objetivo (Fase 2): permitir diálogo natural sem re-perguntar o óbvio. Ex.:
 //   Usuário: "Amanhã vou ao médico."   → cria/foca ambiente "Médico"
@@ -14,6 +22,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 //     interação — zero custo de CPU/bateria em segundo plano.
 //   - Injetado no prompt do Gemini via [promptSummary] para o modelo resolver
 //     referências implícitas ("o exame" → ambiente Médico).
+//
+// Regras do spec (02-Conversation-State.md):
+//   1. Uma tarefa ativa por conversa.
+//   2. Interrupções preservam o estado.
+//   3. Ao finalizar a tarefa, o estado é limpo (clear()).
+//   4. Persistência e estado são responsabilidades diferentes.
 
 // Estado explícito da conversa (substitui flags espalhadas na lógica de voz).
 // O estado VISUAL do botão continua em _FabState; este enum descreve a CONVERSA.
@@ -28,6 +42,9 @@ enum ConversationState {
   cancelled,            // usuário cancelou ou não confirmou
 }
 
+// ConversationContext — instância viva do Conversation State (spec 02).
+// Nome mantido para compatibilidade com os call sites existentes; o enum acima
+// já usa o nome ConversationState do domínio.
 class ConversationContext {
   // Janela de validade do contexto. Curta o suficiente para não "vazar" entre
   // conversas distintas; longa o suficiente para um diálogo encadeado natural.
@@ -40,6 +57,10 @@ class ConversationContext {
   String? lastTrigger;     // último lembrete mencionado/criado
   String? lastIntent;      // última intenção principal (diagnóstico)
   String? lastQuestion;    // última pergunta feita pelo assistente (follow-up)
+  String? lastTranscript;  // fala do usuário que ORIGINOU a pergunta pendente —
+                           // usada para reconstruir o comando na resposta ao
+                           // follow-up (Planner.continuationPreamble). NÃO entra
+                           // em promptSummary()/isEmpty; é só o texto de origem.
 
   // Resolução Inteligente de Localização — controle da conversa de criação de
   // ambiente. Enquanto preenchidos, o assistente está descobrindo a localização
@@ -84,6 +105,7 @@ class ConversationContext {
     lastTrigger = null;
     lastIntent = null;
     lastQuestion = null;
+    lastTranscript = null;
     pendingEnvName = null;
     pendingLocationStage = null;
     touch();

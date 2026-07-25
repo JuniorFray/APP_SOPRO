@@ -42,7 +42,9 @@ import '../../../infrastructure/voice/voice_service.dart';
 import '../../../infrastructure/voice/execution_plan.dart';
 import '../../../infrastructure/voice/voice_action_executor.dart';
 import '../../../infrastructure/voice/action_handlers_builder.dart';
-import '../../../infrastructure/voice/conversation_context.dart';
+import '../../../infrastructure/conversation/behavior_engine.dart';
+import '../../../infrastructure/conversation/conversation_state.dart';
+import '../../../infrastructure/conversation/planner.dart';
 import '../../../infrastructure/voice/location_source_resolver.dart';
 import '../../../infrastructure/geocoding/geocoding_repository.dart';
 import '../../../infrastructure/geocoding/geocoding_platform_interface.dart';
@@ -66,6 +68,10 @@ import '../environment/add_environment_screen.dart';
 import '../environment/environment_detail_screen.dart';
 import '../settings/settings_screen.dart';
 
+
+// Behavior Engine (Estágio 6) — fonte ÚNICA das respostas faladas do assistente.
+// Trocar de persona no futuro é trocar esta instância; os call sites não mudam.
+final BehaviorPersona _say = const BehaviorEngine().persona;
 
 // Conteúdo da aba "Início" — AppBar (BLE Social, Perfil, Configurações) +
 // lista de ambientes + FABs (voz hold-to-record + Novo Ambiente).
@@ -1046,7 +1052,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         // repetir. A próxima gravação continua respondendo a mesma pergunta.
         _envLocationPending!.touch();
         if (mounted) setState(() => _fabState = _FabState.idle);
-        await _speak('Não entendi, pode repetir?');
+        await _speak(_say.notUnderstoodRepeat);
         return;
       } else {
         await _resolveEnvLocationTurn(filePath);
@@ -1114,12 +1120,16 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         ctx.clear();
         AppLogger.log('conversation_context_cleared', {'reason': 'ttl'});
       }
+      // Resposta a follow-up: se há pergunta pendente, o Planner enquadra o áudio
+      // como continuação do comando original (senão null → comando direto normal).
+      final continuation = const Planner().continuationPreamble(ctx);
       final geminiSw = Stopwatch()..start(); // BUG 4 (temporário)
       final planRes0 = await service.processAudioAsPlan(
         filePath,
         existingEnvironments: envNames,
         existingEnvironmentIds: envIds, // Fase 2.1 — nome + ID (reutilizar vs criar)
         contextSummary: ctx.promptSummary(),
+        continuation: continuation ?? '',
       );
       // BUG 4 (temporário) — latência isolada da chamada Gemini (Home).
       AppLogger.log('home_gemini_finished',
@@ -1233,7 +1243,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       content:  Text(AppStrings.voiceTriggerDeleted),
       behavior: SnackBarBehavior.floating,
     ));
-    await _speak('Lembrete removido.');
+    await _speak(_say.reminderRemoved);
   }
 
   // Fase 1 — confirmação por voz antes de remover um gatilho encontrado por
@@ -1242,7 +1252,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   Future<void> _confirmDeleteTrigger(TriggerEntity t) async {
     final label = t.title.isNotEmpty ? t.title : t.content;
     await _confirmByVoice(
-      'Você deseja remover o lembrete $label?',
+      _say.confirmRemoveReminder(label),
       () => _deleteTriggerDirectly(t),
     );
   }
@@ -1258,7 +1268,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     AppLogger.log('speech_no_match', {'surface': 'home'}); // BUG 9 — surface
     // REGRA 3 — responder APENAS "Não consegui ouvir você." Nada além disso
     // (snackbar extra removido nesta hotfix).
-    await _speak(AppStrings.voiceNoSpeechHeard);
+    await _speak(_say.noSpeechHeard);
   }
 
   // Fluxo reutilizável de confirmação por voz para operações destrutivas.
@@ -1318,7 +1328,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       AppLogger.log('voice_confirmation_no',
           {'surface': 'home', 'explicit': (answer == false)}); // BUG 9
       if (mounted) setState(() => _fabState = _FabState.idle);
-      await _speak(AppStrings.voiceOperationCancelled);
+      await _speak(_say.operationCancelled);
     }
   }
 
@@ -1342,8 +1352,13 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     ctx.applyUpdates(planRes.contextUpdates);
     if (planRes.followUp != null) {
       ctx.lastQuestion = planRes.followUp;
+      // Guarda a fala que originou a pergunta — base da continuação no próximo
+      // turno. Novo follow-up sobrescreve o anterior (não gruda).
+      ctx.lastTranscript = planRes.transcript;
       ctx.state = ConversationState.awaitingInformation;
     } else {
+      // Conclusão sem pergunta: limpa a origem para não vazar p/ turnos futuros.
+      ctx.lastTranscript = null;
       ctx.state = ConversationState.completed;
     }
     ctx.touch();
@@ -1417,51 +1432,51 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
           .where((a) => a.type == VoiceActionType.createTrigger).length,
     });
 
-    if (planRes.plan.hasDestructive) {
-      // Confirmação única cobrindo as ações destrutivas do plano.
-      ctx.state = ConversationState.awaitingConfirmation;
-      await _confirmByVoice(
-        _planDestructiveQuestion(planRes.plan),
-        () => _executePlan(planRes, ctx),
-      );
-      return;
-    }
-
-    // Resolução Inteligente de Localização — fluxo ÚNICO de criação de ambiente.
-    // Qualquer plano com UM ambiente NOVO (mesmo misto: ambiente + gatilhos) passa
-    // pelo resolvedor (Place Search / GPS confirmado). As ações restantes (gatilhos)
-    // ficam pendentes e rodam DEPOIS que a localização é resolvida e o ambiente
-    // criado — nunca via GPS cego. Assim planos simples e mistos usam o MESMO fluxo.
+    // Decisão de plano (Estágio 4 — Planner): dado o plano + ambientes atuais,
+    // qual caminho seguir. A checagem "ambiente já existe?" é injetada com o
+    // _matchEnv da Home; o Planner permanece puro (sem UI/banco). A UI abaixo só
+    // aplica os efeitos — comportamento idêntico ao inline anterior.
+    // Resolução Inteligente de Localização — fluxo ÚNICO de criação de ambiente:
+    // qualquer plano com UM ambiente NOVO (mesmo misto) passa pelo resolvedor;
+    // as demais ações ficam pendentes e rodam DEPOIS da criação (nunca GPS cego).
     final envs = await ref.read(environmentRepositoryProvider).getAll();
-    final newCreateEnvs = planRes.plan.actions
-        .where((a) =>
-            a.type == VoiceActionType.createEnvironment &&
-            _matchEnv(envs, a.str(['name', 'environment'])) == null)
-        .toList();
-    if (newCreateEnvs.length == 1) {
-      final envAction = newCreateEnvs.first;
-      final name = envAction.str(['name', 'environment']);
-      // TEMP: remover após auditoria do Place Search
-      AppLogger.log('execution_plan_place_name', {
-        'environment_name': name,
-        'action':           'create_environment',
-        'source':           'gemini',
-      });
-      if (name != null && name.trim().isNotEmpty) {
+    final decision = const Planner().decide(
+      planRes.plan,
+      environmentExists: (name) => _matchEnv(envs, name) != null,
+    );
+
+    switch (decision.step) {
+      case PlannerStep.confirmDestructive:
+        // Confirmação única cobrindo as ações destrutivas do plano.
+        ctx.state = ConversationState.awaitingConfirmation;
+        await _confirmByVoice(
+          _planDestructiveQuestion(planRes.plan),
+          () => _executePlan(planRes, ctx),
+        );
+        return;
+
+      case PlannerStep.resolveLocation:
+        // TEMP: remover após auditoria do Place Search
+        AppLogger.log('execution_plan_place_name', {
+          'environment_name': decision.environmentName,
+          'action':           'create_environment',
+          'source':           'gemini',
+        });
         // Gatilhos e demais ações rodam após a criação (o ambiente já existirá →
         // handler retorna 'ja_existia' sem tocar em GPS; gatilhos casam pelo nome).
-        _pendingPostEnvActions =
-            planRes.plan.actions.where((x) => x != envAction).toList();
+        _pendingPostEnvActions = decision.pendingPostEnvActions;
         if (mounted) setState(() => _fabState = _FabState.idle);
-        await _resolveEnvironmentLocation(name.trim(), ctx);
+        await _resolveEnvironmentLocation(decision.environmentName!, ctx);
         return;
-      }
-    }
 
-    // Não destrutivo: resposta natural imediata + execução em background.
-    if (mounted) setState(() => _fabState = _FabState.idle);
-    if (planRes.reply.trim().isNotEmpty) await _speak(planRes.reply);
-    await _executePlan(planRes, ctx);
+      case PlannerStep.conversational:
+      case PlannerStep.execute:
+        // Não destrutivo: resposta natural imediata + execução em background.
+        // (conversational não ocorre aqui — plano vazio é tratado antes.)
+        if (mounted) setState(() => _fabState = _FabState.idle);
+        if (planRes.reply.trim().isNotEmpty) await _speak(planRes.reply);
+        await _executePlan(planRes, ctx);
+    }
   }
 
   // Executa o ExecutionPlan em sequência (falha não aborta), atualiza contexto e
@@ -1492,6 +1507,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     // Atualiza memória de conversa
     ctx.applyUpdates(planRes.contextUpdates);
     if (planRes.followUp != null) ctx.lastQuestion = planRes.followUp;
+    // Turno concluído com plano (não-vazio): limpa a origem da continuação.
+    ctx.lastTranscript = null;
     ctx.state = ConversationState.completed;
     ctx.touch();
     AppLogger.log('conversation_updated', {'last_environment': ctx.lastEnvironment});
@@ -1528,10 +1545,10 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     // Resposta final natural conforme o resultado
     if (summary.ok == 0 && summary.failed > 0) {
       setState(() => _fabState = _FabState.idle);
-      await _speak('Não consegui concluir agora. Pode tentar de novo?');
+      await _speak(_say.couldNotFinishRetry);
     } else if (summary.partialFailure) {
       setState(() => _fabState = _FabState.idle);
-      await _speak('Fiz a maior parte. ${summary.failed} não deram certo.');
+      await _speak(_say.partialFailure(summary.failed));
     } else {
       await _setSuccess();
       if (planRes.followUp != null &&
@@ -1585,7 +1602,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
           {'created': false, 'reason': 'exists'});
       // Gatilhos pendentes ainda rodam no ambiente já existente (mesmo executor).
       await _runPendingPostEnvActions();
-      if (mounted) await _speak('Você já tem o ambiente ${existing.name}.');
+      if (mounted) await _speak(_say.alreadyHaveEnvironment(existing.name));
       return;
     }
 
@@ -1867,7 +1884,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         if (!mounted) return;
         if (addr == null || VoiceService.isInvalidTranscript(addr)) {
           setState(() => _fabState = _FabState.idle);
-          await _speak('Não entendi o endereço.');
+          await _speak(_say.addressNotUnderstood);
           return;
         }
         await _runPlaceSearch(pending.name, addr);
@@ -1877,7 +1894,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         if (!mounted) return;
         if (spec == null || VoiceService.isInvalidTranscript(spec)) {
           setState(() => _fabState = _FabState.idle);
-          await _speak('Não entendi.');
+          await _speak(_say.notUnderstood);
           return;
         }
         await _runPlaceSearch(pending.name, spec);
@@ -1907,7 +1924,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
           await _createEnvironmentAtCoords(pending.name, chosen.lat, chosen.lon, ctx);
         } else {
           setState(() => _fabState = _FabState.idle);
-          await _speak('Não entendi qual. Pode repetir?');
+          await _speak(_say.notUnderstoodWhichRepeat);
         }
     }
   }
@@ -2040,7 +2057,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     // Executa os gatilhos pendentes do plano no ambiente recém-criado.
     await _runPendingPostEnvActions();
     if (!mounted) return;
-    await _speak('Ambiente $name criado.');
+    await _speak(_say.environmentCreated(name));
     await _setSuccess();
   }
 
@@ -2219,9 +2236,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       // FIX 4: TTS confirma a ação ao usuário
-      await _speak(
-        'Anotado! Vou te lembrar de $title quando chegar em ${env.name}.',
-      );
+      await _speak(_say.reminderSaved(title, env.name));
       await _setSuccess();
     } else {
       // Ambiente não encontrado → oferece criar agora (GPS) ou escolher outro
@@ -2233,9 +2248,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       if (!mounted) return;
       setState(() => _fabState = _FabState.idle);
       // FIX 4: TTS informa que o ambiente não foi encontrado
-      await _speak(
-        'Não encontrei o ambiente ${result.environmentName ?? ''}. Quer criar agora?',
-      );
+      await _speak(_say.environmentNotFoundCreate(result.environmentName ?? ''));
       _showSheet(_EnvNotFoundSheet(
         envName:      result.environmentName ?? '',
         triggerTitle: result.triggerAction ?? '',
@@ -2276,7 +2289,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
     ));
-    await _speak('Anotado! Vou te lembrar de $title quando chegar em ${env.name}.'); // FIX 4
+    await _speak(_say.reminderSaved(title, env.name)); // FIX 4
   }
 
   // Processa pedido pendente deixado pelo FloatingVoiceService nas SharedPreferences.
@@ -2410,7 +2423,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
-      await _speak('Anotado! Ambiente ${env.name} criado com o lembrete $title.'); // FIX 4
+      await _speak(_say.environmentCreatedWithReminder(env.name, title)); // FIX 4
       await _setSuccess();
     } else {
       // GPS falhou → cai no seletor de ambientes existentes como fallback
@@ -2435,7 +2448,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     // FIX 4: nome ausente → TTS + nova gravação automática para capturar o nome
     if (name.trim().isEmpty) {
       setState(() => _fabState = _FabState.idle);
-      await _speak('Qual o nome do ambiente?');
+      await _speak(_say.askEnvironmentName);
       if (!mounted) return;
       _pendingEnvCreate = true;
       // Aguarda 500 ms para o TTS iniciar antes de abrir o microfone
@@ -2457,7 +2470,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
-      await _speak('Pronto! Ambiente ${env.name} criado.'); // FIX 4
+      await _speak(_say.environmentCreatedReady(env.name)); // FIX 4
       await _setSuccess();
     } else {
       // GPS falhou → abre tela de adição com nome pré-preenchido
@@ -2491,7 +2504,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
-      await _speak('Feito! Lembrete $resolvedTitle marcado como resolvido.'); // FIX 4
+      await _speak(_say.reminderResolved(resolvedTitle)); // FIX 4
       await _setSuccess();
     } else {
       // Trigger não encontrado — sem checkmark, apenas snackbar
@@ -2503,7 +2516,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
-      await _speak('Não encontrei esse lembrete.'); // FIX 4
+      await _speak(_say.reminderNotFound); // FIX 4
     }
   }
 
@@ -2521,18 +2534,16 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
           .read(triggerRepositoryProvider)
           .getActiveByEnvironment(env.id);
       if (triggers.isEmpty) {
-        await _speak('Nenhum lembrete em ${env.name} ainda.');
+        await _speak(_say.noRemindersInYet(env.name));
       } else {
         final n      = triggers.length;
         final titles = triggers.map((t) => t.title.isNotEmpty ? t.title : t.content).join(', ');
-        await _speak(
-          'Você tem $n lembrete${n == 1 ? '' : 's'} em ${env.name}: $titles.',
-        );
+        await _speak(_say.remindersListed(n, env.name, titles));
       }
       _showSheet(_TriggerListSheet(environment: env));
     } else {
       // Ambiente não encontrado → seletor de ambiente; ao escolher → lista triggers
-      await _speak('Pendências de qual ambiente?'); // FIX 4
+      await _speak(_say.askPendingWhichEnv); // FIX 4
       _showSheet(_EnvPickerSheet(
         title:    AppStrings.voiceEnvPickerAction,
         subtitle: '',
@@ -2580,12 +2591,10 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       ));
       // FIX 4: TTS resume o que foi criado
       if (result.triggerTitles.isNotEmpty) {
-        await _speak(
-          'Pronto! Ambiente ${env.name} criado com '
-          '${result.triggerTitles.length} lembrete${result.triggerTitles.length == 1 ? '' : 's'}.',
-        );
+        await _speak(_say.environmentCreatedWithReminders(
+            env.name, result.triggerTitles.length));
       } else {
-        await _speak('Pronto! Ambiente ${env.name} criado.');
+        await _speak(_say.environmentCreatedReady(env.name));
       }
       await _setSuccess();
     } else {
@@ -2634,7 +2643,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
       ));
       await _speak( // FIX 4
-        'Feito! Raio de ${env.name} atualizado para ${result.environmentRadius} metros.',
+        _say.environmentRadiusUpdated(env.name, result.environmentRadius),
       );
       await _setSuccess();
     } else if (env != null) {
@@ -2662,10 +2671,10 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     setState(() => _fabState = _FabState.idle);
     final envs = await ref.read(environmentRepositoryProvider).getAll();
     if (envs.isEmpty) {
-      await _speak('Você ainda não tem nenhum local cadastrado.');
+      await _speak(_say.noEnvironmentsYet);
     } else {
       final n = envs.length;
-      await _speak('Você tem $n local${n == 1 ? '' : 'is'} cadastrado${n == 1 ? '' : 's'}.');
+      await _speak(_say.environmentCount(n));
     }
     _showSheet(const _EnvsListSheet());
   }
@@ -2680,7 +2689,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     setState(() => _fabState = _FabState.idle);
     AppLogger.log('voice_intent_unknown',
         {'surface': 'home', 'transcript': result.transcript}); // BUG 9 — surface
-    await _speak(AppStrings.voiceDidNotUnderstand);
+    await _speak(_say.didNotUnderstand);
   }
 
   // ── Handlers de exclusão por voz ──────────────────────────────────────────
@@ -2706,7 +2715,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         'trigger_title': null,
         'sucesso':       false,
       });
-      await _speak('Não encontrei o ambiente ${result.environmentName ?? ''}.');
+      await _speak(_say.environmentNotFound(result.environmentName ?? ''));
       return;
     }
 
@@ -2740,7 +2749,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     if (!mounted) return;
 
     // FIX 4: TTS imediato confirma a exclusão
-    await _speak('Ambiente ${env.name} removido.');
+    await _speak(_say.environmentRemoved(env.name));
 
     // SnackBar com "Desfazer" — 5 s para restaurar o ambiente e seus gatilhos
     if (!mounted) return;
@@ -2794,7 +2803,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
             content: Text(AppStrings.voiceTriggerDeleteNotFound),
             behavior: SnackBarBehavior.floating,
           ));
-          await _speak('Não encontrei esse ambiente.'); // FIX 4
+          await _speak(_say.environmentNotFoundGeneric); // FIX 4
           return;
         }
         final triggers = await ref
@@ -2806,11 +2815,11 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
             content: Text('Nenhum lembrete em ${env.name}.'),
             behavior: SnackBarBehavior.floating,
           ));
-          await _speak('Nenhum lembrete em ${env.name}.'); // FIX 4
+          await _speak(_say.noRemindersIn(env.name)); // FIX 4
         } else if (triggers.length == 1) {
           await _confirmDeleteTrigger(triggers.first); // Fase 1 — confirma por voz
         } else {
-          await _speak('Qual lembrete você quer remover? Toque em um deles.'); // FIX 4
+          await _speak(_say.askWhichReminderTap); // FIX 4
           _showSheet(_DeleteTriggerPickerSheet(
             triggers: triggers,
             onSelected: (t) async {
@@ -2821,7 +2830,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         }
       } else {
         // Nem título nem ambiente → pede ambiente primeiro, depois trigger
-        await _speak('De qual ambiente você quer remover um lembrete?'); // FIX 4
+        await _speak(_say.askWhichEnvToRemoveReminder); // FIX 4
         _showSheet(_EnvPickerSheet(
           title:    AppStrings.voiceDeletePickerTitle,
           subtitle: '',
@@ -2870,13 +2879,13 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         content: Text(AppStrings.voiceTriggerDeleteNotFound),
         behavior: SnackBarBehavior.floating,
       ));
-      await _speak('Não encontrei esse lembrete.'); // FIX 4
+      await _speak(_say.reminderNotFound); // FIX 4
     } else if (triggers.length == 1) {
       // Fase 1 — único match encontrado por voz → confirma por voz antes de excluir
       await _confirmDeleteTrigger(triggers.first);
     } else {
       // Múltiplos matches → lista para o usuário escolher qual remover
-      await _speak('Qual lembrete você quer remover? Toque em um deles.'); // FIX 4
+      await _speak(_say.askWhichReminderTap); // FIX 4
       _showSheet(_DeleteTriggerPickerSheet(
         triggers: triggers,
         onSelected: (t) async {
@@ -2937,7 +2946,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadius.md)),
     ));
-    await _speak('Todos os lembretes de ${env.name} removidos.'); // FIX 4
+    await _speak(_say.allRemindersRemoved(env.name)); // FIX 4
   }
 
   // Fase 1 — "apagar todos os ambientes" / "limpar ambientes" / "apagar tudo".
@@ -2950,7 +2959,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     setState(() => _fabState = _FabState.idle);
 
     if (envs.isEmpty) {
-      await _speak(AppStrings.voiceNoEnvsToDelete);
+      await _speak(_say.noEnvsToDelete);
       return;
     }
 
@@ -2986,7 +2995,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       content:  Text(AppStrings.voiceAllEnvsDeletedSnack),
       behavior: SnackBarBehavior.floating,
     ));
-    await _speak(AppStrings.voiceAllEnvsDeleted);
+    await _speak(_say.allEnvsDeleted);
   }
 
   // Busca triggers ativos em TODOS os ambientes por título ou conteúdo

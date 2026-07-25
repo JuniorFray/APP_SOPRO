@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../observability/event_bus.dart';
 import 'core/log_event.dart';
 import 'core/logger.dart';
 import 'core/logger_configuration.dart';
@@ -91,6 +92,14 @@ class AppLogger {
     if (_deviceId == null) return;
     Logger.info(eventType, payload: payload);
     // _send() removido — Logger._emit() despacha para _onLogEvent() via sink
+    // Estágio 8 — espelha o evento no Event Bus interno (aditivo; não afeta a
+    // telemetria acima). Sem assinantes, é descartado. Cobre as instrumentações
+    // do fluxo de voz que passam por AppLogger.log.
+    EventBus.instance.publish(AppEvent(
+      type: eventType,
+      source: 'app_logger',
+      payload: payload ?? const {},
+    ));
   }
 
   // Upload HTTP fire-and-forget ao Supabase — inalterado em relação à

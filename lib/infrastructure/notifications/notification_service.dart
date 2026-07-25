@@ -1,5 +1,7 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import '../providers/i_notification_provider.dart';
+
 // Serviço responsável por mostrar notificações locais e tratar toques nelas.
 //
 // Canais Android criados em initialize():
@@ -14,7 +16,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 //   Ao tocar numa notificação de trigger, o payload (environmentId) é entregue
 //   ao callback registrado via setOnTapCallback(). O AppInitializer registra
 //   esse callback apontando para o navigatorKey global.
-class NotificationService {
+class NotificationService implements INotificationProvider {
   final _plugin = FlutterLocalNotificationsPlugin();
 
   // Canal com som — prioridade MÁXIMA para garantir heads-up em qualquer OEM
@@ -47,6 +49,7 @@ class NotificationService {
 
   // Inicializa o plugin, registra o handler de toque e cria os canais Android.
   // Deve ser chamado uma vez no AppInitializer, antes de BackgroundServiceManager.start().
+  @override
   Future<void> initialize() async {
     // 'notification_icon' refere-se a res/drawable/notification_icon.xml —
     // drawable monocromático (branco + transparente) exigido pelo Android 5.0+.
@@ -113,6 +116,7 @@ class NotificationService {
 
   // Verifica se o app foi aberto pelo toque numa notificação (cold start).
   // Retorna o environmentId do payload, ou null se o app foi aberto normalmente.
+  @override
   Future<String?> checkLaunchFromNotification() async {
     final details = await _plugin.getNotificationAppLaunchDetails();
     if (details?.didNotificationLaunchApp == true) {
@@ -122,6 +126,7 @@ class NotificationService {
   }
 
   // Solicita permissão de notificação em Android 13+ (API 33).
+  @override
   Future<bool> requestPermission() async {
     final granted = await _plugin
         .resolvePlatformSpecificImplementation<
@@ -137,6 +142,7 @@ class NotificationService {
   // [body]           — conteúdo detalhado do trigger
   // [payload]        — environmentId para deep-link ao tocar
   // [useSoundChannel] — true = canal com som; false = canal silencioso
+  @override
   Future<void> showTrigger({
     required int id,
     required String title,
@@ -184,6 +190,7 @@ class NotificationService {
   // TODO upgrade: quando o checkbox interativo nativo for implementado, cada
   // linha desta notificação passa a ter uma ação de toque individual que chama
   // ShoppingListRepository.toggleChecked() sem abrir o app.
+  @override
   Future<void> showMarketList({
     required int id,
     required String environmentName,
