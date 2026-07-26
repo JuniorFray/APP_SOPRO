@@ -71,7 +71,9 @@ import com.google.android.gms.tasks.CancellationTokenSource
 //
 // IPC com o app:
 //   FloatingVoiceService escreve em "sopro_float_state" → KEY_PENDING_INTENT.
-//   MainActivity.onResume() lê e invoca "processPendingIntent" no Flutter.
+//   Mudanças de dados (ambiente sem coords, wipe total) chamam
+//   MainActivity.notifyDataChanged() → push "dataChanged" para a engine viva
+//   atualizar a UI na hora; com o app fechado, o cold start (initState) cobre.
 class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
     // Resultado do processamento Gemini — error não nulo indica falha
@@ -194,6 +196,28 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     // Mantido no projeto para hotword futura; NÃO participa mais da captura de
     // comandos. Criado em onCreate() e destruído em onDestroy() na main thread.
     private var speechRecognizer: SpeechRecognizer? = null
+
+    // Estágio 1 — estado da conversa por voz encapsulado (antes: chaves cruas de
+    // prefs espalhadas). lazy: só toca prefs após o Context estar pronto (onCreate).
+    private val conversationState by lazy { OverlayConversationState(this) }
+
+    // Estágio 2 — dependências das Skills do overlay, montadas 1x. Os helpers de
+    // DB/fala seguem private: chegam às Skills só como referências de função.
+    private val skillContext by lazy {
+        OverlaySkillContext(
+            scope                 = serviceScope,
+            writeEnvironment      = { name, lat, lon, radius -> writeEnvironmentToDb(name, lat, lon, radius) },
+            writeTrigger          = { title, content, env -> writeTriggerToDb(title, content, env) },
+            writeShopping         = { items, market -> writeShoppingItemsToDb(items, market) },
+            deleteEnvironment     = { env -> deleteEnvironmentFromDb(env) },
+            deleteTrigger         = { env, title -> deleteTriggerFromDb(env, title) },
+            deleteAllEnvironments = { deleteAllEnvironmentsFromDb() },
+            isBlockedName         = { BLOCKED_ENV_NAMES.contains(it.lowercase()) },
+            speak                 = { text -> speak(text) },
+            endVoice              = { endVoice() },
+            correlationId         = { voiceCorrelationId },
+        )
+    }
 
     // ── Captura de áudio (MediaRecorder) — pipeline unificado com a Home ──────
     // Grava M4A (AAC-LC, 8 kHz, 12 kbps) — MESMO codec/sampleRate/bitRate do Dart.
@@ -807,7 +831,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     // Encerra a gravação. Regra 9: se muito curta / arquivo minúsculo (soltou
-    // imediatamente), NÃO envia ao Gemini — responde "Não consegui ouvir você.".
+    // imediatamente), NÃO envia ao Gemini — responde OverlayPersona.notHeard.
     private fun stopAudioCaptureAndProcess() {
         if (!isRecording) return
         isRecording = false
@@ -842,8 +866,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         if (!stopped || file == null || durationMs < 500L || sizeBytes < 800L || !hasSpeech) {
             try { file?.delete() } catch (_: Exception) {}
             revertButtonAppearance()
-            // REGRA 3 — responder APENAS "Não consegui ouvir você." (toast extra removido).
-            speak("Não consegui ouvir você.")
+            // REGRA 3 — responder APENAS OverlayPersona.notHeard (toast extra removido).
+            speak(OverlayPersona.notHeard)
             CorrelationManager.endOperation("voice"); voiceCorrelationId = null
             return
         }
@@ -902,7 +926,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 correlationId = corrId)
             withContext(Dispatchers.Main) {
                 revertButtonAppearance()
-                speak("Chave da API não configurada. Abra o Sopro uma vez.")
+                speak(OverlayPersona.apiKeyMissing)
                 CorrelationManager.endOperation("voice"); voiceCorrelationId = null
             }
             try { file.delete() } catch (_: Exception) {}
@@ -916,7 +940,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             logException("audio_read", e)
             withContext(Dispatchers.Main) {
                 revertButtonAppearance()
-                speak("Não consegui processar o áudio.")
+                speak(OverlayPersona.audioProcessingFailed)
                 CorrelationManager.endOperation("voice"); voiceCorrelationId = null
             }
             try { file.delete() } catch (_: Exception) {}
@@ -925,17 +949,6 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
         // Lê ambientes direto do SQLite — garante nomes exatos do banco no prompt
         val envNames = readEnvironmentNamesFromDb()
-        // Fase 2.2 — CONTRATO ÚNICO com a Home: mesmo schema de PLANO (actions[]).
-        // O prompt espelha AppConstants.geminiAssistantPrompt (Dart). O Gemini apenas
-        // ESTRUTURA a fala como lista de ações; o app executa. Campos extras (reply,
-        // context_updates, follow_up_question, metadata futura) são aceitos e
-        // IGNORADOS pelo executor quando não usados — só "actions[].type" + params
-        // são obrigatórios para executar.
-        val envCtx = if (envNames.isNotEmpty())
-            "Ambientes existentes (reutilize pelo nome EXATO; nao recrie): " +
-                envNames.joinToString(", ")
-        else
-            "Ambientes existentes: nenhum. Todo local citado e novo."
         // BUG 2 — em estado de espera (confirmação sim/não, nome pendente, etc.),
         // NÃO usa o prompt de PLANO. Prompt mínimo só-transcrição; a decisão fica
         // 100% local (parseYesNo em executeVoiceResult). Nunca classifica confirmação.
@@ -945,45 +958,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 action = "confirm", payload = mapOf("surface" to "overlay"),
                 correlationId = corrId) // LOG TEMPORÁRIO (BUG 2)
         }
-        val fullPrompt = """Voce e o Sopro, assistente de lembretes por localizacao (pt-BR).
-A entrada e o AUDIO em anexo. Transcreva e ESTRUTURE (nao execute). Responda SO com
-JSON valido, sem markdown, neste formato:
-{"transcricao":"","reply":"","actions":[],"follow_up_question":null,"context_updates":{"last_environment":null,"last_trigger":null}}
-ACTIONS (type + campos):
-create_environment {"type":"create_environment","name":"Local"}
-create_trigger {"type":"create_trigger","environment":"Local","title":"acao","content":null}
-delete_trigger {"type":"delete_trigger","environment":"Local","title":"aprox"}
-delete_all_triggers {"type":"delete_all_triggers","environment":"Local"}
-delete_environment {"type":"delete_environment","environment":"Local"}
-delete_all_environments {"type":"delete_all_environments"}
-add_shopping_item {"type":"add_shopping_item","item":"nome do item"}
-REGRAS:
-1) NUNCA invente ambiente. So locais ditos pelo usuario.
-2) Local ja existente = REUTILIZE: so create_trigger com o nome EXATO da lista.
-3) Local novo = create_environment e depois seus create_trigger (nessa ordem).
-4) title: SO a acao, infinitivo, max 50 chars, sem o local.
-4b) LISTA DE COMPRAS: pedidos de "comprar/adicionar/precisa de/poe na lista [item]"
-   SEM uma acao vinculada a um local especifico -> add_shopping_item (um por item),
-   SEM campo environment (o app decide o mercado). Acoes especificas de um lugar
-   ("falar com o gerente", "pagar o boleto", "pegar o exame") continuam create_trigger.
-5) PRIORIDADE DESTRUTIVA (MAXIMA): se a fala tem "todos/todas/tudo/limpar/apagar/
-   remover/excluir/deletar" referindo AMBIENTES/LOCAIS -> actions=[{"type":"delete_all_environments"}]
-   e NADA de create. Referindo GATILHOS/LEMBRETES de um local -> delete_all_triggers.
-   Nenhuma acao de criacao pode vencer uma de exclusao total.
-6) Duvida real sobre o local: actions=[] e pergunte em follow_up_question.
-7) reply curto e humano; nunca cite intent/acao.
-EXEMPLOS:
-- "medico pegar exame" (nenhum) -> "actions":[{"type":"create_environment","name":"Medico"},{"type":"create_trigger","environment":"Medico","title":"Pegar exame"}]
-- "adiciona leite e pao na lista de compras" -> "actions":[{"type":"add_shopping_item","item":"Leite"},{"type":"add_shopping_item","item":"Pao"}]
-- "preciso comprar arroz no mercado" -> "actions":[{"type":"add_shopping_item","item":"Arroz"}]
-- "apagar todos os ambientes" -> "actions":[{"type":"delete_all_environments"}]
-- "excluir todos os ambientes" -> "actions":[{"type":"delete_all_environments"}]
-- "remover tudo" -> "actions":[{"type":"delete_all_environments"}]
-- "limpar todos" -> "actions":[{"type":"delete_all_environments"}]
-- "deletar tudo" -> "actions":[{"type":"delete_all_environments"}]
-- "apaga todos os lembretes do mercado" (Mercado) -> "actions":[{"type":"delete_all_triggers","environment":"Mercado"}]
-$envCtx
-Retorne SO o JSON.""".trimIndent()
+        // Estágio 3 — prompt de PLANO isolado (texto byte-idêntico) em OverlayPrompt.
+        val fullPrompt = OverlayPrompt.buildPlanPrompt(envNames)
         // BUG 2 — seleciona o prompt final: só-transcrição em espera, plano completo caso contrário.
         val prompt = if (awaitingState)
             """Transcreva EXATAMENTE o audio em pt-BR. Responda SO com JSON valido, sem markdown:
@@ -1095,22 +1071,23 @@ Retorne SO o JSON.""".trimIndent()
             CorrelationManager.endOperation("voice")
             voiceCorrelationId = null
             showToast("Erro: ${result.error.take(60)}")
-            speak("Não entendi. Pressione novamente para tentar.")
+            speak(OverlayPersona.notUnderstoodPressAgain)
             return
         }
 
-        val statePrefs = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE)
-        val voiceState = statePrefs.getString(KEY_VOICE_STATE, null)
-        val stateSetAt = statePrefs.getLong("voice_state_set_at", 0L)
-        val stateExpired = System.currentTimeMillis() - stateSetAt > 30_000L
+        // Estado capturado uma vez (mesma semântica dos antigos voiceState/stateExpired).
+        val voiceState = conversationState.current
+        val stateExpired = conversationState.isExpired
         if (stateExpired && voiceState != null) {
-            statePrefs.edit().remove(KEY_VOICE_STATE).remove("voice_state_set_at").apply()
+            conversationState.clearMarker()
         }
+        // Estágio 4 — estado de espera ATIVO resolvido pelo Planner (null se expirou).
+        val awaiting = OverlayPlanner.activeAwaiting(voiceState, stateExpired)
 
         // Se estava aguardando nome de ambiente, usa transcript como nome.
         // NÃO reenvia ao Gemini — transcript vem direto do SpeechRecognizer (onResults).
-        if (voiceState == VAL_AWAITING_NAME && !stateExpired) {
-            statePrefs.edit().remove(KEY_VOICE_STATE).remove("voice_state_set_at").apply()
+        if (awaiting == VAL_AWAITING_NAME) {
+            conversationState.clear()
             val rawName = result.transcript?.trim() ?: ""
             // FIX 5: rejeita nomes genéricos mesmo no fluxo de "aguardando nome"
             val envName = rawName.takeIf {
@@ -1124,33 +1101,27 @@ Retorne SO o JSON.""".trimIndent()
                     val lon = loc?.longitude ?: 0.0
                     val ok = if (lat != 0.0 && lon != 0.0) writeEnvironmentToDb(envName, lat, lon, 100) else false
                     withContext(Dispatchers.Main) {
-                        if (ok) speak("Pronto! Ambiente $envName criado.")
-                        else speak("Não consegui criar o ambiente.")
+                        if (ok) speak(OverlayPersona.environmentCreatedReady(envName))
+                        else speak(OverlayPersona.couldNotCreateEnvironment)
                         CorrelationManager.endOperation("voice")
                         voiceCorrelationId = null
                     }
                 }
             } else {
                 // Nome ainda genérico — pede novamente (loop de até 1 tentativa)
-                statePrefs.edit()
-                    .putString(KEY_VOICE_STATE, VAL_AWAITING_NAME)
-                    .putLong("voice_state_set_at", System.currentTimeMillis())
-                    .apply()
+                conversationState.armAwaitingName()
                 showToast("Esse não parece um nome de lugar. Tente um nome mais específico.")
-                speak("Qual é o nome do lugar? Por exemplo: casa, trabalho ou academia.")
+                speak(OverlayPersona.askPlaceName)
                 mainHandler.postDelayed({ showToast("Segure o botão para gravar o nome.") }, 2500L)
             }
             return
         }
 
-        if (voiceState == "awaiting_env_confirm" && !stateExpired) {
-            val pendingTitle   = statePrefs.getString("pending_trigger_title", null) ?: ""
-            val pendingContent = statePrefs.getString("pending_trigger_content", null) ?: ""
-            val pendingEnv     = statePrefs.getString("pending_trigger_env", null) ?: ""
-            statePrefs.edit()
-                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
-                .remove("pending_trigger_title").remove("pending_trigger_content")
-                .remove("pending_trigger_env").apply()
+        if (awaiting == OverlayConversationState.AWAITING_ENV_CONFIRM) {
+            val pendingTitle   = conversationState.pendingTriggerTitle
+            val pendingContent = conversationState.pendingTriggerContent
+            val pendingEnv     = conversationState.pendingTriggerEnv
+            conversationState.clear()
             val text = (result.transcript ?: "").lowercase(java.util.Locale("pt", "BR"))
             val confirmed = listOf("sim", "pode", "cria", "quero").any { text.contains(it) }
             val denied    = listOf("nao", "não", "nope", "cancela", "deixa").any { text.contains(it) }
@@ -1165,14 +1136,14 @@ Retorne SO o JSON.""".trimIndent()
                             val envOk     = writeEnvironmentToDb(pendingEnv, lat, lon, 100)
                             val triggerOk = if (envOk) writeTriggerToDb(pendingTitle, pendingContent, pendingEnv) else false
                             withContext(Dispatchers.Main) {
-                                if (triggerOk) speak("Pronto! Ambiente $pendingEnv criado e lembrete '$pendingTitle' registrado.")
-                                else           speak("Ambiente criado, mas não consegui salvar o lembrete.")
+                                if (triggerOk) speak(OverlayPersona.environmentAndReminderCreated(pendingEnv, pendingTitle))
+                                else           speak(OverlayPersona.environmentCreatedReminderFailed)
                                 CorrelationManager.endOperation("voice")
                                 voiceCorrelationId = null
                             }
                         } else {
                             withContext(Dispatchers.Main) {
-                                speak("Não foi possível obter sua localização.")
+                                speak(OverlayPersona.locationUnavailable)
                                 CorrelationManager.endOperation("voice")
                                 voiceCorrelationId = null
                             }
@@ -1180,12 +1151,12 @@ Retorne SO o JSON.""".trimIndent()
                     }
                 }
                 denied -> {
-                    speak("Tudo bem, lembrete cancelado.")
+                    speak(OverlayPersona.reminderCancelled)
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
                 }
                 else -> {
-                    speak("Não entendi. Diga 'sim' para criar o ambiente ou 'não' para cancelar.")
+                    speak(OverlayPersona.confirmCreateEnvironmentYesNo)
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
                 }
@@ -1193,25 +1164,23 @@ Retorne SO o JSON.""".trimIndent()
             return
         }
 
-        if (voiceState == "awaiting_env_for_trigger" && !stateExpired) {
-            val pendingTitle = statePrefs.getString("pending_trigger_title", null) ?: ""
-            statePrefs.edit()
-                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
-                .remove("pending_trigger_title").apply()
+        if (awaiting == OverlayConversationState.AWAITING_ENV_FOR_TRIGGER) {
+            val pendingTitle = conversationState.pendingTriggerTitle
+            conversationState.clear()
             val envName = result.transcript?.trim() ?: ""
             if (envName.isNotEmpty() && pendingTitle.isNotEmpty()) {
                 showToast("Salvando lembrete em $envName...")
                 serviceScope.launch(Dispatchers.IO) {
                     val ok = writeTriggerToDb(pendingTitle, "", envName)
                     withContext(Dispatchers.Main) {
-                        if (ok) speak("Anotado! Vou te lembrar de $pendingTitle quando chegar em $envName.")
-                        else    speak("Não encontrei o ambiente $envName. Quer que eu crie agora?")
+                        if (ok) speak(OverlayPersona.reminderSaved(pendingTitle, envName))
+                        else    speak(OverlayPersona.environmentNotFoundCreate(envName))
                         CorrelationManager.endOperation("voice")
                         voiceCorrelationId = null
                     }
                 }
             } else {
-                speak("Não entendi. Tente: 'lembra de X quando chegar em Y'.")
+                speak(OverlayPersona.reminderExampleTry)
                 CorrelationManager.endOperation("voice")
                 voiceCorrelationId = null
             }
@@ -1220,14 +1189,11 @@ Retorne SO o JSON.""".trimIndent()
 
         // Fase 1 — resposta de uma confirmação destrutiva pendente (sim/não).
         // Recupera a ação armazenada e executa apenas se a resposta for afirmativa.
-        if (voiceState == VAL_AWAITING_CONFIRM && !stateExpired) {
-            val confirmIntent = statePrefs.getString("confirm_intent", null) ?: ""
-            val confirmEnv    = statePrefs.getString("confirm_env", null) ?: ""
-            val confirmTitle  = statePrefs.getString("confirm_title", null)
-            statePrefs.edit()
-                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
-                .remove("confirm_intent").remove("confirm_env").remove("confirm_title")
-                .apply()
+        if (awaiting == VAL_AWAITING_CONFIRM) {
+            val confirmIntent = conversationState.confirmIntent
+            val confirmEnv    = conversationState.confirmEnv
+            val confirmTitle  = conversationState.confirmTitle
+            conversationState.clear()
             val answer = parseYesNo(result.transcript ?: "")
             if (answer == true) {
                 Logger.info("voice_confirmation_yes", feature = "floating_voice",
@@ -1241,7 +1207,7 @@ Retorne SO o JSON.""".trimIndent()
                     payload = mapOf("intent" to confirmIntent,
                         "explicit" to (answer == false).toString()),
                     correlationId = voiceCorrelationId)
-                speak("Tudo bem, cancelei.")
+                speak(OverlayPersona.cancelledOk)
                 CorrelationManager.endOperation("voice")
                 voiceCorrelationId = null
             }
@@ -1250,11 +1216,9 @@ Retorne SO o JSON.""".trimIndent()
 
         // Resolução Inteligente de Localização — resposta sim/não para usar o GPS
         // atual ao criar o ambiente pendente (paridade com o confirm_gps da Home).
-        if (voiceState == VAL_AWAITING_LOCATION_CONFIRM && !stateExpired) {
-            val pendingName = statePrefs.getString("pending_env_name", null) ?: ""
-            statePrefs.edit()
-                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
-                .remove("pending_env_name").apply()
+        if (awaiting == VAL_AWAITING_LOCATION_CONFIRM) {
+            val pendingName = conversationState.pendingEnvName
+            conversationState.clear()
             val answer = parseYesNo(result.transcript ?: "")
             if (answer == true && pendingName.isNotEmpty()) {
                 // SIM → cria na localização atual (mesmo caminho GPS de sempre).
@@ -1262,7 +1226,7 @@ Retorne SO o JSON.""".trimIndent()
             } else {
                 // NÃO/ambíguo → NÃO usa GPS; o endereço/local é resolvido no app
                 // (overlay não possui geocoder). Orienta a abrir o Sopro.
-                speak("Tudo bem. Abra o app Sopro para escolher o endereço de $pendingName.")
+                speak(OverlayPersona.openAppForAddress(pendingName))
                 endVoice()
             }
             return
@@ -1270,35 +1234,28 @@ Retorne SO o JSON.""".trimIndent()
 
         // Resposta a "em qual mercado?" — grava os itens pendentes no mercado escolhido.
         // Mesmo molde do bloco acima: lê o estado, consome, tenta casar a fala.
-        if (voiceState == VAL_AWAITING_MARKET_CHOICE && !stateExpired) {
-            val itemsRaw = statePrefs.getString("pending_shopping_items", null) ?: ""
-            val namesRaw = statePrefs.getString("pending_market_names", null) ?: ""
+        if (awaiting == VAL_AWAITING_MARKET_CHOICE) {
+            val itemsRaw = conversationState.pendingShoppingItems
+            val namesRaw = conversationState.pendingMarketNames
             val items = itemsRaw.split("|").filter { it.isNotEmpty() }
             val marketNames = namesRaw.split("|").filter { it.isNotEmpty() }
-            statePrefs.edit()
-                .remove(KEY_VOICE_STATE).remove("voice_state_set_at")
-                .remove("pending_shopping_items").remove("pending_market_names").apply()
+            conversationState.clear()
 
             val choice = parseMarketChoice(result.transcript ?: "", marketNames)
             if (choice != null && items.isNotEmpty()) {
                 val market = marketNames[choice]
                 serviceScope.launch(Dispatchers.IO) {
-                    val ok = writeShoppingItemsToDb(items, market)
+                    val ok = AddShoppingItemSkill.execute(items, market, skillContext)
                     withContext(Dispatchers.Main) {
                         if (ok) speakTyped(confirmShoppingPhrase(items, market), TtsTone.SUCCESS)
-                        else speakTyped("Não consegui salvar agora. Tente de novo.", TtsTone.ERROR)
+                        else speakTyped(OverlayPersona.couldNotSaveNow, TtsTone.ERROR)
                         endVoice()
                     }
                 }
             } else {
                 // Não casou/ambíguo → regrava o MESMO estado (não perde os itens) e repergunta.
-                statePrefs.edit()
-                    .putString(KEY_VOICE_STATE, VAL_AWAITING_MARKET_CHOICE)
-                    .putString("pending_shopping_items", itemsRaw)
-                    .putString("pending_market_names", namesRaw)
-                    .putLong("voice_state_set_at", System.currentTimeMillis())
-                    .apply()
-                speakTyped("Não peguei bem — pode falar só o nome do mercado?", TtsTone.QUESTION)
+                conversationState.armMarketChoice(itemsRaw, namesRaw)
+                speakTyped(OverlayPersona.marketNameRepeat, TtsTone.QUESTION)
                 endVoice()
             }
             return
@@ -1324,12 +1281,8 @@ Retorne SO o JSON.""".trimIndent()
                     result.environment
                 }
                 if (resolvedEnv.isNullOrEmpty()) {
-                    speak("Em qual ambiente devo salvar esse lembrete?")
-                    statePrefs.edit()
-                        .putString("pending_trigger_title", result.triggerTitle)
-                        .putString(KEY_VOICE_STATE, "awaiting_env_for_trigger")
-                        .putLong("voice_state_set_at", System.currentTimeMillis())
-                        .apply()
+                    speak(OverlayPersona.askWhichEnvironmentForReminder)
+                    conversationState.armEnvForTrigger(result.triggerTitle)
                     return
                 }
                 val resolvedEnvCapitalized = resolvedEnv.trim()
@@ -1341,23 +1294,19 @@ Retorne SO o JSON.""".trimIndent()
                 if (title.isNotEmpty()) {
                     serviceScope.launch(Dispatchers.IO) {
                         val start = System.currentTimeMillis()
-                        val ok = writeTriggerToDb(title, result.triggerContent ?: "", resolvedEnvCapitalized)
+                        val ok = CreateTriggerSkill.execute(
+                            resolvedEnvCapitalized, title, result.triggerContent ?: "", skillContext)
                         withContext(Dispatchers.Main) {
                             if (ok) {
                                 Logger.info("command_executed", feature = "floating_voice", action = "execute",
                                     payload = mapOf("command" to "create_trigger"),
                                     correlationId = voiceCorrelationId)
                                 showToast("Anotado! Vou te lembrar de $title em $resolvedEnvCapitalized ✓")
-                                speak("Anotado! Vou te lembrar de $title quando chegar em $resolvedEnvCapitalized.")
+                                speak(OverlayPersona.reminderSaved(title, resolvedEnvCapitalized))
                             } else {
                                 showToast("Não encontrei o ambiente '$resolvedEnvCapitalized'")
-                                statePrefs.edit()
-                                    .putString("pending_trigger_title", result.triggerTitle)
-                                    .putString("pending_trigger_env", resolvedEnvCapitalized)
-                                    .putString(KEY_VOICE_STATE, "awaiting_env_confirm")
-                                    .putLong("voice_state_set_at", System.currentTimeMillis())
-                                    .apply()
-                                speak("Não encontrei o ambiente $resolvedEnvCapitalized. Quer que eu crie agora?")
+                                conversationState.armEnvConfirm(result.triggerTitle, resolvedEnvCapitalized)
+                                speak(OverlayPersona.environmentNotFoundCreate(resolvedEnvCapitalized))
                             }
                             CorrelationManager.endOperation("voice")
                             voiceCorrelationId = null
@@ -1365,7 +1314,7 @@ Retorne SO o JSON.""".trimIndent()
                     }
                 } else {
                     showToast("Diga: 'lembra de X quando chegar em Y'")
-                    speak("Não entendi. Diga: lembra de X quando chegar em Y.")
+                    speak(OverlayPersona.reminderExampleSay)
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
                 }
@@ -1377,7 +1326,7 @@ Retorne SO o JSON.""".trimIndent()
                 if (item != null) {
                     resolveShoppingItems(listOf(item))
                 } else {
-                    speakTyped("O que você quer adicionar à lista?", TtsTone.QUESTION)
+                    speakTyped(OverlayPersona.addToListWhat, TtsTone.QUESTION)
                     endVoice()
                 }
             }
@@ -1390,12 +1339,9 @@ Retorne SO o JSON.""".trimIndent()
 
                 if (envName.isEmpty()) {
                     // Sem nome válido — salva estado e pede via TTS
-                    statePrefs.edit()
-                        .putString(KEY_VOICE_STATE, VAL_AWAITING_NAME)
-                        .putLong("voice_state_set_at", System.currentTimeMillis())
-                        .apply()
+                    conversationState.armAwaitingName()
                     showToast("Qual é o nome do ambiente?")
-                    speak("Qual é o nome do ambiente?")
+                    speak(OverlayPersona.askEnvironmentName)
                     // Delay de 2000 ms antes de pedir a gravação — evita que o mic
                     // capture este áudio TTS como entrada da próxima gravação
                     mainHandler.postDelayed({
@@ -1417,9 +1363,9 @@ Retorne SO o JSON.""".trimIndent()
                 if (envName.isNotEmpty()) {
                     // Fase 1 — pergunta por voz antes de excluir (ação irreversível)
                     startDestructiveConfirm("delete_environment", envName, null,
-                        "Você deseja excluir o ambiente $envName?")
+                        DeleteEnvironmentSkill.question(envName))
                 } else {
-                    speak("Qual ambiente você quer remover?")
+                    speak(OverlayPersona.askWhichEnvironmentToRemove)
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
                 }
@@ -1429,38 +1375,35 @@ Retorne SO o JSON.""".trimIndent()
                 val title   = result.triggerTitle
                 if (envName.isEmpty()) {
                     // Sem ambiente não há como localizar o lembrete com segurança
-                    speak("De qual ambiente devo remover o lembrete?")
+                    speak(OverlayPersona.askWhichEnvironmentToRemoveReminder)
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
                 } else {
-                    // Fase 1 — confirma por voz. Título nulo = remover todos do ambiente.
-                    val question = if (title.isNullOrEmpty())
-                        "Você deseja remover todos os lembretes de $envName?"
-                    else
-                        "Você deseja remover o lembrete $title?"
-                    startDestructiveConfirm("delete_trigger", envName, title, question)
+                    // Fase 1 — confirma por voz. Título nulo/vazio = remover todos do ambiente.
+                    startDestructiveConfirm("delete_trigger", envName, title,
+                        DeleteTriggerSkill.question(envName, title, title.isNullOrEmpty()))
                 }
             }
             // Fase 1 — remover todos os gatilhos de um ambiente (confirmado por voz)
             "delete_all_triggers" -> {
                 val envName = result.environment ?: ""
                 if (envName.isEmpty()) {
-                    speak("De qual ambiente devo remover os lembretes?")
+                    speak(OverlayPersona.askWhichEnvironmentToRemoveReminders)
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
                 } else {
                     startDestructiveConfirm("delete_all_triggers", envName, null,
-                        "Você deseja remover todos os lembretes de $envName?")
+                        DeleteAllTriggersSkill.question(envName))
                 }
             }
             // Fase 1 — remover TODOS os ambientes (operação global, confirmada por voz)
             "delete_all_environments" -> {
                 startDestructiveConfirm("delete_all_environments", "", null,
-                    "Você deseja excluir todos os ambientes e seus lembretes?")
+                    DeleteAllEnvironmentsSkill.question())
             }
             else -> {
                 // Fase 1 — fala real mas intenção não reconhecida: resposta natural.
-                speak("Não consegui entender esse comando. Pode repetir de outra forma?")
+                speak(OverlayPersona.commandNotUnderstood)
                 CorrelationManager.endOperation("voice")
                 voiceCorrelationId = null
             }
@@ -1485,7 +1428,7 @@ Retorne SO o JSON.""".trimIndent()
 
     // Uma ação do plano — espelha VoiceAction do Dart. Guarda o JSON cru da ação;
     // o executor lê só o que precisa (type + params). Campos extras são ignorados.
-    private data class PlanAction(val type: String, val obj: JSONObject) {
+    internal data class PlanAction(val type: String, val obj: JSONObject) {
         // Leitura tolerante de string dentre chaves alternativas (name/environment...).
         fun str(vararg keys: String): String? {
             for (k in keys) {
@@ -1497,7 +1440,7 @@ Retorne SO o JSON.""".trimIndent()
     }
 
     // Resultado do parse do plano. error != null = JSON ausente/truncado/inválido.
-    private data class PlanResult(
+    internal data class PlanResult(
         val actions:    List<PlanAction>,
         val transcript: String,
         val reply:      String,
@@ -1649,7 +1592,7 @@ Retorne SO o JSON.""".trimIndent()
         if (parsed.error != null) {
             Logger.warn("voice_result_error", feature = "floating_voice", action = "execute",
                 payload = mapOf("error" to parsed.error), correlationId = voiceCorrelationId)
-            speakTyped("Não consegui entender. Pode repetir?", TtsTone.ERROR)
+            speakTyped(OverlayPersona.notUnderstoodRepeat, TtsTone.ERROR)
             CorrelationManager.endOperation("voice"); voiceCorrelationId = null
             return
         }
@@ -1675,7 +1618,7 @@ Retorne SO o JSON.""".trimIndent()
                 action = "execute", payload = mapOf("surface" to "overlay",
                     "transcript" to parsed.transcript),
                 correlationId = voiceCorrelationId)
-            speakTyped("Não consegui ouvir você.", TtsTone.ERROR) // REGRA 3
+            speakTyped(OverlayPersona.notHeard, TtsTone.ERROR) // REGRA 3
             endVoice()
             return
         }
@@ -1691,10 +1634,8 @@ Retorne SO o JSON.""".trimIndent()
     // True se há um estado de espera de voz ativo e não expirado (30 s). Espelha a
     // checagem de executeVoiceResult para decidir entre "resposta a pergunta" x "novo".
     private fun hasActiveAwaitingState(): Boolean {
-        val p = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE)
-        val state = p.getString(KEY_VOICE_STATE, null) ?: return false
-        val setAt = p.getLong("voice_state_set_at", 0L)
-        return System.currentTimeMillis() - setAt <= 30_000L && state.isNotEmpty()
+        val state = conversationState.current ?: return false
+        return !conversationState.isExpired && state.isNotEmpty()
     }
 
     // Executa o plano em sequência (paridade com VoiceActionExecutor.run da Home):
@@ -1702,12 +1643,15 @@ Retorne SO o JSON.""".trimIndent()
     //   - senão → resolve GPS uma vez (se cria ambiente) e roda as ações em ordem,
     //     tolerando falhas isoladas; fala o reply (ou um resumo natural) ao final.
     private fun executePlan(plan: PlanResult) {
+        // Estágio 4 — decisão de roteamento isolada no Planner (mesma ordem/condições).
+        val route = OverlayPlanner.routePlan(plan) { BLOCKED_ENV_NAMES.contains(it.lowercase()) }
+
         // Sem ações: só conversa. Pergunta (follow_up) tem prosódia interrogativa.
-        if (plan.actions.isEmpty()) {
+        if (route is PlanRoute.Empty) {
             when {
                 plan.followUp != null      -> speakTyped(plan.followUp, TtsTone.QUESTION)
                 plan.reply.isNotBlank()    -> speakTyped(plan.reply, TtsTone.INFO)
-                else                       -> speakTyped("Não consegui entender. Pode repetir?", TtsTone.ERROR)
+                else                       -> speakTyped(OverlayPersona.notUnderstoodRepeat, TtsTone.ERROR)
             }
             CorrelationManager.endOperation("voice"); voiceCorrelationId = null
             return
@@ -1715,12 +1659,8 @@ Retorne SO o JSON.""".trimIndent()
 
         // Destrutivo: confirma a PRIMEIRA ação destrutiva (a prioridade já colapsou o
         // wipe total em uma única ação). A confirmação reusa startDestructiveConfirm.
-        val destructive = plan.actions.firstOrNull {
-            it.type == "delete_environment" || it.type == "delete_all_environments" ||
-            it.type == "delete_trigger"     || it.type == "delete_all_triggers"
-        }
-        if (destructive != null) {
-            routeDestructiveConfirm(destructive)
+        if (route is PlanRoute.Destructive) {
+            routeDestructiveConfirm(route.action)
             return
         }
 
@@ -1728,13 +1668,13 @@ Retorne SO o JSON.""".trimIndent()
         // parte (não usa o loop construtivo/GPS nem o resumo genérico). Junta todos
         // os itens e resolve o mercado uma única vez — pergunta "qual mercado?" só
         // quando houver 2+. Evita o conflito de TTS com o resumo do loop.
-        if (plan.actions.isNotEmpty() && plan.actions.all { it.type == "add_shopping_item" }) {
+        if (route is PlanRoute.Shopping) {
             val items = plan.actions
                 .mapNotNull { it.str("item", "name", "title") }
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
             if (items.isEmpty()) {
-                speakTyped("Não entendi o item. Pode repetir?", TtsTone.ERROR)
+                speakTyped(OverlayPersona.itemNotUnderstood, TtsTone.ERROR)
                 endVoice()
             } else {
                 resolveShoppingItems(items)
@@ -1745,13 +1685,9 @@ Retorne SO o JSON.""".trimIndent()
         // Resolução Inteligente de Localização — plano que APENAS cria um ambiente
         // (sem gatilhos/outras ações) não usa GPS cego: confirma a localização
         // antes (paridade com a Home). Planos mistos seguem o fluxo GPS atual.
-        if (plan.actions.size == 1 && plan.actions[0].type == "create_environment") {
-            val singleName = plan.actions[0].str("name", "environment")
-            if (singleName != null && singleName.isNotBlank() &&
-                !BLOCKED_ENV_NAMES.contains(singleName.lowercase())) {
-                resolveEnvironmentLocation(singleName.trim())
-                return
-            }
+        if (route is PlanRoute.SingleEnvironment) {
+            resolveEnvironmentLocation(route.name)
+            return
         }
 
         // Construtivo: create_environment / create_trigger em ordem, GPS uma única vez.
@@ -1770,22 +1706,13 @@ Retorne SO o JSON.""".trimIndent()
             val lon = loc?.longitude ?: 0.0
             var ok = 0; var fail = 0
             for (a in plan.actions) {
+                // Estágio 2 — construção delegada às Skills (mesmo corpo síncrono).
                 val done = when (a.type) {
-                    "create_environment" -> {
-                        val name = a.str("name", "environment")
-                        when {
-                            name == null || BLOCKED_ENV_NAMES.contains(name.lowercase()) -> false
-                            lat == 0.0 && lon == 0.0 -> false // sem GPS não cria
-                            else -> writeEnvironmentToDb(name, lat, lon, 100)
-                        }
-                    }
-                    "create_trigger" -> {
-                        val env   = a.str("environment", "name")
-                        val title = a.str("title")
-                        if (env != null && title != null)
-                            writeTriggerToDb(title, a.str("content") ?: "", env)
-                        else false
-                    }
+                    "create_environment" ->
+                        CreateEnvironmentSkill.execute(a.str("name", "environment"), lat, lon, skillContext)
+                    "create_trigger" ->
+                        CreateTriggerSkill.execute(a.str("environment", "name"), a.str("title"),
+                            a.str("content") ?: "", skillContext)
                     else -> false // tipos não suportados no overlay (ex.: update_*)
                 }
                 if (done) ok++ else fail++
@@ -1824,10 +1751,10 @@ Retorne SO o JSON.""".trimIndent()
                 Logger.info("overlay_pipeline_finished", feature = "floating_voice", action = "execute",
                     payload = mapOf("surface" to "overlay"), correlationId = voiceCorrelationId)
                 when {
-                    ok == 0 && fail > 0        -> speakTyped("Não consegui concluir agora. Pode tentar de novo?", TtsTone.ERROR)
-                    fail > 0                   -> speakTyped("Fiz a maior parte. $fail não deram certo.", TtsTone.INFO)
+                    ok == 0 && fail > 0        -> speakTyped(OverlayPersona.couldNotFinishRetry, TtsTone.ERROR)
+                    fail > 0                   -> speakTyped(OverlayPersona.partialFailure(fail), TtsTone.INFO)
                     plan.reply.isNotBlank()    -> speakTyped(plan.reply, TtsTone.SUCCESS)
-                    else                       -> speakTyped("Pronto!", TtsTone.SUCCESS)
+                    else                       -> speakTyped(OverlayPersona.done, TtsTone.SUCCESS)
                 }
                 CorrelationManager.endOperation("voice"); voiceCorrelationId = null
             }
@@ -1837,31 +1764,30 @@ Retorne SO o JSON.""".trimIndent()
     // Mapeia uma ação destrutiva → pergunta de confirmação por voz (reusa Fase 1).
     // A pergunta sempre termina com '?' e é falada com entonação interrogativa.
     private fun routeDestructiveConfirm(a: PlanAction) {
+        // Estágio 2 — a STRING de confirmação vem da Skill (fonte única). Os prompts
+        // de ambiente-faltando ficam aqui (prosódia própria deste pipeline de plano).
         when (a.type) {
             "delete_all_environments" ->
                 startDestructiveConfirm("delete_all_environments", "", null,
-                    "Você deseja excluir todos os ambientes e seus lembretes?")
+                    DeleteAllEnvironmentsSkill.question())
             "delete_all_triggers" -> {
                 val env = a.str("environment", "name")
-                if (env == null) { speakTyped("De qual ambiente devo remover os lembretes?", TtsTone.QUESTION); endVoice() }
+                if (env == null) { speakTyped(OverlayPersona.askWhichEnvironmentToRemoveReminders, TtsTone.QUESTION); endVoice() }
                 else startDestructiveConfirm("delete_all_triggers", env, null,
-                    "Você deseja remover todos os lembretes de $env?")
+                    DeleteAllTriggersSkill.question(env))
             }
             "delete_environment" -> {
                 val env = a.str("environment", "name")
-                if (env == null) { speakTyped("Qual ambiente você quer remover?", TtsTone.QUESTION); endVoice() }
+                if (env == null) { speakTyped(OverlayPersona.askWhichEnvironmentToRemove, TtsTone.QUESTION); endVoice() }
                 else startDestructiveConfirm("delete_environment", env, null,
-                    "Você deseja excluir o ambiente $env?")
+                    DeleteEnvironmentSkill.question(env))
             }
             "delete_trigger" -> {
                 val env   = a.str("environment", "name")
                 val title = a.str("title")
-                if (env == null) { speakTyped("De qual ambiente devo remover o lembrete?", TtsTone.QUESTION); endVoice() }
-                else {
-                    val q = if (title == null) "Você deseja remover todos os lembretes de $env?"
-                            else "Você deseja remover o lembrete $title?"
-                    startDestructiveConfirm("delete_trigger", env, title, q)
-                }
+                if (env == null) { speakTyped(OverlayPersona.askWhichEnvironmentToRemoveReminder, TtsTone.QUESTION); endVoice() }
+                else startDestructiveConfirm("delete_trigger", env, title,
+                    DeleteTriggerSkill.question(env, title, title == null))
             }
             else -> endVoice()
         }
@@ -1938,8 +1864,8 @@ Retorne SO o JSON.""".trimIndent()
                 if (lat != 0.0 && lon != 0.0) {
                     val ok = writeEnvironmentToDb(name, lat, lon, 100)
                     withContext(Dispatchers.Main) {
-                        speak(if (ok) "Ambiente $name criado."
-                              else "Não consegui criar $name agora.")
+                        speak(if (ok) OverlayPersona.environmentCreated(name)
+                              else OverlayPersona.couldNotCreateNow(name))
                         endVoice()
                     }
                     return@launch
@@ -1957,10 +1883,10 @@ Retorne SO o JSON.""".trimIndent()
                             "has_coords" to "false"),
                         correlationId = voiceCorrelationId)
                     // Pessoal sem GPS: confirma só a criação; geral orienta a abrir o app.
-                    speak(if (isPersonal) "Ambiente $name criado."
-                          else "Ambiente $name criado. Abra o app para definir o endereço.")
+                    speak(if (isPersonal) OverlayPersona.environmentCreated(name)
+                          else OverlayPersona.environmentCreatedOpenApp(name))
                 } else {
-                    speak("Não consegui criar $name agora.")
+                    speak(OverlayPersona.couldNotCreateNow(name))
                 }
                 endVoice()
             }
@@ -1986,6 +1912,8 @@ Retorne SO o JSON.""".trimIndent()
             .putBoolean("flutter.needs_refresh", true)
             .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
             .apply()
+        // Push: se o app estiver vivo, atualiza a UI na hora (senão, cold start cobre).
+        MainActivity.notifyDataChanged()
     }
 
     // Sprint F3-3 — insere um ambiente SEM coordenadas (lat/lon = 0.0) e SEM
@@ -2057,11 +1985,7 @@ Retorne SO o JSON.""".trimIndent()
     // padrão de startDestructiveConfirm (evita o mic captar o próprio TTS e mantém a
     // máquina de estados TTS → WAITING_USER_RESPONSE → IDLE).
     private fun askLocationConfirm(name: String) {
-        getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_VOICE_STATE, VAL_AWAITING_LOCATION_CONFIRM)
-            .putString("pending_env_name", name)
-            .putLong("voice_state_set_at", System.currentTimeMillis())
-            .apply()
+        conversationState.armLocationConfirm(name)
         // LOGS TEMPORÁRIOS — aguardando resposta do usuário (paridade com a Home).
         Logger.info("location_resolution_waiting", feature = "floating_voice",
             action = "location", payload = mapOf("name" to name, "stage" to "confirm_gps"),
@@ -2069,7 +1993,7 @@ Retorne SO o JSON.""".trimIndent()
         Logger.info("waiting_user_response", feature = "floating_voice", action = "location",
             payload = mapOf("surface" to "overlay", "state" to VAL_AWAITING_LOCATION_CONFIRM),
             correlationId = voiceCorrelationId)
-        speakTyped("Você deseja usar sua localização atual para criar $name?", TtsTone.QUESTION)
+        speakTyped(OverlayPersona.confirmUseCurrentLocation(name), TtsTone.QUESTION)
         showToast("Segure o botão e responda sim ou não.")
         // Encerra o ciclo atual; a resposta abre um novo ciclo ao segurar o botão.
         endVoice()
@@ -2089,8 +2013,8 @@ Retorne SO o JSON.""".trimIndent()
                 action = "location", payload = mapOf("name" to name, "created" to ok.toString()),
                 correlationId = voiceCorrelationId)
             withContext(Dispatchers.Main) {
-                if (ok) speak("Pronto! Ambiente $name criado.")
-                else speak("Não foi possível obter sua localização. Abra o app e defina manualmente.")
+                if (ok) speak(OverlayPersona.environmentCreatedReady(name))
+                else speak(OverlayPersona.locationUnavailableManual)
                 endVoice()
             }
         }
@@ -2106,14 +2030,7 @@ Retorne SO o JSON.""".trimIndent()
     private fun startDestructiveConfirm(
         intent: String, envName: String, title: String?, question: String,
     ) {
-        val editor = getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
-            .putString(KEY_VOICE_STATE, VAL_AWAITING_CONFIRM)
-            .putLong("voice_state_set_at", System.currentTimeMillis())
-            .putString("confirm_intent", intent)
-            .putString("confirm_env", envName)
-        if (title != null) editor.putString("confirm_title", title)
-        else               editor.remove("confirm_title")
-        editor.apply()
+        conversationState.armDestructive(intent, envName, title)
 
         Logger.info("voice_confirmation_started", feature = "floating_voice",
             action = "confirm", payload = mapOf("intent" to intent),
@@ -2129,60 +2046,13 @@ Retorne SO o JSON.""".trimIndent()
     // Executa a operação destrutiva já confirmada por voz. Sempre em IO thread;
     // fala o resultado na Main. Encerra o ciclo de voz ao final de cada ramo.
     private fun performConfirmedDestructive(intent: String, envName: String, title: String?) {
+        // Estágio 2 — execução delegada às Skills (mesmo corpo IO→DB→log→fala→fim).
         when (intent) {
-            "delete_environment" -> serviceScope.launch(Dispatchers.IO) {
-                val ok = deleteEnvironmentFromDb(envName)
-                withContext(Dispatchers.Main) {
-                    if (ok) {
-                        Logger.info("command_executed", feature = "floating_voice",
-                            action = "execute", payload = mapOf("command" to "delete_environment"),
-                            correlationId = voiceCorrelationId)
-                        speak("Ambiente $envName removido.")
-                    } else speak("Não encontrei o ambiente $envName.")
-                    CorrelationManager.endOperation("voice"); voiceCorrelationId = null
-                }
-            }
+            "delete_environment"      -> DeleteEnvironmentSkill.perform(envName, skillContext)
             // Título nulo → remover todos do ambiente; senão, remover o específico
-            "delete_trigger" -> serviceScope.launch(Dispatchers.IO) {
-                val ok = deleteTriggerFromDb(envName, title)
-                withContext(Dispatchers.Main) {
-                    if (ok) {
-                        Logger.info("command_executed", feature = "floating_voice",
-                            action = "execute", payload = mapOf("command" to "delete_trigger"),
-                            correlationId = voiceCorrelationId)
-                        speak(if (title.isNullOrEmpty())
-                            "Todos os lembretes de $envName foram removidos."
-                        else "Lembrete removido.")
-                    }
-                    CorrelationManager.endOperation("voice"); voiceCorrelationId = null
-                }
-            }
-            "delete_all_triggers" -> serviceScope.launch(Dispatchers.IO) {
-                val ok = deleteTriggerFromDb(envName, null)
-                withContext(Dispatchers.Main) {
-                    if (ok) {
-                        Logger.info("command_executed", feature = "floating_voice",
-                            action = "execute", payload = mapOf("command" to "delete_all_triggers"),
-                            correlationId = voiceCorrelationId)
-                        speak("Todos os lembretes de $envName foram removidos.")
-                    }
-                    CorrelationManager.endOperation("voice"); voiceCorrelationId = null
-                }
-            }
-            "delete_all_environments" -> serviceScope.launch(Dispatchers.IO) {
-                val count = deleteAllEnvironmentsFromDb()
-                withContext(Dispatchers.Main) {
-                    if (count > 0) {
-                        Logger.info("command_executed", feature = "floating_voice",
-                            action = "execute",
-                            payload = mapOf("command" to "delete_all_environments",
-                                "count" to count.toString()),
-                            correlationId = voiceCorrelationId)
-                        speak("Todos os ambientes foram removidos.")
-                    } else speak("Você ainda não tem nenhum ambiente cadastrado.")
-                    CorrelationManager.endOperation("voice"); voiceCorrelationId = null
-                }
-            }
+            "delete_trigger"          -> DeleteTriggerSkill.perform(envName, title, skillContext)
+            "delete_all_triggers"     -> DeleteAllTriggersSkill.perform(envName, skillContext)
+            "delete_all_environments" -> DeleteAllEnvironmentsSkill.perform(skillContext)
             else -> { CorrelationManager.endOperation("voice"); voiceCorrelationId = null }
         }
     }
@@ -2227,6 +2097,8 @@ Retorne SO o JSON.""".trimIndent()
                 .putBoolean("flutter.needs_refresh", true)
                 .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
                 .apply()
+            // Push: se o app estiver vivo, atualiza a UI na hora (senão, cold start cobre).
+            MainActivity.notifyDataChanged()
             Logger.info("all_environments_deleted", feature = "floating_voice", action = "db_write",
                 durationMs = System.currentTimeMillis() - start,
                 payload = mapOf("count" to ids.size.toString()),
@@ -2409,19 +2281,17 @@ Retorne SO o JSON.""".trimIndent()
                 when {
                     markets.isEmpty() -> {
                         revertButtonAppearance()
-                        speakTyped(
-                            "Ainda não tenho nenhum mercado salvo. Quer que eu crie um agora, ou prefere fazer isso pelo app?",
-                            TtsTone.QUESTION)
+                        speakTyped(OverlayPersona.noMarketYet, TtsTone.QUESTION)
                         endVoice()
                     }
                     markets.size == 1 -> {
                         val market = markets.first().second
                         serviceScope.launch(Dispatchers.IO) {
-                            val ok = writeShoppingItemsToDb(items, market)
+                            val ok = AddShoppingItemSkill.execute(items, market, skillContext)
                             withContext(Dispatchers.Main) {
                                 revertButtonAppearance()
                                 if (ok) speakTyped(confirmShoppingPhrase(items, market), TtsTone.SUCCESS)
-                                else speakTyped("Não consegui salvar agora. Tente de novo.", TtsTone.ERROR)
+                                else speakTyped(OverlayPersona.couldNotSaveNow, TtsTone.ERROR)
                                 endVoice()
                             }
                         }
@@ -2429,14 +2299,10 @@ Retorne SO o JSON.""".trimIndent()
                     else -> {
                         revertButtonAppearance()
                         val names = markets.map { it.second }
-                        getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
-                            .putString(KEY_VOICE_STATE, VAL_AWAITING_MARKET_CHOICE)
-                            .putString("pending_shopping_items", items.joinToString("|"))
-                            .putString("pending_market_names", names.joinToString("|"))
-                            .putLong("voice_state_set_at", System.currentTimeMillis())
-                            .apply()
+                        conversationState.armMarketChoice(
+                            items.joinToString("|"), names.joinToString("|"))
                         speakTyped(
-                            "Você tem ${humanJoin(names)} salvos — em qual eu coloco ${humanJoin(items)}?",
+                            OverlayPersona.whichMarket(humanJoin(names), humanJoin(items)),
                             TtsTone.QUESTION)
                         showToast("Segure o botão e diga o nome do mercado.")
                         endVoice()
@@ -2458,6 +2324,21 @@ Retorne SO o JSON.""".trimIndent()
         }
         if (nameMatches.size == 1) return nameMatches[0]
         if (nameMatches.size > 1) return null // ambíguo
+        // (a2) fallback: última palavra significativa do nome (ex.: "Delta" de
+        // "Mercado Delta"). Só quando o nome completo não bateu (0 acima). Ignora
+        // a genérica inicial (mercado/supermercado) quando há mais palavras.
+        if (nameMatches.isEmpty()) {
+            val generic = setOf("mercado", "supermercado")
+            val lastWordMatches = marketNames.indices.filter { i ->
+                val tokens = stripAccents(marketNames[i].lowercase(java.util.Locale("pt", "BR")))
+                    .split(" ").filter { it.isNotBlank() }
+                val meaningful =
+                    if (tokens.size > 1 && tokens.first() in generic) tokens.drop(1) else tokens
+                val last = meaningful.lastOrNull() ?: ""
+                last.isNotEmpty() && t.contains(last)
+            }
+            if (lastWordMatches.size == 1) return lastWordMatches[0]
+        }
         // (b) ordinal falado
         val ordinal = when {
             Regex("\\bprimeir").containsMatchIn(t) || Regex("\\bum\\b").containsMatchIn(t) -> 0
@@ -2598,13 +2479,7 @@ Retorne SO o JSON.""".trimIndent()
                     payload = if (LoggerConfiguration.debugLogging)
                         mapOf("environment_name" to envName) else null,
                     correlationId = corrId)
-                getSharedPreferences(FLOAT_STATE_PREFS, Context.MODE_PRIVATE).edit()
-                    .putString("pending_trigger_title", title)
-                    .putString("pending_trigger_content", content)
-                    .putString("pending_trigger_env", envName)
-                    .putString(KEY_VOICE_STATE, "awaiting_env_confirm")
-                    .putLong("voice_state_set_at", System.currentTimeMillis())
-                    .apply()
+                conversationState.armEnvConfirm(title, envName, content)
                 return false
             }
             val id  = UUID.randomUUID().toString()
@@ -2675,7 +2550,7 @@ Retorne SO o JSON.""".trimIndent()
                     payload = if (LoggerConfiguration.debugLogging)
                         mapOf("environment_name" to envNameCapitalized) else null,
                     correlationId = corrId)
-                mainHandler.post { speak("Não encontrei o ambiente $envNameCapitalized. Verifique o nome e tente novamente.") }
+                mainHandler.post { speak(OverlayPersona.environmentNotFoundVerify(envNameCapitalized)) }
                 return false
             }
             // Remove triggers primeiro (FK), depois o ambiente
@@ -2752,7 +2627,7 @@ Retorne SO o JSON.""".trimIndent()
                             mapOf("title" to triggerTitle, "environment_name" to envNameCapitalized)
                         else null,
                         correlationId = corrId)
-                    mainHandler.post { speak("Não encontrei esse lembrete em $envNameCapitalized.") }
+                    mainHandler.post { speak(OverlayPersona.reminderNotFoundIn(envNameCapitalized)) }
                 }
             } else {
                 db.execSQL(

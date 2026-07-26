@@ -13,6 +13,7 @@
 // navegação + inicialização, não renderiza a lista de ambientes diretamente.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -48,60 +49,47 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
 
   late final AppLifecycleListener _lifecycleListener;
 
+  // Canal push nativo→Flutter (mesmo nome do lado MainActivity). O
+  // FloatingVoiceService avisa "dataChanged" quando muda dados com o app já vivo.
+  static const _overlaySyncChannel = MethodChannel('com.sopro.sopro/overlay_sync');
+
   @override
   void initState() {
     super.initState();
-    // Invalida o provider ao voltar ao foreground — garante que ambientes/triggers
-    // criados pelo botão flutuante (SQLite direto) apareçam sem reiniciar o app.
-    _lifecycleListener = AppLifecycleListener(
-      onResume: () async {
-        final prefs = await SharedPreferences.getInstance();
-        final needsRefresh = prefs.getBool('needs_refresh') ?? false;
-        if (needsRefresh) {
-          await prefs.setBool('needs_refresh', false);
-        }
-        ref.invalidate(environmentsProvider);
-        ref.invalidate(triggersByEnvironmentProvider);
+    // 3 gatilhos para a MESMA reconciliação (_syncFromNative): retorno ao
+    // foreground (onResume), push do canal (app já vivo sob o overlay) e cold start.
+    _lifecycleListener = AppLifecycleListener(onResume: _syncFromNative);
+    _overlaySyncChannel.setMethodCallHandler((call) async {
+      if (call.method == 'dataChanged') await _syncFromNative();
+    });
 
-        // Sprint F3-3 — ambiente criado por voz sem coords (FloatingVoiceService).
-        // Abre a AddEnvironmentScreen em modo só-localização. Limpa o pending antes
-        // de navegar para não reabrir no próximo resume.
-        final pendingEnvId = prefs.getString('pending_location_env_id');
-        if (pendingEnvId != null) {
-          final pendingEnvName = prefs.getString('pending_location_env_name');
-          await prefs.remove('pending_location_env_id');
-          await prefs.remove('pending_location_env_name');
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) {
-              pushScreen(
-                context,
-                AddEnvironmentScreen(
-                  pendingEnvironmentId: pendingEnvId,
-                  pendingEnvironmentName: pendingEnvName,
-                ),
-              );
-            }
-          });
-        }
-      },
-    );
     // Executa depois do primeiro frame para que o Navigator esteja disponível
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkOnboarding());
+    // Cold start: reflete o que o FloatingVoiceService escreveu com o app fechado.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncFromNative());
+  }
 
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // Invalida providers no cold start para refletir
-      // ambientes criados pelo FloatingVoiceService.
-      ref.invalidate(environmentsProvider);
-      ref.invalidate(triggersByEnvironmentProvider);
+  // Reconcilia a UI com mudanças feitas fora da árvore Flutter — o
+  // FloatingVoiceService grava SQLite direto (ambiente sem coords, wipe total) e
+  // avisa via prefs/push. Fonte ÚNICA usada pelos 3 gatilhos do initState.
+  Future<void> _syncFromNative() async {
+    final prefs = await SharedPreferences.getInstance();
+    // needs_refresh é consumido; a invalidação abaixo roda sempre (flag informativa).
+    if (prefs.getBool('needs_refresh') ?? false) {
+      await prefs.setBool('needs_refresh', false);
+    }
+    if (!mounted) return;
+    ref.invalidate(environmentsProvider);
+    ref.invalidate(triggersByEnvironmentProvider);
 
-      // Verifica pending de localização do FloatingVoiceService.
-      final prefs = await SharedPreferences.getInstance();
-      final pendingEnvId = prefs.getString('pending_location_env_id');
-      if (pendingEnvId != null && mounted) {
-        final pendingEnvName =
-            prefs.getString('pending_location_env_name');
-        await prefs.remove('pending_location_env_id');
-        await prefs.remove('pending_location_env_name');
+    // Ambiente criado por voz sem coords → abre a AddEnvironmentScreen em modo
+    // só-localização. Limpa o pending antes de navegar (não reabre no próximo sync).
+    final pendingEnvId = prefs.getString('pending_location_env_id');
+    if (pendingEnvId != null) {
+      final pendingEnvName = prefs.getString('pending_location_env_name');
+      await prefs.remove('pending_location_env_id');
+      await prefs.remove('pending_location_env_name');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           pushScreen(
             context,
@@ -111,12 +99,13 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
             ),
           );
         }
-      }
-    });
+      });
+    }
   }
 
   @override
   void dispose() {
+    _overlaySyncChannel.setMethodCallHandler(null);
     _lifecycleListener.dispose();
     super.dispose();
   }

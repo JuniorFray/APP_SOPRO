@@ -5,6 +5,7 @@ import '../../domain/repositories/i_environment_repository.dart';
 import '../../domain/repositories/i_scheduled_reminder_repository.dart';
 import '../../domain/repositories/i_shopping_list_repository.dart';
 import '../../domain/repositories/i_trigger_repository.dart';
+import '../conversation/behavior_engine.dart';
 import '../geofence/native_geofence_service.dart';
 import '../voice/execution_plan.dart';
 
@@ -47,6 +48,10 @@ class SkillContext {
   // Injeção da escolha de mercado (widget privado da Home). null degrada o caso.
   final MarketPicker? pickMarket;
 
+  // Persona ativa do Behavior Engine — fonte única das frases faladas. As Skills
+  // consultam ctx.persona em vez de literais/AppStrings direto.
+  final BehaviorPersona persona;
+
   const SkillContext({
     required this.envRepo,
     required this.trgRepo,
@@ -57,6 +62,7 @@ class SkillContext {
     required this.loc,
     required this.context,
     required this.pickMarket,
+    required this.persona,
   });
 }
 

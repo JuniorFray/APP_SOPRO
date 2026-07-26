@@ -29,6 +29,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.lang.ref.WeakReference
 import java.util.UUID
 
 // MainActivity expõe GPS, BLE Social e Geofencing nativo ao Flutter via canais nativos.
@@ -89,6 +90,22 @@ class MainActivity : FlutterActivity() {
         private const val REMINDERS_CHANNEL = "com.sopro.sopro/reminders"
         private const val PERM_REQUEST_MIC = 1004
         private const val TAG              = "MainActivity"
+
+        // ── Overlay Sync (push nativo→Flutter para a engine JÁ VIVA) ──────────
+        private const val OVERLAY_SYNC_CHANNEL = "com.sopro.sopro/overlay_sync"
+        // Referência FRACA ao canal da engine viva. O FloatingVoiceService (Service,
+        // sem FlutterEngine) usa isto para avisar o app aberto que os dados mudaram.
+        // Nula/coletada = app fechado → o cold start (initState) já cobre esse caso.
+        private var overlaySyncChannel: WeakReference<MethodChannel>? = null
+
+        // Avisa a engine viva (se houver) que os dados mudaram. invokeMethod EXIGE a
+        // main thread — daí o post no main looper. Chamado do FloatingVoiceService.
+        fun notifyDataChanged() {
+            val channel = overlaySyncChannel?.get() ?: return
+            Handler(Looper.getMainLooper()).post {
+                try { channel.invokeMethod("dataChanged", null) } catch (_: Exception) {}
+            }
+        }
 
         // UUIDs Sopro — FIXOS (nunca alterar; identificam o app na rede BLE)
         private val SERVICE_UUID           = ParcelUuid.fromString("550e8400-e29b-41d4-a716-446655440000")
@@ -763,10 +780,18 @@ class MainActivity : FlutterActivity() {
         Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
             payload = mapOf("channel" to "com.sopro.sopro/geocoder"))
 
+        // ── Overlay Sync Channel (push nativo→Flutter) ────────────────────────
+        // Guardado como referência FRACA: o FloatingVoiceService avisa a engine viva
+        // (dataChanged) sem prender a Activity na memória. Só native→Dart (sem handler).
+        overlaySyncChannel = WeakReference(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, OVERLAY_SYNC_CHANNEL))
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to OVERLAY_SYNC_CHANNEL))
+
         Logger.info("flutter_engine_configured", feature = "main_activity",
             action = "configureFlutterEngine",
             durationMs = System.currentTimeMillis() - engineStart,
-            payload = mapOf("channels_count" to "6"))
+            payload = mapOf("channels_count" to "7"))
     }
 
     // ═════════════════════════════════════════════════════════════════════════

@@ -1,7 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
-import '../../core/constants/strings.dart';
 import '../../domain/entities/environment_entity.dart';
 import '../../domain/entities/scheduled_reminder_entity.dart';
 import '../../domain/entities/shopping_list_item_entity.dart';
@@ -180,7 +179,7 @@ class AddShoppingItemSkill extends BaseSkill {
 
     // Sem mercado cadastrado: não cria ambiente sozinho aqui.
     if (markets.isEmpty) {
-      if (ctx.context.mounted) await ctx.speak(AppStrings.marketVoiceNoMarket);
+      if (ctx.context.mounted) await ctx.speak(ctx.persona.marketNoMarket);
       return 'sem_mercado';
     }
 

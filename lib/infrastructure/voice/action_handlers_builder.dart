@@ -17,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../presentation/providers/database_provider.dart';
 import '../../presentation/providers/location_providers.dart';
 import '../../presentation/providers/voice_providers.dart';
+import '../conversation/behavior_engine.dart';
 import '../skills/base_skill.dart';
 import '../skills/voice_skills.dart';
 import 'execution_plan.dart';
@@ -54,6 +55,7 @@ Map<VoiceActionType, ActionHandler> buildActionHandlers(
     loc:        loc,
     context:    context,
     pickMarket: pickMarket,
+    persona:    const BehaviorEngine().persona,
   );
 
   // Liga cada tipo de ação ao ciclo validate→execute→respond da Skill.
