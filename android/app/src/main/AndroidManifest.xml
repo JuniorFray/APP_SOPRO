@@ -207,5 +207,10 @@
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="https"/>
         </intent>
+        <!-- speech_to_text (Estágio A): Android 11+ exige declarar a query do
+             RecognitionService, senão SpeechToText.initialize() reporta indisponível. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
+        </intent>
     </queries>
 </manifest>

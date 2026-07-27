@@ -2257,6 +2257,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 durationMs = System.currentTimeMillis() - start,
                 payload = mapOf("count" to items.size.toString(), "market" to marketName),
                 correlationId = corrId)
+            // Push: se o app estiver vivo, atualiza a UI na hora (senão, needs_refresh cobre).
+            MainActivity.notifyDataChanged()
             true
         } catch (e: Exception) {
             Logger.error("sqlite_write_shopping_failed", feature = "floating_voice", action = "db_write",
@@ -2429,6 +2431,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     mapOf("environment_name" to envNameCapitalized, "id" to id)
                 else mapOf("id" to id),
                 correlationId = corrId)
+            // Push: se o app estiver vivo, atualiza a UI na hora (senão, cold start cobre).
+            MainActivity.notifyDataChanged()
             true
         } catch (e: Exception) {
             Logger.error("sqlite_write_environment_failed", feature = "floating_voice",
@@ -2494,6 +2498,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     mapOf("title" to title, "environment_name" to envName, "id" to id)
                 else mapOf("id" to id),
                 correlationId = corrId)
+            // Push: se o app estiver vivo, atualiza a UI na hora (senão, cold start cobre).
+            MainActivity.notifyDataChanged()
             true
         } catch (e: Exception) {
             Logger.error("sqlite_write_trigger_failed", feature = "floating_voice", action = "db_write",
@@ -2566,6 +2572,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 .putBoolean("flutter.needs_refresh", true)
                 .putLong("flutter.needs_refresh_at", System.currentTimeMillis())
                 .apply()
+            // Push: se o app estiver vivo, atualiza a UI na hora (senão, needs_refresh cobre).
+            MainActivity.notifyDataChanged()
             true
         } catch (e: Exception) {
             Logger.error("sqlite_delete_environment_failed", feature = "floating_voice",
@@ -2643,6 +2651,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                         "title" to (triggerTitle ?: "all"))
                 else null,
                 correlationId = corrId)
+            // Push: se o app estiver vivo, atualiza a UI na hora (senão, cold start cobre).
+            MainActivity.notifyDataChanged()
             true
         } catch (e: Exception) {
             Logger.error("sqlite_delete_trigger_failed", feature = "floating_voice",

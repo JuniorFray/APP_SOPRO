@@ -453,6 +453,9 @@ class AppStrings {
   static const voiceClose              = 'Fechar';
   static const voiceNotAvailable       = 'Reconhecimento de voz não disponível neste dispositivo';
   static const voicePermissionDenied   = 'Permissão de microfone necessária para usar a voz';
+  static const voiceLocalePtMissing    =
+      'Voz em português indisponível neste aparelho. Instale o pacote de voz '
+      'pt-BR nas configurações do Android (Idioma e entrada > Reconhecimento).';
   static const voiceExamples           =
       '"Lembra de ligar para o médico quando eu chegar em casa"\n'
       '"Cria um ambiente aqui chamado Mercado"\n'

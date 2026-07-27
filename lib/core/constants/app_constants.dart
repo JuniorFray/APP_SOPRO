@@ -109,27 +109,6 @@ class AppConstants {
       '→ {"intent":"delete_trigger","transcricao":"remove o lembrete da padaria","environment":"Padaria","trigger":{"title":null}}\n'
       'Retorne APENAS o JSON valido.';
 
-  // System prompt para processamento de TEXTO (re-análise após edição manual).
-  // Versão compacta com os mesmos schemas do geminiSystemPrompt (incluindo exclusão).
-  static const geminiTextPrompt =
-      'Voce e o assistente do app Sopro de lembretes por localizacao. '
-      'Analise o texto abaixo e identifique a intencao. '
-      'Retorne APENAS JSON valido (sem markdown). '
-      'Schemas possiveis: create_trigger, create_environment, '
-      'create_environment_with_trigger, update_environment, '
-      'list_environments, list_triggers, resolve_trigger, '
-      'delete_environment, delete_trigger, delete_all_triggers, '
-      'delete_all_environments, unknown. '
-      'Campos obrigatorios: intent, transcricao. '
-      'Para create_trigger: environment (string exata) + trigger.title. '
-      'Para create_environment: environment.name. '
-      'Para list_triggers / resolve_trigger: environment (string). '
-      'Para delete_environment / delete_all_triggers: environment (string exata). '
-      'Para delete_trigger: trigger.title (string aproximada). '
-      'REGRA: trigger.title deve ser SOMENTE a acao, infinitivo, maximo 50 chars, '
-      'sem pronomes e sem nome do ambiente. '
-      'Retorne APENAS o JSON.';
-
   // ── Fase 2 — prompt do ASSISTENTE (plano de acoes) ────────────────────────
   //
   // Filosofia: o Gemini NAO executa nada e NAO decide regra de negocio. Ele apenas
@@ -155,6 +134,15 @@ class AppConstants {
       '{"transcricao":"","reply":"","actions":[],'
       '"follow_up_question":null,'
       '"context_updates":{"last_environment":null,"last_trigger":null}}\n\n'
+      // Estágio A (item 3 — limpeza dobrada): a entrada agora é TEXTO de STT local
+      // (SpeechRecognizer), que pode conter erros de reconhecimento, girias ou
+      // hesitacoes. Limpe ANTES de estruturar, em UMA unica chamada (sem 2a chamada).
+      'ENTRADA: o texto do usuario pode ser uma TRANSCRICAO BRUTA de voz (STT) '
+      'com erros de reconhecimento, girias ou hesitacoes. Antes de estruturar, '
+      'interprete o texto limpo: corrija erros obvios pelo contexto, ignore '
+      'hesitacoes ("e...", "tipo", "ne"), normalize girias. NUNCA invente '
+      'informacao ausente nem troque nomes proprios, numeros, datas ou horarios '
+      '(salvo erro gritante e obvio). Reflita o texto ja limpo em "transcricao".\n\n'
       'ACTIONS (type + campos):\n'
       'create_environment {"type":"create_environment","name":"Local"}\n'
       'create_trigger {"type":"create_trigger","environment":"Local","title":"acao","content":null}\n'
@@ -282,4 +270,18 @@ class AppConstants {
       '- "quando chegar la me lembra de ligar" (sem contexto) -> "actions":[],'
       '"follow_up_question":"Qual lugar voce quer dizer?"\n'
       'Retorne SO o JSON.';
+
+  // Estágio A — prompt de LIMPEZA avulso (campos de ditado simples: nome de
+  // ambiente, título de gatilho). Recebe a transcrição STT bruta e devolve APENAS
+  // a frase corrigida (sem JSON). Usado por VoiceService.cleanTranscript — 1
+  // chamada de texto barata, fail-open (falha devolve o bruto).
+  static const geminiCleanupPrompt =
+      'Você recebe uma TRANSCRIÇÃO BRUTA de reconhecimento de voz em '
+      'português, que pode ter erros de reconhecimento, gírias, hesitações '
+      'ou palavras cortadas. Reescreva de forma limpa e natural, MANTENDO o '
+      'sentido original. Corrija erros óbvios pelo contexto. Remova '
+      'hesitações sem significado. Normalize gírias comuns. NUNCA invente '
+      'informação que não estava na fala. NUNCA troque nomes próprios, '
+      'números, datas ou horários, salvo erro gritante e óbvio. Responda '
+      'APENAS com a frase corrigida, sem explicação, sem aspas.';
 }

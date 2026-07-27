@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -14,6 +16,8 @@ import 'package:sopro/infrastructure/conversation/prompt_engine.dart';
 import 'package:sopro/infrastructure/logging/core/correlation_manager.dart';
 import 'package:sopro/infrastructure/logging/core/logger.dart';
 import 'package:sopro/infrastructure/voice/execution_plan.dart';
+import 'package:sopro/infrastructure/voice/sherpa_stt_service.dart';
+import 'package:sopro/infrastructure/voice/sherpa_tts_service.dart';
 
 // Intenções de voz que o app sabe executar.
 // Schemas Gemini correspondentes: ver AppConstants.geminiSystemPrompt.
@@ -107,12 +111,56 @@ class VoicePlanResult {
 // Processamento de intenção via Gemini Audio API (STT + NLU em uma chamada).
 // Fallback para regex local quando Gemini não está disponível.
 class VoiceService {
+  // FLAG DE TESTE — sherpa-onnx local vs. pipeline atual (speech_to_text/
+  // flutter_tts). false = reverte 100% ao comportamento anterior.
+  static const bool _useSherpa = true;
+
+  // Serviços sherpa (STT/TTS 100% offline). Criados sob demanda só quando a
+  // flag está ligada — não carrega os modelos se _useSherpa == false.
+  SherpaSttService? _sherpaSttInstance;
+  SherpaTtsService? _sherpaTtsInstance;
+  SherpaSttService get _sherpaStt =>
+      _sherpaSttInstance ??= SherpaSttService();
+  SherpaTtsService get _sherpaTts =>
+      _sherpaTtsInstance ??= SherpaTtsService();
+
+  // Exposto para o FAB do Home decidir o caminho de captura (WAV+Whisper vs.
+  // speech_to_text ao vivo). Campos de ditado NÃO consultam isto — seguem
+  // sempre no speech_to_text, independentemente da flag (fora de escopo).
+  bool get useSherpaVoice => _useSherpa;
+
+  // Transcreve um WAV via Whisper local (isolate). Usado só pelo Home quando
+  // useSherpaVoice; devolve null se nada foi reconhecido.
+  Future<String?> transcribeWav(String wavPath) async {
+    final text = (await _sherpaStt.transcribe(wavPath)).trim();
+    return text.isEmpty ? null : text;
+  }
+
   // Engine de gravação de áudio (pacote record ^5.x)
   final _recorder = AudioRecorder();
   // Engine de síntese de voz on-device (flutter_tts)
   final _tts = FlutterTts();
   // Flag para evitar múltiplas inicializações do TTS
   bool _ttsReady = false;
+
+  // ── STT on-device (speech_to_text) — Estágio A ──────────────────────────────
+  // Reconhecedor nativo (SpeechRecognizer). Captura o mic AO VIVO (não lê arquivo)
+  // e encerra sozinho no silêncio; para honrar a regra "o DEDO é o único fim"
+  // (hold-to-talk), reiniciamos a sessão a cada fim automático enquanto o botão
+  // segue pressionado, acumulando os resultados parciais/finais.
+  final SpeechToText _stt = SpeechToText();
+  bool _sttInitDone = false;   // initialize() já chamado (uma vez por processo)
+  bool _sttAvailable = false;  // reconhecedor disponível no dispositivo
+  bool _sttHold = false;       // dedo pressionado — sessão deve reiniciar no silêncio
+  // Resultados acumulados entre reinícios de sessão (pausas não encerram a captura).
+  final StringBuffer _sttFinal = StringBuffer();
+  // Texto (cumulativo) da sessão de escuta ATUAL, ainda não consolidado no buffer.
+  String _sttPartial = '';
+  // Locale de reconhecimento resolvido no init (device pode não ter pt-BR).
+  String _localeId = 'pt_BR';
+  bool _ptLocaleAvailable = true; // false quando o device não tem pt-BR/pt
+  // Exposto para a UI avisar o usuário quando não há reconhecedor pt-BR.
+  bool get ptLocaleAvailable => _ptLocaleAvailable;
 
   // ── Auto-stop (silêncio + duração máxima) ────────────────────────────────
   // StreamController notifica o FAB quando o serviço encerra a gravação automaticamente.
@@ -219,7 +267,8 @@ class VoiceService {
       }
       // Usa diretório temporário do app — não requer permissão de storage
       final dir   = await getTemporaryDirectory();
-      final path  = '${dir.path}/sopro_voice.m4a';
+      // WAV: exigido pelo Whisper do sherpa (lê WAV/PCM, não M4A/AAC).
+      final path  = '${dir.path}/sopro_voice.wav';
       // Remove gravação anterior se existir (evita acúmulo de arquivos temp)
       final prev = File(path);
       if (await prev.exists()) await prev.delete();
@@ -235,9 +284,9 @@ class VoiceService {
 
       await _recorder.start(
         const RecordConfig(
-          encoder:    AudioEncoder.aacLc, // M4A/AAC compatível com Gemini
-          bitRate:    12000,              // 12 kbps — voz inteligível, arquivo minúsculo
-          sampleRate: 8000,              // 8 kHz = qualidade telefônica, ok para STT
+          encoder:     AudioEncoder.wav, // WAV/PCM 16-bit — lido direto pelo Whisper
+          sampleRate:  16000,            // 16 kHz mono = entrada nativa do Whisper
+          numChannels: 1,
         ),
         path: path,
       );
@@ -365,6 +414,167 @@ class VoiceService {
 
   // true enquanto o engine está gravando ativamente
   Future<bool> get isRecording => _recorder.isRecording();
+
+  // ── STT on-device (speech_to_text) — Estágio A ──────────────────────────────
+  //
+  // Substitui o envio de ÁUDIO ao Gemini por transcrição LOCAL (grátis) via
+  // SpeechRecognizer nativo. O texto bruto é limpo/estruturado depois em TEXTO
+  // (mais barato). Modelo hold-to-talk: o DEDO é o único fim — reiniciamos a
+  // sessão a cada encerramento por silêncio enquanto o botão segue pressionado.
+
+  // Inicializa o reconhecedor uma única vez. Retorna se há STT disponível.
+  Future<bool> _initStt() async {
+    if (_sttInitDone) return _sttAvailable;
+    _sttInitDone = true;
+    try {
+      _sttAvailable = await _stt.initialize(
+        onStatus: _onSttStatus,
+        onError: (e) =>
+            debugPrint('[VoiceService] STT erro: ${e.errorMsg}'),
+      );
+      if (_sttAvailable) await _resolveLocale();
+    } catch (e) {
+      _sttAvailable = false;
+      debugPrint('[VoiceService] STT init falhou: $e');
+    }
+    return _sttAvailable;
+  }
+
+  // Resolve o locale de reconhecimento: procura pt_BR exato, senão qualquer pt_*.
+  // Se o device não tiver reconhecedor pt, marca _ptLocaleAvailable=false (a UI
+  // avisa) e mantém 'pt_BR' como tentativa — sem isso o STT cai no default do
+  // engine (em geral inglês), origem do lixo transcrito em outro idioma.
+  Future<void> _resolveLocale() async {
+    try {
+      final locales = await _stt.locales();
+      var match = locales.where((l) =>
+          l.localeId.toLowerCase().replaceAll('-', '_') == 'pt_br').firstOrNull;
+      match ??= locales
+          .where((l) => l.localeId.toLowerCase().startsWith('pt'))
+          .firstOrNull;
+      if (match != null) {
+        _localeId = match.localeId;
+        _ptLocaleAvailable = true;
+        // Log-only (diagnóstico): registra qual locale o STT vai usar. Antes só
+        // havia debugPrint (console/logcat), invisível no dump de logs remoto.
+        Logger.info('stt_locale_resolved',
+            payload: {'locale': _localeId, 'pt_available': true},
+            feature: 'voice', action: 'resolve_locale');
+      } else {
+        _ptLocaleAvailable = false;
+        debugPrint('[VoiceService] pt-BR indisponível no STT; '
+            'locales: ${locales.map((e) => e.localeId).join(",")}');
+        // Log-only (diagnóstico): pt-BR ausente + locales disponíveis no device.
+        Logger.warn('stt_locale_pt_missing',
+            payload: {
+              'chosen': _localeId,
+              'available': locales.map((e) => e.localeId).join(','),
+            },
+            feature: 'voice', action: 'resolve_locale');
+      }
+    } catch (_) {/* mantém o padrão 'pt_BR' */}
+  }
+
+  // Inicia a escuta em hold-to-talk: zera o acúmulo e abre a primeira sessão.
+  // Retorna false se o STT não estiver disponível (caller cai no feedback de erro).
+  Future<bool> startListening() async {
+    if (!await _initStt()) return false;
+    _sttHold = true;
+    _sttFinal.clear();
+    _sttPartial = '';
+    return _startSttSession();
+  }
+
+  // Abre uma sessão de escuta. Chamado no início e a cada reinício por silêncio.
+  Future<bool> _startSttSession() async {
+    try {
+      await _stt.listen(
+        onResult: _onSttResult,
+        localeId: _localeId, // resolvido no init (pt-BR/pt ou fallback)
+        listenOptions: SpeechListenOptions(
+          partialResults: true,
+          listenMode: ListenMode.dictation,
+          cancelOnError: false,
+          // Força reconhecimento 100% on-device — usa o motor local validado
+          // do aparelho e contorna o bug do pacote (issue #569): no caminho
+          // online o locale pt-BR reverte para inglês, gerando lixo transcrito.
+          onDevice: true,
+        ),
+      );
+      return true;
+    } catch (e) {
+      debugPrint('[VoiceService] STT listen falhou: $e');
+      return false;
+    }
+  }
+
+  // recognizedWords é cumulativo DENTRO de uma sessão — sobrescreve o parcial atual.
+  void _onSttResult(SpeechRecognitionResult result) {
+    _sttPartial = result.recognizedWords;
+  }
+
+  // Fim de uma sessão (silêncio/VAD nativo ou stop()). Consolida o parcial no
+  // buffer; se o dedo AINDA está pressionado, reabre a escuta (pausas não encerram).
+  void _onSttStatus(String status) {
+    if (status != 'notListening' && status != 'done') return;
+    _flushPartial();
+    if (_sttHold) _startSttSession(); // reinicia enquanto o dedo segura
+  }
+
+  // Move o texto cumulativo da sessão atual para o buffer acumulado.
+  void _flushPartial() {
+    final p = _sttPartial.trim();
+    if (p.isEmpty) return;
+    if (_sttFinal.isNotEmpty) _sttFinal.write(' ');
+    _sttFinal.write(p);
+    _sttPartial = '';
+  }
+
+  // Encerra a escuta (dedo levantou) e devolve a transcrição bruta acumulada.
+  // null quando não houve fala reconhecida. Curto atraso pós-stop() para o
+  // último resultado final chegar antes de consolidar.
+  Future<String?> stopListening() async {
+    _sttHold = false; // impede o reinício automático no status que segue o stop()
+    try {
+      await _stt.stop();
+    } catch (_) {}
+    await Future.delayed(const Duration(milliseconds: 350));
+    _flushPartial();
+    final text = _sttFinal.toString().trim();
+    _sttFinal.clear();
+    return text.isEmpty ? null : text;
+  }
+
+  // Cancela a escuta sem retornar transcrição (usuário descartou / entrou em espera).
+  Future<void> cancelListening() async {
+    _sttHold = false;
+    try {
+      await _stt.cancel();
+    } catch (_) {}
+    _sttFinal.clear();
+    _sttPartial = '';
+  }
+
+  // Limpeza de TEXTO via Gemini (campos de ditado simples: nome/título). Corrige
+  // erros de STT, remove hesitações e normaliza gírias SEM inventar/trocar dados.
+  // Fail-open: qualquer falha/rede/sem-chave devolve o texto bruto. 1 chamada barata.
+  Future<String?> cleanTranscript(String raw) async {
+    final r = raw.trim();
+    if (r.isEmpty) return null;
+    if (AppConstants.geminiApiKey.isEmpty) return r;
+    try {
+      final (resp, status) =
+          await _sendTextRaw(r, AppConstants.geminiCleanupPrompt);
+      if (status != 200 || resp == null) return r;
+      final env = jsonDecode(resp) as Map<String, dynamic>;
+      final text = (((env['candidates'] as List?)?.firstOrNull
+              as Map?)?['content'] as Map?)?['parts']?[0]?['text'] as String?;
+      final cleaned = text == null ? '' : _stripMarkdown(text).trim();
+      return cleaned.isEmpty ? r : cleaned;
+    } catch (_) {
+      return r;
+    }
+  }
 
   // ── Gemini Audio ──────────────────────────────────────────────────────────
 
@@ -625,6 +835,9 @@ class VoiceService {
     List<String> existingEnvironments = const [],
     List<String> existingEnvironmentIds = const [],
     String contextSummary = '',
+    // Preâmbulo de continuação de follow-up (Planner.continuationPreamble),
+    // idêntico ao processAudioAsPlan. Vazio em comando direto → prompt inalterado.
+    String continuation = '',
   }) async {
     final correlationId = CorrelationManager.beginOperation('voice_text');
     try {
@@ -632,13 +845,16 @@ class VoiceService {
       if (AppConstants.geminiApiKey.isEmpty) return VoicePlanResult.empty();
 
       // Mesma montagem do processAudioAsPlan via PromptEngine (Estágio 5).
-      final prompt = const PromptEngine().build(
+      final basePrompt = const PromptEngine().build(
         systemPersona: AppConstants.geminiAssistantPrompt,
         environmentContext:
             _buildAssistantEnvContext(existingEnvironments, existingEnvironmentIds),
         dateTimeContext: _dateTimeContext,
         memorySummary: contextSummary,
       );
+      // Continuação entra por último (logo antes do comando), como no fluxo de áudio.
+      final prompt =
+          continuation.isEmpty ? basePrompt : '$basePrompt\n\n$continuation';
 
       final sw = Stopwatch()..start();
       final (raw, status) = await _sendTextRaw(transcript, prompt);
@@ -762,32 +978,6 @@ class VoiceService {
     );
   }
 
-  // Processa TEXTO (transcrição corrigida manualmente) via Gemini ou regex.
-  // existingEnvironments: injetado no prompt para match exato com banco.
-  // Usado pelo botão "Re-analisar" no fallback sheet.
-  Future<VoiceResult> resolveIntentFromText(
-    String transcript, {
-    List<String> existingEnvironments = const [],
-  }) async {
-    if (transcript.trim().isEmpty) {
-      return VoiceResult(intent: VoiceIntent.fallback, transcript: transcript);
-    }
-    if (AppConstants.geminiApiKey.isNotEmpty) {
-      try {
-        final geminiResponse = await _sendTextToGemini(
-          transcript,
-          existingEnvironments: existingEnvironments,
-        );
-        final result = geminiResponse.$1;
-        if (result != null) return result;
-      } catch (e) {
-        debugPrint('[VoiceService] Gemini Text erro: $e');
-      }
-    }
-    // Fallback: regex offline
-    return parseIntent(transcript);
-  }
-
   // Envia áudio em base64 ao Gemini 2.5 Flash com inlineParts.
   // CORRECAO 1: usa consolidateHttpClientResponseBytes em vez de
   // response.transform(utf8.decoder).join() para evitar truncamento em
@@ -853,56 +1043,6 @@ class VoiceService {
     }
   }
 
-  // Envia TEXTO ao Gemini para re-análise após edição manual da transcrição.
-  // CORRECAO 1: mesma correção de leitura de bytes que _sendAudioToGemini.
-  // CORRECAO 2: injeta lista de ambientes no prompt.
-  Future<(VoiceResult?, String?, int?)> _sendTextToGemini(
-    String transcript, {
-    List<String> existingEnvironments = const [],
-  }) async {
-    final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 10);
-
-    try {
-      final uri = Uri.parse(
-        '${AppConstants.geminiEndpoint}?key=${AppConstants.geminiApiKey}',
-      );
-      final request = await client.postUrl(uri);
-      request.headers.contentType = ContentType.json;
-
-      // Prompt de texto com contexto de ambientes
-      final fullPrompt =
-          AppConstants.geminiTextPrompt + _buildEnvContext(existingEnvironments);
-
-      final body = jsonEncode({
-        'contents': [
-          {
-            'parts': [
-              {'text': fullPrompt},
-              {'text': transcript},
-            ],
-          },
-        ],
-        'generationConfig': {'temperature': 0, 'maxOutputTokens': 300},
-      });
-
-      final bodyBytes = utf8.encode(body);
-      request.contentLength = bodyBytes.length;
-      request.add(bodyBytes);
-
-      final response   = await request.close();
-      final httpStatus = response.statusCode;
-      // CORRECAO 1: lê todos os bytes antes de decodificar
-      final respBytes  = await consolidateHttpClientResponseBytes(response);
-      final raw        = utf8.decode(respBytes);
-
-      if (httpStatus != 200) return (null, 'HTTP $httpStatus: $raw', httpStatus);
-      return _parseGeminiResponse(raw, httpStatus);
-    } finally {
-      client.close();
-    }
-  }
-
   // Constrói o trecho do prompt que informa ao Gemini quais ambientes existem.
   // Retorna '' se a lista estiver vazia (sem contexto extra = comportamento padrão).
   // O Gemini deve retornar o nome EXATO da lista para evitar erros de match.
@@ -935,7 +1075,7 @@ class VoiceService {
   }
 
   // Extrai o texto gerado do envelope Gemini e o converte em VoiceResult.
-  // Compartilhado por _sendAudioToGemini e _sendTextToGemini.
+  // Usado por _sendAudioToGemini.
   (VoiceResult?, String?, int?) _parseGeminiResponse(String raw, int status) {
     final envelope = jsonDecode(raw) as Map<String, dynamic>;
     final text = (((envelope['candidates'] as List?)?.firstOrNull
@@ -1142,6 +1282,11 @@ class VoiceService {
     await _tts.setLanguage('pt-BR');
     await _tts.setVolume(1.0);
     await _tts.setPitch(1.0);
+    // Faz _tts.speak() RESOLVER só quando o áudio termina de tocar (antes era
+    // fire-and-forget). Permite que speak() seja await-ado de verdade — usado
+    // pelo auto-reopen (perguntar nome do ambiente) para só abrir o mic DEPOIS
+    // que a pergunta parou de tocar, evitando o STT captar o próprio TTS.
+    await _tts.awaitSpeakCompletion(true);
     _ttsReady = true;
   }
 
@@ -1154,13 +1299,23 @@ class VoiceService {
     final diffMs  = DateTime.now().millisecondsSinceEpoch - spokeAt;
     if (diffMs < 10000) return; // floating falou há menos de 10 s — não repetir
 
+    // Sherpa: voz miro-high offline (síntese em isolate, não trava a UI).
+    // [rate] não se aplica ao Piper aqui — velocidade fica no natural (1.0).
+    if (_useSherpa) {
+      await _sherpaTts.speak(text);
+      return;
+    }
+
     await _initTts();
     await _tts.setSpeechRate(rate.clamp(0.1, 1.0));
     await _tts.speak(text);
   }
 
   // Para a fala em andamento
-  Future<void> stopSpeaking() async => _tts.stop();
+  Future<void> stopSpeaking() async {
+    if (_useSherpa) return _sherpaTts.stop();
+    return _tts.stop();
+  }
 
   // ── Guardas de Fase 1 (assistente inteligente) ──────────────────────────────
 
@@ -1276,5 +1431,7 @@ class VoiceService {
     _autoStopController.close();
     _recorder.dispose();
     _tts.stop();
+    _sherpaSttInstance?.dispose(); // libera modelo Whisper nativo se criado
+    _sherpaTtsInstance?.dispose(); // libera Piper + player se criados
   }
 }

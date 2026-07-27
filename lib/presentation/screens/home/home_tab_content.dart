@@ -62,7 +62,6 @@ import '../../providers/weather_providers.dart';
 import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_card.dart';
 import '../../widgets/sopro_primary_button.dart';
-import '../../widgets/sopro_text_field.dart';
 import '../ble/people_nearby_screen.dart';
 import '../environment/add_environment_screen.dart';
 import '../environment/environment_detail_screen.dart';
@@ -847,9 +846,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   // Canal de comunicação com o FloatingVoiceService (overlay nativo)
   static const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
 
-  // FIX 4: quando true, a próxima gravação captura o nome do ambiente.
-  // Ativado por _handleOpenEnvironment quando Gemini não retorna environmentName.
-  bool _pendingEnvCreate = false;
+  // Avisa (uma vez por sessão) que o device não tem reconhecedor pt-BR.
+  bool _ptLocaleWarned = false;
 
   // Fase 1 — confirmação por voz reutilizável.
   // Quando != null, o app fez uma pergunta de sim/não e aguarda a resposta falada.
@@ -912,8 +910,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     _pulseCtrl.dispose();
     _recordingTimer?.cancel();
     _pressScaleTimer?.cancel();
-    // Garante que gravação seja cancelada se o widget for descartado durante uso
-    ref.read(voiceServiceProvider).cancelRecording();
+    // Garante que a escuta seja cancelada se o widget for descartado durante uso
+    _cancelVoiceCapture();
     super.dispose();
   }
 
@@ -984,11 +982,24 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   // em _onLongPressStart — este método só precisa lidar com falha de init.
   Future<void> _startRecording() async {
     final service = ref.read(voiceServiceProvider);
-    // Sprint Unificação: hold-to-talk — o dedo é o único fim de gravação (sem VAD).
-    final ok      = await service.startRecording(holdToTalk: true);
+    // Estágio A: captura hold-to-talk — o dedo é o único fim.
+    // Sherpa (flag): grava um WAV 16 kHz p/ o Whisper; senão speech_to_text ao vivo.
+    final ok = service.useSherpaVoice
+        ? await service.startRecording(holdToTalk: true)
+        : await service.startListening();
     if (!mounted) return;
 
     if (ok) {
+      // Item 4: reconhecedor pt-BR ausente no device → avisa UMA vez por sessão.
+      // (o STT pode cair no idioma default do engine, gerando lixo transcrito.)
+      if (!service.ptLocaleAvailable && !_ptLocaleWarned) {
+        _ptLocaleWarned = true;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content:  Text(AppStrings.voiceLocalePtMissing),
+          duration: Duration(seconds: 5),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
       // Sucesso: se o usuário já soltou enquanto o mic iniciava,
       // _stopAndProcess() já foi chamado e o estado não é mais recording —
       // nesse caso a gravação real começa mas será parada no fluxo normal.
@@ -1016,67 +1027,66 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     if (!mounted) return;
     setState(() => _fabState = _FabState.processing);
 
-    final service  = ref.read(voiceServiceProvider);
-    final filePath = await service.stopRecording();
+    final service    = ref.read(voiceServiceProvider);
+    // Estágio A: transcrição LOCAL. Sherpa (flag): encerra a gravação e passa o
+    // WAV ao Whisper (isolate); senão consolida o resultado do speech_to_text.
+    // O texto segue o MESMO caminho a partir daqui (limpeza Gemini → plano).
+    final String? transcript;
+    if (service.useSherpaVoice) {
+      final wav = await service.stopRecording();
+      transcript = wav == null ? null : await service.transcribeWav(wav);
+    } else {
+      transcript = await service.stopListening();
+    }
     if (!mounted) return;
 
-    if (filePath == null) {
-      // Gravação falhou silenciosamente (arquivo não criado)
-      setState(() => _fabState = _FabState.idle);
-      return;
-    }
-
-    // Sinais do gate adaptativo de energia: só há fala válida quando o áudio foi
-    // detectado, atingiu o mínimo de frames E o piso de ruído foi calibrado.
-    final gSpeechDetected = service.speechDetected;
-    final gSpeechFrames   = service.speechFrames;
-    final gCalibrated     = service.noiseCalibrated;
-    final shouldSend = gSpeechDetected &&
-        gSpeechFrames >= VoiceService.minSpeechFramesRequired &&
-        gCalibrated;
+    // GATE (substitui o gate de energia do record): só segue quando o STT
+    // reconheceu fala válida (texto não-vazio, não só pontuação/relógio).
+    final shouldSend =
+        transcript != null && !VoiceService.isInvalidTranscript(transcript);
 
     // Resolução Inteligente de Localização — quando há pergunta pendente, esta
-    // gravação é a RESPOSTA (sim/não, endereço, escolha). Tratada ANTES do gate
-    // de energia: um "sim" curto/baixo é justamente o áudio que o gate rejeita —
-    // não pode derrubar a confirmação sem o usuário perceber. O pending só é
-    // zerado quando (a) a resposta é processada em _resolveEnvLocationTurn, ou
-    // (b) expira por TTL — NUNCA pelo gate de energia.
+    // fala é a RESPOSTA (sim/não, endereço, escolha). Tratada ANTES do gate: uma
+    // resposta curta é justamente o que pode não ser reconhecida — não pode
+    // derrubar a confirmação sem o usuário perceber. O pending só é zerado quando
+    // (a) a resposta é processada em _resolveEnvLocationTurn, ou (b) expira por TTL.
     if (_envLocationPending != null) {
       if (_envLocationPending!.isExpired) {
         // Usuário desistiu (>30s sem responder) — libera o pending e segue o
-        // fluxo normal (esta gravação vira comando novo, se houver fala).
+        // fluxo normal (esta fala vira comando novo, se houver texto).
         _envLocationPending = null;
         AppLogger.log('env_location_pending_expired', {'surface': 'home'});
       } else if (!shouldSend) {
-        // Áudio fraco/ruído: NÃO descarta o pending — renova o TTL e pede para
-        // repetir. A próxima gravação continua respondendo a mesma pergunta.
+        // Nada reconhecido: NÃO descarta o pending — renova o TTL e pede para
+        // repetir. A próxima fala continua respondendo a mesma pergunta.
         _envLocationPending!.touch();
         if (mounted) setState(() => _fabState = _FabState.idle);
         await _speak(_say.notUnderstoodRepeat);
         return;
       } else {
-        await _resolveEnvLocationTurn(filePath);
+        await _resolveEnvLocationTurn(transcript);
         return;
       }
     }
 
     // GATE DE ENVIO — DECISÃO ÚNICA antes de QUALQUER chamada ao Gemini (cobre
-    // comando novo, confirmação sim/não e captura de nome). Gemini só é chamado
-    // quando TODAS as condições do gate adaptativo forem verdadeiras:
-    //   speechDetected == true  E  speechFrames >= mínimo  E  noiseFloor calibrado.
-    // Caso contrário: bloqueia, encerra o fluxo e NUNCA chama o Gemini.
+    // comando novo, confirmação sim/não e captura de nome). Sem texto reconhecido:
+    // bloqueia, encerra o fluxo e NUNCA chama o Gemini.
     if (!shouldSend) {
       _pendingConfirm     = null;
-      _pendingEnvCreate   = false;
       _envLocationPending = null; // já tratado acima; reset defensivo
       await _handleNoSpeech();
       return;
     }
 
-    // Fase 1 — se há uma confirmação por voz pendente, esta gravação é a
-    // resposta sim/não, não um comando novo. Desvia antes do fluxo do Gemini.
+    // shouldSend == true garante texto reconhecido não-nulo daqui em diante
+    // (o compilador promove `transcript` via o booleano final acima).
+    final spoken = transcript;
+
+    // Fase 1 — se há uma confirmação por voz pendente, esta fala é a resposta
+    // sim/não, não um comando novo. Desvia antes do fluxo do Gemini (100% local).
     if (_pendingConfirm != null) {
-      await _resolveVoiceConfirmation(filePath);
+      await _resolveVoiceConfirmation(spoken);
       return;
     }
 
@@ -1093,25 +1103,6 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       // para ele decidir reutilizar ambiente existente vs criar novo.
       final envIds   = envs.map((e) => e.id).toList();
 
-      // Fluxo legado "aguardando nome do ambiente" (Fase 1): a gravação é o nome
-      // ditado — transcreve (1 Gemini) e delega ao handler de criação por GPS.
-      if (_pendingEnvCreate) {
-        _pendingEnvCreate = false;
-        final transcript = await service.transcribeAudio(filePath);
-        if (!mounted) return;
-        final envName = (transcript ?? '').trim();
-        if (envName.isNotEmpty && !VoiceService.isInvalidTranscript(envName)) {
-          await _handleOpenEnvironment(VoiceResult(
-            intent:          VoiceIntent.createEnvironment,
-            transcript:      envName,
-            environmentName: envName,
-          ));
-        } else {
-          await _handleNoSpeech();
-        }
-        return;
-      }
-
       // Fase 2 — assistente: UMA chamada Gemini devolve resposta natural + plano
       // de ações + follow-up + atualizações de contexto.
       final ctx = ref.read(conversationContextProvider);
@@ -1124,8 +1115,10 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       // como continuação do comando original (senão null → comando direto normal).
       final continuation = const Planner().continuationPreamble(ctx);
       final geminiSw = Stopwatch()..start(); // BUG 4 (temporário)
-      final planRes0 = await service.processAudioAsPlan(
-        filePath,
+      // Estágio A: envia o TEXTO do STT (não mais áudio). Mesmo prompt/plano;
+      // a limpeza do texto bruto é dobrada dentro do geminiAssistantPrompt.
+      final planRes0 = await service.processTextAsPlan(
+        spoken,
         existingEnvironments: envNames,
         existingEnvironmentIds: envIds, // Fase 2.1 — nome + ID (reutilizar vs criar)
         contextSummary: ctx.promptSummary(),
@@ -1192,13 +1185,22 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   }
 
   // Cancela gravação sem processar (usuário arrastou para cima ou evento cancelado)
+  // Cancela a captura de voz do Home no caminho ATIVO: sherpa (flag) descarta a
+  // gravação WAV; senão cancela a escuta speech_to_text. Fora de escopo: ditado.
+  Future<void> _cancelVoiceCapture() {
+    final service = ref.read(voiceServiceProvider);
+    return service.useSherpaVoice
+        ? service.cancelRecording()
+        : service.cancelListening();
+  }
+
   void _cancelRecording() {
     if (!_isRecording) return;
     _recordingTimer?.cancel();
     _recordingTimer = null;
     _pulseCtrl.stop();
     _pulseCtrl.reset();
-    ref.read(voiceServiceProvider).cancelRecording();
+    _cancelVoiceCapture();
     if (mounted) {
       setState(() => _fabState = _FabState.idle);
     }
@@ -1298,25 +1300,20 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     ));
   }
 
-  // Interpreta a gravação como resposta de confirmação (sim/não).
+  // Interpreta a fala como resposta de confirmação (sim/não).
   //
-  // Fluxo: transcreve o áudio (mesma infra Gemini — sem popup) e usa o parser
-  // 100% local VoiceService.parseYesNo. sim → executa onYes; não/ambíguo →
-  // cancela por segurança (ação destrutiva nunca ocorre sem "sim" explícito).
-  // O retorno antecipado em cada ramo garante que _pendingConfirm seja sempre
-  // limpo, evitando estado preso.
-  Future<void> _resolveVoiceConfirmation(String filePath) async {
+  // Estágio A: o texto já vem do STT local (parâmetro [transcript]) — a decisão
+  // sim/não é 100% local em VoiceService.parseYesNo, SEM nenhuma chamada Gemini.
+  // sim → executa onYes; não/ambíguo → cancela por segurança (ação destrutiva
+  // nunca ocorre sem "sim" explícito). O retorno antecipado em cada ramo garante
+  // que _pendingConfirm seja sempre limpo, evitando estado preso.
+  Future<void> _resolveVoiceConfirmation(String? transcript) async {
     final pending = _pendingConfirm;
     _pendingConfirm = null; // consome o estado antes de qualquer await/erro
     if (pending == null) return;
 
     if (mounted) setState(() => _fabState = _FabState.processing);
-    final service    = ref.read(voiceServiceProvider);
-    // BUG 2 — transcrição PURA (prompt mínimo, sem NLU). A decisão sim/não é
-    // 100% local em parseYesNo. Nunca envia a confirmação ao classificador.
-    final transcript = await service.transcribeOnly(filePath);
-    if (!mounted) return;
-    // BUG 2 (temporário) — confirmação resolvida localmente (nunca remota).
+    // Confirmação resolvida localmente (nunca remota).
     AppLogger.log('voice_confirmation_local', {'surface': 'home'});
 
     final answer = VoiceService.parseYesNo(transcript);
@@ -1657,7 +1654,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     _pulseCtrl.stop();
     _pulseCtrl.reset();
     try {
-      await ref.read(voiceServiceProvider).cancelRecording();
+      await _cancelVoiceCapture();
     } catch (_) {}
     if (mounted) setState(() => _fabState = _FabState.idle);
     // LOG TEMPORÁRIO — captura encerrada à força ao entrar em espera.
@@ -1822,21 +1819,20 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     await _askAndWait(buf.toString());
   }
 
-  // Resolve a gravação de resposta de acordo com a etapa pendente da conversa.
+  // Resolve a fala de resposta de acordo com a etapa pendente da conversa.
+  // Estágio A: o texto já vem do STT local ([transcript]) — sem transcribeOnly.
   // Consome _envLocationPending antes de qualquer await (evita estado preso).
-  Future<void> _resolveEnvLocationTurn(String filePath) async {
+  Future<void> _resolveEnvLocationTurn(String? transcript) async {
     final pending = _envLocationPending;
     _envLocationPending = null;
     if (pending == null) return;
     final ctx = ref.read(conversationContextProvider);
     if (mounted) setState(() => _fabState = _FabState.processing);
-    final service = ref.read(voiceServiceProvider);
 
     switch (pending.turn) {
       // Sim/não para usar o GPS. Sim → cria via GPS; não → pede endereço.
       case _EnvTurn.confirmGps:
-        final ansGps =
-            VoiceService.parseYesNo(await service.transcribeOnly(filePath));
+        final ansGps = VoiceService.parseYesNo(transcript);
         if (!mounted) return;
         if (ansGps == true) {
           setState(() => _fabState = _FabState.processing);
@@ -1852,7 +1848,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         }
       // Sim/não para o local único encontrado. Sim → cria nas coordenadas.
       case _EnvTurn.confirmPlace:
-        final replyPlace = await service.transcribeOnly(filePath);
+        final replyPlace = transcript;
         if (!mounted) return;
         // BUG 2 — "nenhum/não é esse": descarta o resultado e pede endereço mais
         // específico (nunca reapresenta o mesmo local).
@@ -1880,7 +1876,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         }
       // Endereço ditado → geocodifica e apresenta.
       case _EnvTurn.askAddress:
-        final addr = await service.transcribeOnly(filePath);
+        final addr = transcript;
         if (!mounted) return;
         if (addr == null || VoiceService.isInvalidTranscript(addr)) {
           setState(() => _fabState = _FabState.idle);
@@ -1890,7 +1886,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         await _runPlaceSearch(pending.name, addr);
       // Especificador da categoria ("Assaí") → pesquisa.
       case _EnvTurn.askSpecifier:
-        final spec = await service.transcribeOnly(filePath);
+        final spec = transcript;
         if (!mounted) return;
         if (spec == null || VoiceService.isInvalidTranscript(spec)) {
           setState(() => _fabState = _FabState.idle);
@@ -1900,7 +1896,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         await _runPlaceSearch(pending.name, spec);
       // Escolha entre vários → identifica o candidato e cria.
       case _EnvTurn.choosePlace:
-        final answerChoose = await service.transcribeOnly(filePath);
+        final answerChoose = transcript;
         if (!mounted) return;
         // BUG 2 — "nenhum/não é esse/outra opção": descarta a lista, limpa a
         // seleção e pede endereço mais específico. Nunca repete a mesma lista.
@@ -2438,22 +2434,25 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
 
   // "salva esse lugar como X" → cria ambiente diretamente via GPS.
   // Abre AddEnvironmentScreen como fallback se o GPS falhar.
-  // FIX 4: se o nome estiver vazio, pede por TTS e reinicia gravação para capturá-lo.
+  // Nome vazio → pergunta por TTS e aguarda o usuário pressionar para responder.
   Future<void> _handleOpenEnvironment(VoiceResult result) async {
     if (!mounted) return;
 
     final name   = result.environmentName ?? '';
     final radius = result.environmentRadius ?? 100;
 
-    // FIX 4: nome ausente → TTS + nova gravação automática para capturar o nome
+    // Nome ausente → pergunta por TTS e ENCERRA (mesmo padrão dos follow-ups em
+    // _handleConversationalReply): arma "aguardando resposta" no contexto e NÃO
+    // reabre o mic. O usuário pressiona o botão para responder o nome; a resposta
+    // entra como continuação do comando original no próximo turno.
     if (name.trim().isEmpty) {
+      final ctx = ref.read(conversationContextProvider);
+      ctx.lastQuestion   = _say.askEnvironmentName;
+      ctx.lastTranscript = result.transcript; // origem da continuação
+      ctx.state          = ConversationState.awaitingInformation;
+      ctx.touch();
       setState(() => _fabState = _FabState.idle);
-      await _speak(_say.askEnvironmentName);
-      if (!mounted) return;
-      _pendingEnvCreate = true;
-      // Aguarda 500 ms para o TTS iniciar antes de abrir o microfone
-      await Future.delayed(const Duration(milliseconds: 500));
-      if (mounted && _fabState == _FabState.idle) _onPressStart();
+      await _speak(_say.askEnvironmentName); // aguarda o áudio terminar de tocar
       return;
     }
 
@@ -3494,126 +3493,6 @@ class _TriggerListSheet extends ConsumerWidget {
           ),
         );
       },
-    );
-  }
-}
-
-// ── Sheet de fallback (intenção não reconhecida) ──────────────────────────────
-
-// Exibido quando o Gemini retorna "nao_entendido".
-// O usuário pode editar o texto e re-analisar para corrigir erros de STT.
-// Fase 1 — mantido no código para referência/rollback, mas NÃO é mais usado:
-// o fluxo "não entendi" agora responde só por voz (ver _handleFallback).
-// ignore: unused_element
-class _FallbackSheet extends ConsumerStatefulWidget {
-  // Transcrição retornada pelo Gemini (pode ser vazia se STT falhou)
-  final String transcript;
-  // Callback com o resultado re-analisado para execução
-  final void Function(VoiceResult) onResult;
-
-  const _FallbackSheet({
-    required this.transcript,
-    required this.onResult,
-  });
-
-  @override
-  ConsumerState<_FallbackSheet> createState() => _FallbackSheetState();
-}
-
-class _FallbackSheetState extends ConsumerState<_FallbackSheet> {
-  late final TextEditingController _ctrl;
-  bool _reanalyzing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = TextEditingController(text: widget.transcript);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  // CORRECAO 2: Envia o texto editado ao Gemini para nova tentativa de classificação,
-  // passando a lista de ambientes existentes para o modelo retornar o nome exato.
-  Future<void> _reanalyze() async {
-    final text = _ctrl.text.trim();
-    if (text.isEmpty) return;
-    setState(() => _reanalyzing = true);
-    try {
-      final envs     = await ref.read(environmentRepositoryProvider).getAll();
-      final envNames = envs.map((e) => e.name).toList();
-      final result   = await ref.read(voiceServiceProvider).resolveIntentFromText(
-        text,
-        existingEnvironments: envNames,
-      );
-      if (!mounted) return;
-      Navigator.pop(context);
-      widget.onResult(result);
-    } finally {
-      if (mounted) setState(() => _reanalyzing = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        20, 16, 20,
-        20 + MediaQuery.of(context).viewInsets.bottom,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Alça visual
-          Center(
-            child: Container(
-              width: 36, height: 4,
-              margin: const EdgeInsets.only(bottom: AppSpacing.md),
-              decoration: BoxDecoration(
-                color: AppTheme.textDisabled,
-                borderRadius: BorderRadius.circular(AppRadius.xs),
-              ),
-            ),
-          ),
-
-          Text(
-            AppStrings.voiceIntentFallback,
-            style: AppTypography.titleMedium.copyWith(color: AppTheme.textPrimary),
-          ),
-          const SizedBox(height: AppSpacing.gap6),
-          // Exemplos de comandos para guiar o usuário na re-digitação
-          const Text(
-            AppStrings.voiceExamples,
-            style: TextStyle(
-              color: AppTheme.textDisabled,
-              fontSize: 11,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.md),
-
-          // Campo de texto editável com a transcrição do Gemini
-          SoproTextField(
-            controller: _ctrl,
-            label: AppStrings.voiceTranscriptLabel,
-            maxLines: 3,
-            autofocus: true,
-          ),
-          const SizedBox(height: AppSpacing.md),
-
-          // Botão de re-análise: chama Gemini com o texto corrigido
-          SoproPrimaryButton(
-            label: AppStrings.voiceReanalyze,
-            onPressed: _reanalyzing ? null : _reanalyze,
-            loading: _reanalyzing,
-          ),
-          const SizedBox(height: AppSpacing.xs),
-        ],
-      ),
     );
   }
 }

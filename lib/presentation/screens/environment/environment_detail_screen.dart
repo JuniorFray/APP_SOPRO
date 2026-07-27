@@ -622,7 +622,7 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
   @override
   void dispose() {
     _fieldRecordTimer?.cancel();
-    ref.read(voiceServiceProvider).cancelRecording();
+    ref.read(voiceServiceProvider).cancelListening();
     _titleCtrl.dispose();
     _contentCtrl.dispose();
     super.dispose();
@@ -754,13 +754,13 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
         (_recordingTitle || _recordingContent) && !ctrl.text.endsWith('...');
     if (isAlreadyRecording) {
       _fieldRecordTimer?.cancel();
-      ref.read(voiceServiceProvider).cancelRecording();
+      ref.read(voiceServiceProvider).cancelListening();
       setRecording(false);
       return;
     }
 
     final service = ref.read(voiceServiceProvider);
-    final ok = await service.startRecording();
+    final ok = await service.startListening();
     if (!mounted) return;
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -770,15 +770,13 @@ class _TriggerSheetState extends ConsumerState<_TriggerSheet> {
     }
     setRecording(true);
 
-    // Para automaticamente após 8 s e transcreve via Gemini
+    // Estágio A: para após 8 s, encerra o STT local e limpa o texto bruto (1 call).
     _fieldRecordTimer = Timer(const Duration(seconds: 8), () async {
-      final path = await service.stopRecording();
+      final raw = await service.stopListening();
       if (!mounted) return;
       setRecording(false);
-      if (path == null) return;
-      // HOTFIX 1 — sem fala detectada, não chama o Gemini (evita transcrição vazia)
-      if (!service.speechDetected) return;
-      final transcript = await service.transcribeAudio(path);
+      if (raw == null) return; // nada reconhecido
+      final transcript = await service.cleanTranscript(raw);
       if (!mounted || transcript == null || transcript.isEmpty) return;
       setState(() {
         ctrl.text = transcript[0].toUpperCase() + transcript.substring(1);

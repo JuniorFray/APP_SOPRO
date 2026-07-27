@@ -295,7 +295,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     _nameRecordTimer?.cancel();
     _searchDebounce?.cancel();
     _mapController?.dispose();
-    ref.read(voiceServiceProvider).cancelRecording();
+    ref.read(voiceServiceProvider).cancelListening();
     _nameController.dispose();
     _radiusController.dispose();
     _searchCtrl.dispose();
@@ -1196,19 +1196,19 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     );
   }
 
-  // Grava 7 s de áudio e usa Gemini para transcrever o nome do ambiente.
-  // Toque no mic inicia; auto-para após 7 s. Toque novamente cancela.
+  // Estágio A: escuta local (STT) e limpa o texto via Gemini para o nome do
+  // ambiente. Toque no mic inicia; auto-para após 7 s. Toque novamente cancela.
   Future<void> _recordForName() async {
     if (_recordingName) {
-      // Segundo toque: cancela gravação em andamento
+      // Segundo toque: cancela a escuta em andamento
       _nameRecordTimer?.cancel();
-      ref.read(voiceServiceProvider).cancelRecording();
+      ref.read(voiceServiceProvider).cancelListening();
       if (mounted) setState(() => _recordingName = false);
       return;
     }
 
     final service = ref.read(voiceServiceProvider);
-    final ok = await service.startRecording();
+    final ok = await service.startListening();
     if (!mounted) return;
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1218,16 +1218,13 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     }
     setState(() => _recordingName = true);
 
-    // Para automaticamente após 7 s e transcreve via Gemini
+    // Para automaticamente após 7 s: encerra o STT e limpa o texto bruto (1 call).
     _nameRecordTimer = Timer(const Duration(seconds: 7), () async {
-      final path = await service.stopRecording();
+      final raw = await service.stopListening();
       if (!mounted) return;
       setState(() => _recordingName = false);
-      if (path == null) return;
-      // HOTFIX 1 — sem fala detectada, não chama o Gemini (evita transcrição vazia)
-      if (!service.speechDetected) return;
-      // transcribeAudio usa o Gemini para extrair apenas o texto falado
-      final transcript = await service.transcribeAudio(path);
+      if (raw == null) return; // nada reconhecido
+      final transcript = await service.cleanTranscript(raw);
       if (!mounted || transcript == null || transcript.isEmpty) return;
       setState(() {
         // Capitaliza a inicial do nome ditado
