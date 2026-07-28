@@ -1020,6 +1020,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   Future<void> _stopAndProcess() async {
     if (!_isRecording) return;
     _pipelineSw = Stopwatch()..start(); // BUG 4 (temporário) — total do pipeline
+    debugPrint('[SOPROPERF] === CMD START ==='); // DEBUG TIMING
     _recordingTimer?.cancel();
     _recordingTimer = null;
     _pulseCtrl.stop();
@@ -1437,10 +1438,12 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     // qualquer plano com UM ambiente NOVO (mesmo misto) passa pelo resolvedor;
     // as demais ações ficam pendentes e rodam DEPOIS da criação (nunca GPS cego).
     final envs = await ref.read(environmentRepositoryProvider).getAll();
+    final swPlan = Stopwatch()..start(); // DEBUG TIMING
     final decision = const Planner().decide(
       planRes.plan,
       environmentExists: (name) => _matchEnv(envs, name) != null,
     );
+    debugPrint('[SOPROPERF] PLANNER_DECIDE_MS=${swPlan.elapsedMilliseconds}'); // DEBUG TIMING
 
     switch (decision.step) {
       case PlannerStep.confirmDestructive:
@@ -1496,6 +1499,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     final executor = VoiceActionExecutor(_buildActionHandlers(sharedLoc));
     final summary  = await executor.run(planRes.plan);
     final execMs   = execSw.elapsedMilliseconds;
+    debugPrint('[SOPROPERF] EXECUTION_MS=$execMs'); // DEBUG TIMING
 
     // Refresh das listas (mesmos providers usados no onResume)
     ref.invalidate(environmentsProvider);
@@ -1536,6 +1540,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       'execution_duration_ms': execMs,
       'total_duration_ms': _pipelineSw?.elapsedMilliseconds,
     });
+    debugPrint('[SOPROPERF] PIPELINE_TOTAL_MS=${_pipelineSw?.elapsedMilliseconds}'); // DEBUG TIMING
 
     if (!mounted) return;
 

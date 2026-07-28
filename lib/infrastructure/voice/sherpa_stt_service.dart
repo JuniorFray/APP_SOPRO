@@ -21,7 +21,9 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 // isolates, mas a memória nativa é do processo: passamos só o ENDEREÇO do
 // ponteiro, reconstruímos via fromPtr aqui e devolvemos o texto (sendable).
 // readWave + createStream + decode + getResult acontecem todos nesta isolate.
-String _decodeInIsolate(int recognizerAddr, String wavFilePath) {
+// DEBUG TIMING: retorno agora carrega (texto, readWavMs, decodeMs) medidos DENTRO
+// da isolate p/ o caller logar STT_READ_WAV_MS / STT_DECODE_MS. Remover depois.
+(String, int, int) _decodeInIsolate(int recognizerAddr, String wavFilePath) {
   sherpa.initBindings(); // bindings são por-isolate
   final rec = sherpa.OfflineRecognizer.fromPtr(
     ptr: Pointer.fromAddress(recognizerAddr).cast(),
@@ -29,13 +31,18 @@ String _decodeInIsolate(int recognizerAddr, String wavFilePath) {
       model: sherpa.OfflineModelConfig(tokens: ''),
     ),
   );
+  final swRead = Stopwatch()..start(); // DEBUG TIMING
   final wave = sherpa.readWave(wavFilePath);
-  if (wave.samples.isEmpty) return '';
+  final readWavMs = swRead.elapsedMilliseconds; // DEBUG TIMING
+  if (wave.samples.isEmpty) return ('', readWavMs, 0); // DEBUG TIMING
   final stream = rec.createStream();
   try {
+    final swDecode = Stopwatch()..start(); // DEBUG TIMING
     stream.acceptWaveform(samples: wave.samples, sampleRate: wave.sampleRate);
     rec.decode(stream);
-    return rec.getResult(stream).text.trim();
+    final text = rec.getResult(stream).text.trim();
+    final decodeMs = swDecode.elapsedMilliseconds; // DEBUG TIMING
+    return (text, readWavMs, decodeMs); // DEBUG TIMING
   } finally {
     stream.free(); // libera o stream nativo sempre
   }
@@ -55,11 +62,13 @@ class SherpaSttService {
   sherpa.OfflineRecognizer? _recognizer;
   // Serializa a inicialização: chamadas concorrentes esperam o mesmo Future.
   Future<void>? _initFuture;
+  int _lastModelLoadMs = 0; // DEBUG TIMING — duração do último _init (model load)
 
   // Garante bindings nativos + modelo carregado. Idempotente.
   Future<void> _ensureReady() => _initFuture ??= _init();
 
   Future<void> _init() async {
+    final swLoad = Stopwatch()..start(); // DEBUG TIMING
     // Carrega a lib nativa (libsherpa-onnx-c-api.so no Android). Chamar 1x só;
     // reinvocar é inofensivo, mas guardamos via _initFuture mesmo assim.
     sherpa.initBindings();
@@ -82,13 +91,16 @@ class SherpaSttService {
         task: 'transcribe',
       ),
       tokens: tokPath,
-      numThreads: 2, // 2 threads: equilíbrio latência/consumo em celular médio
+      numThreads: 3, // 3 threads: menor STT_DECODE_MS no SD680 (bench Moto G52);
+                     // deixa 1 núcleo Gold livre p/ UI/áudio. 4 threads regride
+                     // (contenção com Silver/eficiência). Ver bench Etapa 5.
       debug: false,
       modelType: 'whisper',
     );
 
     _recognizer =
         sherpa.OfflineRecognizer(sherpa.OfflineRecognizerConfig(model: model));
+    _lastModelLoadMs = swLoad.elapsedMilliseconds; // DEBUG TIMING
   }
 
   // Copia um arquivo de asset para [destDir] se ainda não estiver lá.
@@ -110,13 +122,22 @@ class SherpaSttService {
   // Retorna '' quando o áudio não pôde ser lido/decodificado ou nada foi dito.
   // O decode roda em isolate separada — a UI não trava durante a transcrição.
   Future<String> transcribe(String wavFilePath) async {
+    final swTotal = Stopwatch()..start();   // DEBUG TIMING
+    final cold = _recognizer == null;       // DEBUG TIMING — 1ª vez = model load
     await _ensureReady();
+    if (cold) debugPrint('[SOPROPERF] STT_MODEL_LOAD_MS=$_lastModelLoadMs'); // DEBUG TIMING
     final rec = _recognizer;
     if (rec == null) return '';
 
     final addr = rec.ptr.address; // só o endereço cruza para a isolate
     try {
-      return await Isolate.run(() => _decodeInIsolate(addr, wavFilePath));
+      final (text, readWavMs, decodeMs) =
+          await Isolate.run(() => _decodeInIsolate(addr, wavFilePath)); // DEBUG TIMING
+      // DEBUG TIMING — medições individuais do STT. Remover depois.
+      debugPrint('[SOPROPERF] STT_READ_WAV_MS=$readWavMs');
+      debugPrint('[SOPROPERF] STT_DECODE_MS=$decodeMs');
+      debugPrint('[SOPROPERF] STT_TOTAL_MS=${swTotal.elapsedMilliseconds}');
+      return text;
     } catch (e) {
       debugPrint('[SherpaSTT] Falha na transcrição: $e');
       return '';

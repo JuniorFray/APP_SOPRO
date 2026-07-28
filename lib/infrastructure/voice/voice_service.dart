@@ -16,6 +16,7 @@ import 'package:sopro/infrastructure/conversation/prompt_engine.dart';
 import 'package:sopro/infrastructure/logging/core/correlation_manager.dart';
 import 'package:sopro/infrastructure/logging/core/logger.dart';
 import 'package:sopro/infrastructure/voice/execution_plan.dart';
+import 'package:sopro/infrastructure/voice/groq_stt_service.dart';
 import 'package:sopro/infrastructure/voice/sherpa_stt_service.dart';
 import 'package:sopro/infrastructure/voice/sherpa_tts_service.dart';
 
@@ -124,14 +125,35 @@ class VoiceService {
   SherpaTtsService get _sherpaTts =>
       _sherpaTtsInstance ??= SherpaTtsService();
 
+  // STT na nuvem (Groq Whisper-large-v3-turbo). Lazy: só instancia quando há
+  // chave/uso. Fallback automático para _sherpaStt em falha de rede.
+  GroqSttService? _groqSttInstance;
+  GroqSttService get _groqStt => _groqSttInstance ??= GroqSttService();
+
   // Exposto para o FAB do Home decidir o caminho de captura (WAV+Whisper vs.
   // speech_to_text ao vivo). Campos de ditado NÃO consultam isto — seguem
   // sempre no speech_to_text, independentemente da flag (fora de escopo).
   bool get useSherpaVoice => _useSherpa;
 
-  // Transcreve um WAV via Whisper local (isolate). Usado só pelo Home quando
-  // useSherpaVoice; devolve null se nada foi reconhecido.
+  // Transcreve um WAV para texto. STT HÍBRIDO: tenta a NUVEM (Groq) primeiro —
+  // mais rápido e preciso; em qualquer falha (sem internet, timeout, erro) cai
+  // AUTOMATICAMENTE no Whisper LOCAL (sherpa-onnx, offline). Usado só pelo Home
+  // quando useSherpaVoice; devolve null se nada foi reconhecido. Loga a rota
+  // usada (stt_route: groq | local_fallback).
   Future<String?> transcribeWav(String wavPath) async {
+    if (AppConstants.groqApiKey.isNotEmpty) {
+      try {
+        final cloud = (await _groqStt.transcribe(wavPath))?.trim() ?? '';
+        Logger.info('stt_route', payload: {'route': 'groq'},
+            feature: 'voice', action: 'transcribe_wav');
+        return cloud.isEmpty ? null : cloud;
+      } on GroqUnavailableException catch (e) {
+        // Nuvem indisponível → segue para o fallback local (intacto) abaixo.
+        Logger.info('stt_route',
+            payload: {'route': 'local_fallback', 'reason': e.reason},
+            feature: 'voice', action: 'transcribe_wav');
+      }
+    }
     final text = (await _sherpaStt.transcribe(wavPath)).trim();
     return text.isEmpty ? null : text;
   }
@@ -142,6 +164,8 @@ class VoiceService {
   final _tts = FlutterTts();
   // Flag para evitar múltiplas inicializações do TTS
   bool _ttsReady = false;
+  // DEBUG TIMING — duração do último POST HTTP ao Gemini (lido pelos callers).
+  int _lastGeminiHttpMs = 0;
 
   // ── STT on-device (speech_to_text) — Estágio A ──────────────────────────────
   // Reconhecedor nativo (SpeechRecognizer). Captura o mic AO VIVO (não lê arquivo)
@@ -282,6 +306,7 @@ class VoiceService {
       _noiseAccumDb = 0.0;
       _noiseFloorDb = null;
 
+      final swRec = Stopwatch()..start(); // DEBUG TIMING
       await _recorder.start(
         const RecordConfig(
           encoder:     AudioEncoder.wav, // WAV/PCM 16-bit — lido direto pelo Whisper
@@ -290,6 +315,7 @@ class VoiceService {
         ),
         path: path,
       );
+      debugPrint('[SOPROPERF] CAPTURE_RECORD_START_MS=${swRec.elapsedMilliseconds}'); // DEBUG TIMING
 
       // Teto de duração automático: SOMENTE fora do modo hold-to-talk. No assistente
       // (holdToTalk) o dedo controla o fim — nenhum timer interrompe a gravação.
@@ -391,7 +417,10 @@ class VoiceService {
   Future<String?> stopRecording() async {
     _cancelAutoStopTimers(); // cancela antes de parar (evita race condition)
     try {
-      return await _recorder.stop();
+      final sw = Stopwatch()..start(); // DEBUG TIMING
+      final path = await _recorder.stop();
+      debugPrint('[SOPROPERF] CAPTURE_RECORD_STOP_MS=${sw.elapsedMilliseconds}'); // DEBUG TIMING
+      return path;
     } catch (e, st) {
       Logger.warn('voice_record_stop_failed',
           exception: e, stackTrace: st, feature: 'voice', action: 'record_stop');
@@ -858,6 +887,7 @@ class VoiceService {
 
       final sw = Stopwatch()..start();
       final (raw, status) = await _sendTextRaw(transcript, prompt);
+      debugPrint('[SOPROPERF] GEMINI_HTTP_MS=$_lastGeminiHttpMs'); // DEBUG TIMING
       Logger.info('text_plan_debug',
           payload: {
             'gemini_http': status,
@@ -868,7 +898,11 @@ class VoiceService {
           correlationId: correlationId, durationMs: sw.elapsedMilliseconds);
 
       if (status != 200 || raw == null) return VoicePlanResult.empty();
-      return _parsePlanResponse(raw);
+      final swParse = Stopwatch()..start(); // DEBUG TIMING
+      final planRes = _parsePlanResponse(raw); // DEBUG TIMING
+      debugPrint('[SOPROPERF] GEMINI_PARSE_MS=${swParse.elapsedMilliseconds}'); // DEBUG TIMING
+      debugPrint('[SOPROPERF] GEMINI_TOTAL_MS=${sw.elapsedMilliseconds}'); // DEBUG TIMING
+      return planRes;
     } catch (e, st) {
       Logger.error('text_plan_failed',
           exception: e, stackTrace: st,
@@ -906,9 +940,11 @@ class VoiceService {
       request.contentLength = bodyBytes.length;
       request.add(bodyBytes);
 
+      final swHttp     = Stopwatch()..start(); // DEBUG TIMING
       final response   = await request.close();
       final httpStatus = response.statusCode;
       final respBytes  = await consolidateHttpClientResponseBytes(response);
+      _lastGeminiHttpMs = swHttp.elapsedMilliseconds; // DEBUG TIMING
       final raw        = utf8.decode(respBytes);
 
       if (httpStatus != 200) {

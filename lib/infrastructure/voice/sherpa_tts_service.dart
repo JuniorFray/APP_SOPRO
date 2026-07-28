@@ -46,10 +46,12 @@ class SherpaTtsService {
 
   sherpa.OfflineTts? _tts;
   Future<void>? _initFuture;
+  int _lastModelLoadMs = 0; // DEBUG TIMING — duração do último _init (model load)
 
   Future<void> _ensureReady() => _initFuture ??= _init();
 
   Future<void> _init() async {
+    final swLoad = Stopwatch()..start(); // DEBUG TIMING
     sherpa.initBindings();
 
     final dir = await getApplicationSupportDirectory();
@@ -76,6 +78,7 @@ class SherpaTtsService {
       debug: false,
     );
     _tts = sherpa.OfflineTts(sherpa.OfflineTtsConfig(model: model));
+    _lastModelLoadMs = swLoad.elapsedMilliseconds; // DEBUG TIMING
   }
 
   // Copia um único asset para [destPath] se ainda não existir. Retorna o caminho.
@@ -108,15 +111,20 @@ class SherpaTtsService {
   // Sintetiza [text] em pt-BR (voz miro-high) e reproduz. Aguarda o fim da fala.
   Future<void> speak(String text) async {
     if (text.trim().isEmpty) return;
+    final swTotal = Stopwatch()..start(); // DEBUG TIMING
+    final cold = _tts == null;            // DEBUG TIMING — 1ª vez = model load
     await _ensureReady();
+    if (cold) debugPrint('[SOPROPERF] TTS_MODEL_LOAD_MS=$_lastModelLoadMs'); // DEBUG TIMING
     final tts = _tts;
     if (tts == null) return;
 
     // Síntese CPU-bound → isolate separada (sid=0 voz única, speed=1.0 natural).
     // Passa só o endereço do ponteiro nativo; a UI segue fluida durante a fala.
     final addr = tts.ptr.address;
+    final swGen = Stopwatch()..start(); // DEBUG TIMING
     final (Float32List samples, int sampleRate) =
         await Isolate.run(() => _generateInIsolate(addr, text));
+    debugPrint('[SOPROPERF] TTS_GENERATE_MS=${swGen.elapsedMilliseconds}'); // DEBUG TIMING
     if (samples.isEmpty) {
       debugPrint('[SherpaTTS] Geração vazia para: "$text"');
       return;
@@ -124,11 +132,13 @@ class SherpaTtsService {
 
     // Escreve WAV temporário e toca. writeWave retorna false em falha de I/O.
     final wavPath = p.join((await getTemporaryDirectory()).path, 'sherpa_tts.wav');
+    final swWrite = Stopwatch()..start(); // DEBUG TIMING
     final ok = sherpa.writeWave(
       filename: wavPath,
       samples: samples,
       sampleRate: sampleRate,
     );
+    debugPrint('[SOPROPERF] TTS_WRITE_WAV_MS=${swWrite.elapsedMilliseconds}'); // DEBUG TIMING
     if (!ok) {
       debugPrint('[SherpaTTS] Falha ao escrever WAV');
       return;
@@ -137,6 +147,7 @@ class SherpaTtsService {
     // INSTRUMENTAÇÃO (temporária): copia o mesmo WAV para uma pasta puxável via
     // adb pull, sobrescrevendo a cada fala. Não altera o playback abaixo.
     // Falha aqui é ignorada — nunca deve derrubar a reprodução.
+    final swCopy = Stopwatch()..start(); // DEBUG TIMING
     try {
       final ext = await getExternalStorageDirectory(); // .../Android/data/<pkg>/files
       if (ext != null) {
@@ -149,11 +160,15 @@ class SherpaTtsService {
     } catch (e) {
       debugPrint('[SherpaTTS] Falha ao salvar WAV debug: $e');
     }
+    debugPrint('[SOPROPERF] TTS_DEBUGCOPY_MS=${swCopy.elapsedMilliseconds}'); // DEBUG TIMING
 
+    final swPlay = Stopwatch()..start(); // DEBUG TIMING
     await _player.stop(); // interrompe fala anterior, se houver
     await _player.play(DeviceFileSource(wavPath));
+    debugPrint('[SOPROPERF] TTS_PLAYER_START_MS=${swPlay.elapsedMilliseconds}'); // DEBUG TIMING
     // Aguarda terminar de tocar para o Future refletir o fim real da fala.
     await _player.onPlayerComplete.first;
+    debugPrint('[SOPROPERF] TTS_TOTAL_MS=${swTotal.elapsedMilliseconds}'); // DEBUG TIMING
   }
 
   // Interrompe a fala em andamento.

@@ -23,6 +23,12 @@ class AppConstants {
   static String get openWeatherKey =>
       dotenv.env['OPENWEATHER_API_KEY'] ?? '';
 
+  // Chave da Groq para STT na nuvem (Whisper large-v3-turbo). Lida do .env em
+  // runtime. Vazia → STT usa direto o Whisper local (sherpa-onnx, offline).
+  // Free tier: 2.000 req/dia. Ver GroqSttService.
+  static String get groqApiKey =>
+      dotenv.env['GROQ_API_KEY'] ?? '';
+
   // Endpoint de busca forward da LocationIQ (OSM + dados de endereço extras).
   static const locationIqEndpoint =
       'https://us1.locationiq.com/v1/search';
