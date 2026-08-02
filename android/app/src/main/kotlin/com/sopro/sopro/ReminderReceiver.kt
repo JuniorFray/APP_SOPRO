@@ -106,7 +106,7 @@ class ReminderReceiver : BroadcastReceiver() {
 
             var title = ""
             var content = ""
-            var repeatRule = "none"
+            var repeatRule = "daily"  // default alinhado ao create (coluna NOT NULL; fallback)
             var repeatDays = ""
             var alertMode = "notification"  // notification | alarm | both
             // Drift grava DateTime como epoch em SEGUNDOS (sem storeDateTimeAsText).
@@ -127,7 +127,7 @@ class ReminderReceiver : BroadcastReceiver() {
                 }
                 title       = cursor.getString(0) ?: ""
                 content     = cursor.getString(1) ?: ""
-                repeatRule  = cursor.getString(2) ?: "none"
+                repeatRule  = cursor.getString(2) ?: "daily"
                 repeatDays  = cursor.getString(3) ?: ""
                 scheduledAtMillis = cursor.getLong(4) * 1000L  // segundos → millis
                 alertMode   = cursor.getString(5) ?: "notification"

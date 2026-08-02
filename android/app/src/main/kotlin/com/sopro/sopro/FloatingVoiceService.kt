@@ -97,6 +97,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         // e onde gravamos o timestamp do último speak() (FIX 3)
         private const val FLUTTER_PREFS      = "FlutterSharedPreferences"
         private const val KEY_GEMINI_API     = "flutter.gemini_api_key"
+        // Etapa 3 — chave Groq (STT nuvem) via bridge SharedPreferences (Home escreve).
+        private const val KEY_GROQ_API       = "flutter.groq_api_key"
         private const val KEY_DEVICE_ID      = "flutter.logger_device_id"
         // Chave lida pelo Dart em VoiceService.speak() para evitar TTS duplicado
         private const val KEY_FLOATING_SPOKE = "flutter.floating_spoke_at"
@@ -134,8 +136,12 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
 
         // Fase 1 — vocabulário sim/não para confirmação por voz. O negativo tem
         // prioridade sobre o positivo ("não pode" resolve como não).
+        // "pode" cru é ambíguo: "pode ser"=sim, mas "pode encerrar/cancelar"=
+        // desistir. Removido o "pode" solto; mantidos os positivos reais
+        // ("pode ser"; "pode confirmar" casa em "confirmar"). O cancelamento é
+        // interceptado ANTES por isCancelPhrase (mesmo fix do Home).
         private val YES_WORDS = listOf(
-            "sim", "pode", "cria", "criar", "quero", "claro", "isso", "confirma",
+            "sim", "pode ser", "cria", "criar", "quero", "claro", "isso", "confirma",
             "confirmar", "positivo", "manda", "ok", "okay", "certo", "exato",
             "exatamente", "afirmativo", "bora", "vai",
         )
@@ -154,6 +160,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         private const val GEMINI_ENDPOINT =
             "https://generativelanguage.googleapis.com/v1beta/models/" +
             "gemini-2.5-flash:generateContent"
+
+        // Etapa 3 — STT nuvem (Groq, OpenAI-compatible). Mesmo modelo do Home.
+        private const val GROQ_STT_ENDPOINT =
+            "https://api.groq.com/openai/v1/audio/transcriptions"
 
         // GATE ADAPTATIVO (noise floor) — substitui os limiares FIXOS 1500/3500.
         // MediaRecorder não expõe stream, então lemos getMaxAmplitude() (0..32767)
@@ -209,6 +219,13 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             writeEnvironment      = { name, lat, lon, radius -> writeEnvironmentToDb(name, lat, lon, radius) },
             writeTrigger          = { title, content, env -> writeTriggerToDb(title, content, env) },
             writeShopping         = { items, market -> writeShoppingItemsToDb(items, market) },
+            // Etapa 2 — atualizações + lembrete por tempo (escrita + agendamento nativos).
+            updateTrigger         = { env, title, newTitle, content -> updateTriggerInDb(env, title, newTitle, content) },
+            updateEnvironment     = { name, radius -> updateEnvironmentInDb(name, radius) },
+            createReminder        = { title, millis, repeat, days, alert ->
+                val id = writeReminderToDb(title, millis, repeat, days, alert)
+                if (id != null) { ReminderScheduler.scheduleExact(this, id, millis); true } else false
+            },
             deleteEnvironment     = { env -> deleteEnvironmentFromDb(env) },
             deleteTrigger         = { env, title -> deleteTriggerFromDb(env, title) },
             deleteAllEnvironments = { deleteAllEnvironmentsFromDb() },
@@ -289,6 +306,16 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             throw e
         }
         Logger.debug("session_manager_init_done", feature = "floating_voice", action = "onCreate")
+
+        // Fonte única de texto de voz (prompt + persona), mesmo asset lido pelo Home.
+        // Carrega cedo para que OverlayPrompt/OverlayPersona já tenham o cache pronto.
+        VoiceContent.ensureLoaded(this)
+
+        // Prewarm da voz Piper (OverlayTts) em background: copia os assets e carrega
+        // o modelo fora da main thread, para a 1ª fala não pagar esse custo em runtime.
+        // applicationContext evita segurar o Service caso ele seja destruído durante a carga.
+        val appCtx = applicationContext
+        serviceScope.launch { OverlayTts.ensureReady(appCtx) }
 
         // SYSTEM_ALERT_WINDOW é pré-requisito do overlay — sem ela o addView() falha
         Logger.debug("checking_overlay_permission", feature = "floating_voice", action = "onCreate")
@@ -960,21 +987,33 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         }
         // Estágio 3 — prompt de PLANO isolado (texto byte-idêntico) em OverlayPrompt.
         val fullPrompt = OverlayPrompt.buildPlanPrompt(envNames)
-        // BUG 2 — seleciona o prompt final: só-transcrição em espera, plano completo caso contrário.
-        val prompt = if (awaitingState)
-            """Transcreva EXATAMENTE o audio em pt-BR. Responda SO com JSON valido, sem markdown:
+
+        // Etapa 3 — STT unificado com o Home: no fluxo de PLANO, transcreve via Groq
+        // (nuvem, whisper-large-v3-turbo) e manda TEXTO ao Gemini — mais rápido e mesmo
+        // STT do Home. Fallback automático: Groq indisponível (sem chave/sem internet/
+        // erro) → mantém o envio de ÁUDIO ao Gemini (comportamento anterior, sem
+        // regressão). Estados de espera (sim/não, nome) seguem por áudio como antes.
+        val groqText: String? = if (awaitingState) null else transcribeWithGroq(file, corrId)
+
+        val parts = JSONArray()
+        if (groqText != null) {
+            // Mesma montagem do processTextAsPlan do Home: prompt + comando do usuário.
+            parts.put(JSONObject().put("text",
+                "$fullPrompt\n\nComando do usuario: \"$groqText\""))
+        } else {
+            // BUG 2 — prompt final: só-transcrição em espera, plano completo caso contrário.
+            val prompt = if (awaitingState)
+                """Transcreva EXATAMENTE o audio em pt-BR. Responda SO com JSON valido, sem markdown:
 {"transcricao":"texto falado"}""".trimIndent()
-        else fullPrompt
+            else fullPrompt
+            parts.put(JSONObject().put("text", prompt))
+            parts.put(JSONObject().put("inline_data", JSONObject()
+                .put("mime_type", "audio/m4a").put("data", audioB64)))
+        }
 
         val body = JSONObject().apply {
             put("contents", JSONArray().apply {
-                put(JSONObject().apply {
-                    put("parts", JSONArray().apply {
-                        put(JSONObject().put("text", prompt))
-                        put(JSONObject().put("inline_data", JSONObject()
-                            .put("mime_type", "audio/m4a").put("data", audioB64)))
-                    })
-                })
+                put(JSONObject().apply { put("parts", parts) })
             })
             put("generationConfig", JSONObject().apply {
                 // Fase 2.2 REGRA 5 — remove limite artificial (era 1024, truncava planos
@@ -1052,6 +1091,72 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
+    // ── STT nuvem (Groq / Whisper) — Etapa 3, unifica com o Home ──────────────
+    // Transcreve o M4A gravado via Groq (whisper-large-v3-turbo, OpenAI-compatible).
+    // Retorna o texto (pt-BR) ou NULL em qualquer indisponibilidade (sem chave, sem
+    // internet, timeout, status != 200, corpo vazio) — o chamador cai no envio de
+    // ÁUDIO ao Gemini. Mesmo padrão HTTP nativo já usado pro Gemini; multipart/form-data
+    // montado à mão (sem dependência extra). Privacidade: loga só duração/tamanho.
+    private fun transcribeWithGroq(file: File, corrId: String?): String? {
+        val key = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_GROQ_API, "") ?: ""
+        if (key.isEmpty()) return null
+
+        val start = System.currentTimeMillis()
+        var conn: HttpURLConnection? = null
+        return try {
+            val audio = file.readBytes()
+            if (audio.isEmpty()) return null
+            val boundary = "----soproGroq${System.nanoTime()}"
+            // Cabeçalho multipart (campos + preâmbulo da parte do arquivo).
+            val pre = buildString {
+                append("--$boundary\r\n")
+                append("Content-Disposition: form-data; name=\"model\"\r\n\r\n")
+                append("whisper-large-v3-turbo\r\n")
+                append("--$boundary\r\n")
+                append("Content-Disposition: form-data; name=\"language\"\r\n\r\n")
+                append("pt\r\n")
+                append("--$boundary\r\n")
+                append("Content-Disposition: form-data; name=\"response_format\"\r\n\r\n")
+                append("text\r\n")
+                append("--$boundary\r\n")
+                append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\r\n")
+                append("Content-Type: audio/m4a\r\n\r\n")
+            }.toByteArray(Charsets.UTF_8)
+            val post = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+
+            conn = (URL(GROQ_STT_ENDPOINT).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 10_000; readTimeout = 10_000; doOutput = true
+                setRequestProperty("Authorization", "Bearer $key")
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            }
+            conn.outputStream.use { out -> out.write(pre); out.write(audio); out.write(post) }
+
+            val code = conn.responseCode
+            if (code != 200) {
+                Logger.warn("groq_stt_http", feature = "floating_voice", action = "groq_stt",
+                    durationMs = System.currentTimeMillis() - start,
+                    payload = mapOf("http_code" to code.toString()), correlationId = corrId)
+                return null
+            }
+            // response_format=text → corpo é o texto puro. Não logamos o texto.
+            val text = conn.inputStream.readBytes().toString(Charsets.UTF_8).trim()
+            Logger.info("groq_stt_ok", feature = "floating_voice", action = "groq_stt",
+                durationMs = System.currentTimeMillis() - start,
+                payload = mapOf("len" to text.length.toString()), correlationId = corrId)
+            text.ifEmpty { null }
+        } catch (e: Exception) {
+            // Sem internet/timeout/etc. — silencioso; cai no fallback de áudio ao Gemini.
+            Logger.info("groq_stt_unavailable", feature = "floating_voice", action = "groq_stt",
+                durationMs = System.currentTimeMillis() - start,
+                payload = mapOf("reason" to (e.message ?: "exception")), correlationId = corrId)
+            null
+        } finally {
+            try { conn?.disconnect() } catch (_: Exception) {}
+        }
+    }
+
     // Fase 2.2 — parseGeminiResponse (schema antigo single-intent, com substring
     // indexOf('{')/lastIndexOf('}')) foi REMOVIDO. Motivo: violava a REGRA 1 (nunca
     // interpretar JSON por substring) e era a causa do "Unterminated string" ao cortar
@@ -1083,6 +1188,17 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         }
         // Estágio 4 — estado de espera ATIVO resolvido pelo Planner (null se expirou).
         val awaiting = OverlayPlanner.activeAwaiting(voiceState, stateExpired)
+
+        // Cancelamento UNIVERSAL: em QUALQUER estado de espera ativo, uma frase de
+        // desistência encerra de vez — antes de tratar como nome/sim-não/escolha.
+        // Espelha o "cancel-first" do Home (_resolveEnvLocationTurn). Sem isso, os
+        // estados de nome/escolha tratavam "cancela" como dado (criavam lixo).
+        if (awaiting != null && isCancelPhrase(result.transcript ?: "")) {
+            conversationState.clear()
+            speak(OverlayPersona.cancelledOk)
+            endVoice()
+            return
+        }
 
         // Se estava aguardando nome de ambiente, usa transcript como nome.
         // NÃO reenvia ao Gemini — transcript vem direto do SpeechRecognizer (onResults).
@@ -1121,12 +1237,15 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             val pendingTitle   = conversationState.pendingTriggerTitle
             val pendingContent = conversationState.pendingTriggerContent
             val pendingEnv     = conversationState.pendingTriggerEnv
-            conversationState.clear()
+            // BUG #3: NÃO limpa antes de decidir — só após confirmar/negar/re-armar.
+            // Antes, o clear() aqui fazia a resposta ambígua perder o estado e o
+            // reprompt virar inútil (próxima fala já era comando novo).
             val text = (result.transcript ?: "").lowercase(java.util.Locale("pt", "BR"))
             val confirmed = listOf("sim", "pode", "cria", "quero").any { text.contains(it) }
             val denied    = listOf("nao", "não", "nope", "cancela", "deixa").any { text.contains(it) }
             when {
                 confirmed && pendingEnv.isNotEmpty() -> {
+                    conversationState.clear() // decisão tomada: consome o estado
                     showToast("Criando ambiente e lembrete...")
                     serviceScope.launch(Dispatchers.IO) {
                         val loc = getLastLocationBlocking()
@@ -1151,11 +1270,19 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     }
                 }
                 denied -> {
+                    conversationState.clear() // decisão tomada: consome o estado
                     speak(OverlayPersona.reminderCancelled)
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
                 }
                 else -> {
+                    // Ambíguo: RE-ARMA o mesmo estado (renova o TTL de 30s) para o
+                    // reprompt valer de verdade — a próxima fala volta a responder
+                    // esta mesma pergunta em vez de virar um comando novo.
+                    conversationState.armEnvConfirm(
+                        pendingTitle, pendingEnv,
+                        pendingContent.takeIf { it.isNotEmpty() },
+                    )
                     speak(OverlayPersona.confirmCreateEnvironmentYesNo)
                     CorrelationManager.endOperation("voice")
                     voiceCorrelationId = null
@@ -1682,6 +1809,13 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             return
         }
 
+        // Clima: consulta que FALA o tempo (não muta o banco). Rota própria — o
+        // texto vem do OverlayWeather (paridade com a fala de clima do Home).
+        if (route is PlanRoute.Weather) {
+            handleWeatherQuery(route.action)
+            return
+        }
+
         // Resolução Inteligente de Localização — plano que APENAS cria um ambiente
         // (sem gatilhos/outras ações) não usa GPS cego: confirma a localização
         // antes (paridade com a Home). Planos mistos seguem o fluxo GPS atual.
@@ -1713,7 +1847,16 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     "create_trigger" ->
                         CreateTriggerSkill.execute(a.str("environment", "name"), a.str("title"),
                             a.str("content") ?: "", skillContext)
-                    else -> false // tipos não suportados no overlay (ex.: update_*)
+                    // Etapa 2 — paridade com o Home (mesma semântica das Skills Dart).
+                    "update_trigger" ->
+                        UpdateTriggerSkill.execute(a.str("environment", "name"), a.str("title"),
+                            a.str("new_title"), a.str("content"), skillContext)
+                    "update_environment" ->
+                        UpdateEnvironmentSkill.execute(a.str("name", "environment"),
+                            a.str("radius")?.toIntOrNull(), skillContext)
+                    "create_reminder" ->
+                        CreateReminderSkill.execute(a, skillContext)
+                    else -> false // tipos não suportados no overlay (ex.: weather na rota própria)
                 }
                 if (done) ok++ else fail++
             }
@@ -1756,6 +1899,24 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     plan.reply.isNotBlank()    -> speakTyped(plan.reply, TtsTone.SUCCESS)
                     else                       -> speakTyped(OverlayPersona.done, TtsTone.SUCCESS)
                 }
+                CorrelationManager.endOperation("voice"); voiceCorrelationId = null
+            }
+        }
+    }
+
+    // Consulta de clima (Etapa 2) — resolve o local, consulta a OWM nativamente e
+    // FALA o tempo (o texto vem do OverlayWeather). GPS via getLastLocationBlocking,
+    // mesmo pipeline das outras rotas.
+    private fun handleWeatherQuery(a: PlanAction) {
+        showProcessingState()
+        val place = a.str("location", "city", "place")
+        val scope = (a.str("scope") ?: "now").lowercase()
+        serviceScope.launch(Dispatchers.IO) {
+            val spoken = OverlayWeather.answer(
+                this@FloatingVoiceService, place, scope) { getLastLocationBlocking() }
+            withContext(Dispatchers.Main) {
+                revertButtonAppearance()
+                speakTyped(spoken, TtsTone.INFO)
                 CorrelationManager.endOperation("voice"); voiceCorrelationId = null
             }
         }
@@ -1839,6 +2000,33 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         if (NO_WORDS.any { t.contains(it) })  return false
         if (YES_WORDS.any { t.contains(it) }) return true
         return null
+    }
+
+    // Reconhece frases de DESISTÊNCIA em qualquer estado de espera ("cancela",
+    // "pode encerrar", "esquece isso", "deixa pra lá", "para", "sair"...). Rodada
+    // ANTES de parseYesNo/tratar-como-nome para o usuário sempre poder abortar.
+    // Espelha _isCancelPhrase do Home (home_tab_content.dart). 100% local.
+    private fun isCancelPhrase(text: String): Boolean {
+        val t = text.lowercase(java.util.Locale("pt", "BR")).trim()
+        if (t.isEmpty()) return false
+        // Frases distintivas — casam em qualquer posição (não ocorrem em nomes de
+        // lugar reais, então são seguras via contains).
+        val strong = listOf(
+            "cancel",                        // cancela, cancelar, cancelado
+            "encerr",                        // pode encerrar, encerra
+            "esquec",                        // esquece isso, esquecer
+            "desist",                        // desisto, desistir
+            "deixa pra", "deixa para",       // deixa pra lá
+            "deixa quieto", "deixa isso",
+            "sai dessa",
+            "nao quero mais", "não quero mais",
+        )
+        if (strong.any { t.contains(it) }) return true
+        // Comandos curtos e ambíguos ("para", "sair") — só valem se forem a fala
+        // INTEIRA (poucas palavras), evitando falso positivo em nomes ("Paraná").
+        val words = t.split(Regex("\\s+"))
+        return words.size <= 3 &&
+            Regex("\\b(para|parar|pare|parou|sair|sai)\\b").containsMatchIn(t)
     }
 
     // Sprint F3-3 — cria o ambiente por voz SEM GPS cego. Nomes pessoais
@@ -2517,6 +2705,185 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
+    // ── Etapa 2: lembrete por tempo + atualizações (escrita nativa direta) ────
+
+    // Insere um lembrete em scheduled_reminders. Retorna o id (para o chamador
+    // agendar o alarme) ou null em falha. scheduled_at/created_at em SEGUNDOS
+    // (convenção Drift, lida pelo ReminderReceiver). content sempre '' (paridade Home).
+    private fun writeReminderToDb(title: String, scheduledAtMillis: Long, repeatRule: String,
+                                  repeatDays: String, alertMode: String): String? {
+        val corrId = CorrelationManager.correlationIdFor("voice")
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs", "op" to "write_reminder"),
+                correlationId = corrId)
+            return null
+        }
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) {
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to dbPath, "op" to "write_reminder"), correlationId = corrId)
+            return null
+        }
+        var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            val id = UUID.randomUUID().toString()
+            val nowSec = System.currentTimeMillis() / 1000L
+            val schedSec = scheduledAtMillis / 1000L
+            // Capitaliza só a 1a letra (mesma regra do CreateReminderSkill Dart).
+            val capTitle = if (title.isEmpty()) title
+                else title.substring(0, 1).uppercase(java.util.Locale("pt", "BR")) + title.substring(1)
+            db.execSQL(
+                "INSERT INTO scheduled_reminders (id, title, content, scheduled_at, repeat_rule, " +
+                "repeat_days_of_week, is_active, alert_mode, created_at) VALUES (?, ?, '', ?, ?, ?, 1, ?, ?)",
+                arrayOf<Any>(id, capTitle, schedSec, repeatRule, repeatDays, alertMode, nowSec)
+            )
+            Logger.info("reminder_created", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("title" to capTitle, "id" to id) else mapOf("id" to id),
+                correlationId = corrId)
+            getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
+                .putBoolean("flutter.needs_refresh", true)
+                .putLong("flutter.needs_refresh_at", System.currentTimeMillis()).apply()
+            MainActivity.notifyDataChanged()
+            id
+        } catch (e: Exception) {
+            Logger.error("sqlite_write_reminder_failed", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start, exception = e, correlationId = corrId)
+            logException("command_dispatch", e)
+            null
+        } finally {
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
+        }
+    }
+
+    // Atualiza o raio de um ambiente (por nome, case-insensitive) e re-registra o
+    // geofence com o novo raio. radius null = mantém o atual (só re-registra).
+    // Retorna false se não encontrar (o loop do plano fala o resumo agregado).
+    private fun updateEnvironmentInDb(name: String, radius: Int?): Boolean {
+        val corrId = CorrelationManager.correlationIdFor("voice")
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs", "op" to "update_env"),
+                correlationId = corrId)
+            return false
+        }
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) {
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to dbPath, "op" to "update_env"), correlationId = corrId)
+            return false
+        }
+        var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            var envId: String? = null
+            var lat = 0.0; var lon = 0.0; var envName = name; var curRadius = 100.0
+            db.rawQuery(
+                "SELECT id, latitude, longitude, name, radius_meters FROM environments " +
+                "WHERE LOWER(name) = LOWER(?) LIMIT 1", arrayOf(name)
+            ).use { c ->
+                if (c.moveToFirst()) {
+                    envId = c.getString(0); lat = c.getDouble(1); lon = c.getDouble(2)
+                    envName = c.getString(3) ?: name; curRadius = c.getDouble(4)
+                }
+            }
+            val id = envId ?: return false
+            val newRadius = radius?.toDouble() ?: curRadius
+            db.execSQL("UPDATE environments SET radius_meters = ? WHERE id = ?",
+                arrayOf<Any>(newRadius, id))
+            mainHandler.post { registerGeofence(id, envName, lat, lon, newRadius) }
+            Logger.info("environment_updated", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("environment_name" to envName, "radius" to newRadius.toString())
+                else mapOf("id" to id), correlationId = corrId)
+            getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
+                .putBoolean("flutter.needs_refresh", true)
+                .putLong("flutter.needs_refresh_at", System.currentTimeMillis()).apply()
+            MainActivity.notifyDataChanged()
+            true
+        } catch (e: Exception) {
+            Logger.error("sqlite_update_environment_failed", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start, exception = e, correlationId = corrId)
+            logException("command_dispatch", e)
+            false
+        } finally {
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
+        }
+    }
+
+    // Atualiza título e/ou conteúdo de um lembrete existente (match parcial de
+    // título no ambiente). Campos ausentes preservam o valor atual (semântica do
+    // UpdateTriggerSkill Dart). Retorna false se não encontrar (o loop fala o resumo).
+    private fun updateTriggerInDb(envName: String, title: String,
+                                  newTitle: String?, content: String?): Boolean {
+        val corrId = CorrelationManager.correlationIdFor("voice")
+        val dbPath = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .getString("flutter.sopro_db_path", null) ?: run {
+            Logger.error("sqlite_db_path_missing", feature = "floating_voice", action = "db_write",
+                payload = mapOf("reason" to "db_path_not_in_prefs", "op" to "update_trigger"),
+                correlationId = corrId)
+            return false
+        }
+        val dbFile = File(dbPath)
+        if (!dbFile.exists()) {
+            Logger.error("sqlite_db_file_not_found", feature = "floating_voice", action = "db_write",
+                payload = mapOf("path" to dbPath, "op" to "update_trigger"), correlationId = corrId)
+            return false
+        }
+        var db: SQLiteDatabase? = null
+        val start = System.currentTimeMillis()
+        return try {
+            db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+            var trigId: String? = null; var oldTitle = ""; var oldContent = ""
+            db.rawQuery(
+                "SELECT t.id, t.title, t.content FROM triggers t " +
+                "JOIN environments e ON t.environment_id = e.id " +
+                "WHERE LOWER(e.name) = LOWER(?) AND LOWER(t.title) LIKE LOWER(?) LIMIT 1",
+                arrayOf(envName, "%$title%")
+            ).use { c ->
+                if (c.moveToFirst()) {
+                    trigId = c.getString(0); oldTitle = c.getString(1) ?: ""; oldContent = c.getString(2) ?: ""
+                }
+            }
+            val id = trigId ?: return false
+            val finalTitle = newTitle ?: oldTitle
+            val finalContent = content ?: oldContent
+            db.execSQL("UPDATE triggers SET title = ?, content = ? WHERE id = ?",
+                arrayOf(finalTitle, finalContent, id))
+            Logger.info("trigger_updated", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start,
+                payload = if (LoggerConfiguration.debugLogging)
+                    mapOf("environment_name" to envName, "title" to finalTitle) else null,
+                correlationId = corrId)
+            getSharedPreferences(FLUTTER_PREFS, MODE_PRIVATE).edit()
+                .putBoolean("flutter.needs_refresh", true)
+                .putLong("flutter.needs_refresh_at", System.currentTimeMillis()).apply()
+            MainActivity.notifyDataChanged()
+            true
+        } catch (e: Exception) {
+            Logger.error("sqlite_update_trigger_failed", feature = "floating_voice", action = "db_write",
+                durationMs = System.currentTimeMillis() - start, exception = e, correlationId = corrId)
+            logException("command_dispatch", e)
+            false
+        } finally {
+            try { db?.close() } catch (e: Exception) {
+                Logger.warn("sqlite_close_failed", feature = "floating_voice", exception = e)
+            }
+        }
+    }
+
     // Remove ambiente e todos os seus triggers do banco (case-insensitive por nome).
     // Retorna true se removido, false se não encontrado ou erro.
     private fun deleteEnvironmentFromDb(envName: String): Boolean {
@@ -2977,10 +3344,21 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     // O Dart lê "floating_spoke_at" em VoiceService.speak() para evitar TTS duplicado
     // se o app abrir dentro de 10 s após o botão flutuante ter falado.
     private fun speak(text: String) {
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "sopro_utt")
-        // Grava timestamp para que o Flutter saiba que o serviço acabou de falar
+        // Grava timestamp SEMPRE (dedup do Home), qualquer que seja o motor usado.
         getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
             .edit().putLong(KEY_FLOATING_SPOKE, System.currentTimeMillis()).apply()
+
+        // Voz Piper faber-medium (idêntica ao Home) via OverlayTts. Se a carga ou
+        // a geração falhar, cai no TTS nativo do sistema — overlay nunca fica mudo.
+        // O TextToSpeech nativo não é thread-safe fora da main thread, então o
+        // fallback é postado no mainHandler.
+        OverlayTts.speak(applicationContext, text) { ok ->
+            if (!ok) {
+                mainHandler.post {
+                    tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "sopro_utt")
+                }
+            }
+        }
     }
 
     private fun defaultButtonPosition(containerPx: Int): Pair<Int, Int> {

@@ -56,6 +56,10 @@ class LocationRanker {
     String? brandHint,
     List<String> locationHints = const [],
     String? categoryHint,
+    // Categoria genérica ("farmácia"): distância ao ponto de viés é o critério
+    // PRIMÁRIO, não só desempate — senão um POI homônimo prominente longe ganha
+    // do vizinho. Só vale com [userLat]/[userLon] presentes.
+    bool proximityPrimary = false,
   }) {
     if (results.isEmpty) {
       return const RankResult([], LocationConfidence.low, 'no_match');
@@ -76,6 +80,15 @@ class LocationRanker {
         .toList();
 
     list.sort((a, b) {
+      final da = a.distanceToUser ?? double.infinity;
+      final db = b.distanceToUser ?? double.infinity;
+      // Categoria genérica + viés disponível: distância manda; tier textual só
+      // desempata. Corrige "farmácia" trazendo a capital em vez da região.
+      if (proximityPrimary && hasUser) {
+        if (da != db) return da.compareTo(db);
+        return _tier(a, q, brandHead, hints)
+            .compareTo(_tier(b, q, brandHead, hints));
+      }
       final ta = _tier(a, q, brandHead, hints);
       final tb = _tier(b, q, brandHead, hints);
       if (ta != tb) return ta.compareTo(tb);
@@ -84,8 +97,6 @@ class LocationRanker {
         final mb = _norm(b.city) == userCityN ? 0 : 1;
         if (ma != mb) return ma.compareTo(mb);
       }
-      final da = a.distanceToUser ?? double.infinity;
-      final db = b.distanceToUser ?? double.infinity;
       return da.compareTo(db);
     });
 

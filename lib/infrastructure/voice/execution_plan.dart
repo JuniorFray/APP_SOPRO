@@ -21,8 +21,18 @@ enum VoiceActionType {
   updateEnvironment,
   // Adiciona um item à lista de compras de um ambiente tipo Mercado.
   addShoppingItem,
+  // Remove um item específico da lista de compras.
+  deleteShoppingItem,
+  // Marca um item da lista como "já peguei" (isChecked = true).
+  checkShoppingItem,
+  // Consulta se um item está na lista (responde sim/não + status).
+  queryShoppingItem,
+  // Lista os itens da lista (filtro all | pending | checked).
+  listShoppingItems,
   // Cria um lembrete por TEMPO (data/hora), independente de localização.
   createReminder,
+  // Consulta de clima/tempo no local atual (sem campos) — responde na hora.
+  weatherQuery,
   // Ação não reconhecida — executor a marca como falha sem abortar o plano.
   unknown,
 }
@@ -77,7 +87,12 @@ class VoiceAction {
       case 'update_trigger':          return VoiceActionType.updateTrigger;
       case 'update_environment':      return VoiceActionType.updateEnvironment;
       case 'add_shopping_item':       return VoiceActionType.addShoppingItem;
+      case 'delete_shopping_item':    return VoiceActionType.deleteShoppingItem;
+      case 'check_shopping_item':     return VoiceActionType.checkShoppingItem;
+      case 'query_shopping_item':     return VoiceActionType.queryShoppingItem;
+      case 'list_shopping_items':     return VoiceActionType.listShoppingItems;
       case 'create_reminder':         return VoiceActionType.createReminder;
+      case 'weather_query':           return VoiceActionType.weatherQuery;
       default:                        return VoiceActionType.unknown;
     }
   }

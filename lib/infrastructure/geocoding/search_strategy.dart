@@ -67,27 +67,37 @@ class SearchStrategy {
   // País-alvo do app (Brasil). Filtro em todos os provedores que suportam.
   static const _country = 'br';
 
-  // Raio máximo (km) para estabelecimento sem cidade explícita — evita que um
-  // POI homônimo distante (outro estado) entre no ranking. Configurável.
-  // 80km cobre a região metropolitana do usuário sem abrir
-  // o Brasil inteiro. São Paulo capital fica a 160km de
-  // Piracicaba — fora do raio, evitando resultados irrelevantes.
-  // Resultados fora do raio são descartados pelo CandidateFilter.
-  // Se o estabelecimento não existir na região → LocationIQ assume.
+  // Raio máximo (km) para estabelecimento de MARCA — evita POI homônimo distante
+  // (outro estado) no ranking, mas cobre a região metropolitana. 80km cobre a RM
+  // do usuário sem abrir o Brasil. Fora do raio → CandidateFilter descarta.
   static const _establishmentRadiusKm = 80.0;
 
-  // Regra fixa por tipo. POIs via osm_tag (não há layer "poi" no Photon);
-  // cidade/estado via layer; endereço/CEP via Geocoder nativo (com fallback).
-  static SearchPlan plan(QueryKind kind) {
-    switch (kind) {
+  // Raio para categoria GENÉRICA ("farmácia", "drogaria"): 30km. Apertado de
+  // propósito — em região metropolitana costeira (Praia Grande↔SP ≈70km) 80km
+  // deixava a capital vazar. Farmácia/mercado existem perto; não faz sentido
+  // buscar a 80km. Se nada perto → LocationIQ assume.
+  static const _genericRadiusKm = 30.0;
+
+  // POIs genéricos padrão (sem categoria conhecida): filtra a POI, não a lugar.
+  static const _defaultPoiTags = ['amenity', 'shop', 'tourism'];
+
+  // Regra por tipo. POIs via osm_tag (não há layer "poi" no Photon); categoria
+  // conhecida usa osm_tag ESPECÍFICO (ex.: amenity:pharmacy). Cidade/estado via
+  // layer; endereço/CEP via Geocoder nativo (com fallback).
+  static SearchPlan plan(NormalizedQuery q) {
+    switch (q.kind) {
       case QueryKind.establishment:
-        return const SearchPlan(
+        return SearchPlan(
           SearchProvider.photon,
           SearchConstraints(
             queryType: QueryKind.establishment,
             countryCode: _country,
-            osmTags: ['amenity', 'shop', 'tourism'],
-            radiusKm: _establishmentRadiusKm,
+            // Tag específico da categoria/rede quando conhecido; senão, genérico.
+            osmTags: q.categoryOsmTag != null
+                ? [q.categoryOsmTag!]
+                : _defaultPoiTags,
+            radiusKm:
+                q.isGenericCategory ? _genericRadiusKm : _establishmentRadiusKm,
             useBias: true,
           ),
         );
@@ -116,7 +126,7 @@ class SearchStrategy {
         return SearchPlan(
           SearchProvider.geocoder,
           SearchConstraints(
-            queryType: kind,
+            queryType: q.kind,
             countryCode: _country,
             useBias: true,
           ),

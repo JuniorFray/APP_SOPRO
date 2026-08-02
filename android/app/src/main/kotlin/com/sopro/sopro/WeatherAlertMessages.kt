@@ -31,4 +31,23 @@ object WeatherAlertMessages {
         "Vai esquentar de verdade hoje (%.0f°C) — hidrate-se e evite o sol nas horas mais quentes.",
         "%.0f°C hoje — calorão daqueles. Água por perto e sombra sempre que der."
     )
+
+    // BLOCO 2 — vento/chuva severos. %.0f = rajada em km/h (vento) ou mm/h (chuva).
+    // Amarelo: aviso; Vermelho: alerta forte (canal severo, som de alarme).
+    val strongWindYellow = listOf(
+        "Vento forte agora — rajadas de ~%.0f km/h. Cuidado com objetos soltos e ao dirigir.",
+        "Rajadas de ~%.0f km/h por aí — segura o que puder voar e atenção na rua."
+    )
+    val strongWindRed = listOf(
+        "⚠️ Vento MUITO forte — rajadas de ~%.0f km/h. Evite sair e afaste-se de árvores e estruturas frágeis.",
+        "⚠️ Alerta de vendaval — rajadas de ~%.0f km/h. Fique em local seguro e longe de janelas."
+    )
+    val heavyRainYellow = listOf(
+        "Chuva forte agora (~%.0f mm/h) — risco de alagamento, redobre a atenção no trajeto.",
+        "Chovendo pesado (~%.0f mm/h) — evite pontos baixos e dirija com cuidado."
+    )
+    val heavyRainRed = listOf(
+        "⚠️ Chuva MUITO intensa (~%.0f mm/h) — risco alto de alagamento e transtornos. Evite deslocamentos.",
+        "⚠️ Temporal em curso (~%.0f mm/h) — procure abrigo e não enfrente vias alagadas."
+    )
 }

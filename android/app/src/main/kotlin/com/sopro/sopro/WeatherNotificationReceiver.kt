@@ -85,41 +85,77 @@ class WeatherNotificationReceiver : BroadcastReceiver() {
         }
 
         val weather = fetchWeather(lat, lon, apiKey, corrId) ?: return
-        showNotification(context, weather.city, weather.temp, weather.description, corrId)
+        // Cidade certa (híbrido: cache Dart → Photon reverse nativo). rawCity (OWM)
+        // é só o fallback final.
+        val city = WeatherPlace.resolveLabel(context, lat, lon, weather.rawCity, corrId)
+        // Corpo rico (saudação + núcleo + dica + despedida), variando por condição.
+        val hour = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val body = WeatherDailyMessages.build(
+            weather.temp, weather.tempMin, weather.tempMax, weather.humidity,
+            weather.condition, weather.description, weather.pop, hour)
+        showNotification(context, city, body, corrId)
     }
 
-    private data class WeatherNow(val city: String, val temp: Int, val description: String)
+    // Leitura atual de clima para a diária: temp/descrição/condição/umidade do
+    // /weather + faixa min/máx e chance de chuva (pop) do /forecast (próximas ~24h).
+    private data class WeatherNow(
+        val rawCity: String, val temp: Int, val tempMin: Int, val tempMax: Int,
+        val humidity: Int, val condition: String, val description: String, val pop: Int,
+    )
 
-    // GET direto na OWM (mesmo padrão de logToSupabase em BootReceiver). Retorna
-    // null em qualquer falha — o receiver apenas não notifica.
+    // GET direto na OWM. /weather (obrigatório) + /forecast (opcional, só p/ min/máx
+    // e pop). Retorna null se o /weather falhar — o receiver então não notifica.
     private fun fetchWeather(lat: Double, lon: Double, apiKey: String, corrId: String): WeatherNow? {
+        val cur = fetchJson("https://api.openweathermap.org/data/2.5/weather" +
+            "?lat=$lat&lon=$lon&appid=$apiKey&units=metric&lang=pt_br", corrId) ?: return null
+        val main = cur.getJSONObject("main")
+        val w0 = cur.getJSONArray("weather").getJSONObject(0)
+        val temp = Math.round(main.getDouble("temp")).toInt()
+        val humidity = main.optInt("humidity", 0)
+        val condition = w0.optString("main", "")
+        val description = w0.optString("description", "")
+        val rawCity = cur.optString("name", "")
+
+        // min/máx + pop das próximas ~24h (8 blocos de 3h). Falha → usa o próprio
+        // temp como min==max (o builder omite a faixa nesse caso).
+        var tMin = temp; var tMax = temp; var pop = 0
+        val fc = fetchJson("https://api.openweathermap.org/data/2.5/forecast" +
+            "?lat=$lat&lon=$lon&appid=$apiKey&units=metric&lang=pt_br", corrId)
+        val list = fc?.optJSONArray("list")
+        if (list != null && list.length() > 0) {
+            var mn = Double.MAX_VALUE; var mx = -Double.MAX_VALUE
+            val n = minOf(8, list.length())
+            for (i in 0 until n) {
+                val m = list.getJSONObject(i).optJSONObject("main") ?: continue
+                val d = temp.toDouble()
+                mn = minOf(mn, m.optDouble("temp_min", m.optDouble("temp", d)))
+                mx = maxOf(mx, m.optDouble("temp_max", m.optDouble("temp", d)))
+            }
+            if (mn != Double.MAX_VALUE) tMin = Math.round(mn).toInt()
+            if (mx != -Double.MAX_VALUE) tMax = Math.round(mx).toInt()
+            pop = (list.getJSONObject(0).optDouble("pop", 0.0) * 100).toInt()
+        }
+        return WeatherNow(rawCity, temp, tMin, tMax, humidity, condition, description, pop)
+    }
+
+    // GET simples na OWM. Retorna null em qualquer falha (apenas não notifica).
+    private fun fetchJson(urlStr: String, corrId: String): JSONObject? {
         var conn: HttpURLConnection? = null
         return try {
-            val url = URL("https://api.openweathermap.org/data/2.5/weather" +
-                "?lat=$lat&lon=$lon&appid=$apiKey&units=metric&lang=pt_br")
-            conn = (url.openConnection() as HttpURLConnection).apply {
+            conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 8_000
                 readTimeout = 8_000
                 setRequestProperty("Accept", "application/json")
             }
             if (conn.responseCode != 200) {
-                Logger.warn("weather_fetch_http_error", feature = "weather", action = "fetchWeather",
+                Logger.warn("weather_fetch_http_error", feature = "weather", action = "fetchJson",
                     correlationId = corrId, payload = mapOf("http" to conn.responseCode.toString()))
                 return null
             }
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            val json = JSONObject(body)
-            val main = json.getJSONObject("main")
-            val weatherArr = json.getJSONArray("weather")
-            val w0 = weatherArr.getJSONObject(0)
-            WeatherNow(
-                city = json.optString("name", ""),
-                temp = Math.round(main.getDouble("temp")).toInt(),
-                description = w0.optString("description", ""),
-            )
+            JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
         } catch (e: Exception) {
-            Logger.warn("weather_fetch_exception", feature = "weather", action = "fetchWeather",
+            Logger.warn("weather_fetch_exception", feature = "weather", action = "fetchJson",
                 correlationId = corrId, payload = mapOf("error" to (e.message ?: "")))
             null
         } finally {
@@ -128,7 +164,7 @@ class WeatherNotificationReceiver : BroadcastReceiver() {
     }
 
     private fun showNotification(
-        context: Context, city: String, temp: Int, description: String, corrId: String
+        context: Context, city: String, body: String, corrId: String
     ) {
         val nmCompat = NotificationManagerCompat.from(context)
         if (!nmCompat.areNotificationsEnabled()) {
@@ -151,12 +187,13 @@ class WeatherNotificationReceiver : BroadcastReceiver() {
         }
 
         val where = if (city.isNotEmpty()) " em $city" else ""
-        val body  = "$temp°C, $description".trimEnd(',', ' ')
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.notification_icon)
             .setContentTitle("Tempo hoje$where")
             .setContentText(body)
+            // Corpo é multi-frase (saudação + dica + despedida) — BigText mostra tudo.
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setTicker("Previsão do dia")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -167,7 +204,7 @@ class WeatherNotificationReceiver : BroadcastReceiver() {
             nmCompat.notify(WeatherNotificationScheduler.NOTIF_ID, notification)
             Logger.info("weather_notification_sent", feature = "weather", action = "showNotification",
                 correlationId = corrId,
-                payload = mapOf("city" to city, "temp" to temp.toString()))
+                payload = mapOf("city" to city))
         } catch (e: SecurityException) {
             Logger.error("weather_notification_post_failed", feature = "weather",
                 action = "showNotification", correlationId = corrId, exception = e)

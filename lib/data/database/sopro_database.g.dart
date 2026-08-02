@@ -2507,7 +2507,7 @@ class $ScheduledRemindersTable extends ScheduledReminders
       'repeat_rule', aliasedName, false,
       type: DriftSqlType.string,
       requiredDuringInsert: false,
-      defaultValue: const Constant('none'));
+      defaultValue: const Constant('daily'));
   static const VerificationMeta _repeatDaysOfWeekMeta =
       const VerificationMeta('repeatDaysOfWeek');
   @override

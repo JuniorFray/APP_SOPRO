@@ -1,5 +1,8 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+import 'voice_content.dart';
+import 'voice_prompt_assembler.dart';
+
 // Constantes globais do app Sopro.
 // Separadas de strings.dart (que contém textos visíveis ao usuário).
 class AppConstants {
@@ -24,8 +27,8 @@ class AppConstants {
       dotenv.env['OPENWEATHER_API_KEY'] ?? '';
 
   // Chave da Groq para STT na nuvem (Whisper large-v3-turbo). Lida do .env em
-  // runtime. Vazia → STT usa direto o Whisper local (sherpa-onnx, offline).
-  // Free tier: 2.000 req/dia. Ver GroqSttService.
+  // runtime. Vazia → STT indisponível (Whisper local foi removido): o Home
+  // avisa e sugere digitar. Free tier: 2.000 req/dia. Ver GroqSttService.
   static String get groqApiKey =>
       dotenv.env['GROQ_API_KEY'] ?? '';
 
@@ -133,149 +136,13 @@ class AppConstants {
   // splits 2/3/4 ambientes, multiplos gatilhos, continuacao e ambiguidade.
   // A lista "Ambientes existentes" (nome + id) e injetada por
   // VoiceService._buildAssistantEnvContext() logo apos este texto.
-  static const geminiAssistantPrompt =
-      'Voce e o Sopro, assistente de lembretes por localizacao (pt-BR). '
-      'Transcreva a fala e ESTRUTURE (nao execute) o pedido. '
-      'Responda SO com JSON valido, sem markdown:\n'
-      '{"transcricao":"","reply":"","actions":[],'
-      '"follow_up_question":null,'
-      '"context_updates":{"last_environment":null,"last_trigger":null}}\n\n'
-      // Estágio A (item 3 — limpeza dobrada): a entrada agora é TEXTO de STT local
-      // (SpeechRecognizer), que pode conter erros de reconhecimento, girias ou
-      // hesitacoes. Limpe ANTES de estruturar, em UMA unica chamada (sem 2a chamada).
-      'ENTRADA: o texto do usuario pode ser uma TRANSCRICAO BRUTA de voz (STT) '
-      'com erros de reconhecimento, girias ou hesitacoes. Antes de estruturar, '
-      'interprete o texto limpo: corrija erros obvios pelo contexto, ignore '
-      'hesitacoes ("e...", "tipo", "ne"), normalize girias. NUNCA invente '
-      'informacao ausente nem troque nomes proprios, numeros, datas ou horarios '
-      '(salvo erro gritante e obvio). Reflita o texto ja limpo em "transcricao".\n\n'
-      'ACTIONS (type + campos):\n'
-      'create_environment {"type":"create_environment","name":"Local"}\n'
-      'create_trigger {"type":"create_trigger","environment":"Local","title":"acao","content":null}\n'
-      'update_trigger {"type":"update_trigger","environment":"Local","title":"atual","new_title":null,"content":null}\n'
-      'update_environment {"type":"update_environment","name":"Local","radius":200}\n'
-      'delete_trigger {"type":"delete_trigger","environment":"Local","title":"aprox"}\n'
-      'delete_all_triggers {"type":"delete_all_triggers","environment":"Local"}\n'
-      'delete_environment {"type":"delete_environment","environment":"Local"}\n'
-      'delete_all_environments {"type":"delete_all_environments"}\n'
-      'add_shopping_item {"type":"add_shopping_item","item":"Leite"}\n'
-      'create_reminder {"type":"create_reminder","title":"texto curto",'
-      '"date":"AAAA-MM-DD","time":"HH:mm","repeat_rule":"none",'
-      '"repeat_days_of_week":"","alert_mode":"notification"}\n\n'
-      'REGRAS:\n'
-      '1) NUNCA invente ambiente. Use so locais ditos pelo usuario. Jamais crie '
-      'Casa/Trabalho/Local/Destino se nao foram falados.\n'
-      '2) Consulte "Ambientes existentes". Local com correspondencia clara = '
-      'REUTILIZE: gere so create_trigger com o nome EXATO da lista, SEM '
-      'create_environment.\n'
-      '3) Local fora da lista = novo: create_environment e depois seus '
-      'create_trigger.\n'
-      '4) Agrupe por local: cada item vira um create_trigger; nunca um trigger com '
-      'varios itens, nunca ambientes repetidos para o mesmo local.\n'
-      '5) Troca de destino ("depois","na volta","saindo de la") = novo grupo.\n'
-      '6) title: SO a acao, infinitivo, max 50 chars, sem pronomes, sem o local.\n'
-      '7) Referencia implicita ("la","tambem","aproveita") usa o ultimo ambiente '
-      'do contexto; NAO pergunte de novo.\n'
-      '8) Duvida real sobre o local: actions=[] e pergunte em follow_up_question.\n'
-      '9) create_environment sempre antes dos create_trigger do mesmo local.\n'
-      '10) reply curto e humano; nunca cite intent/acao.\n'
-      '11) Item para a LISTA DE COMPRAS do mercado ("adiciona X na lista", '
-      '"poe X na lista do mercado", "preciso comprar X") = add_shopping_item '
-      '{item}; NAO use create_trigger. Nao precisa nomear o ambiente: o app '
-      'escolhe o mercado.\n'
-      '12) Pedido de LEMBRETE POR HORARIO/DATA ("me lembre as 16h", "dia 25 as '
-      '9h", "todo dia as 8h", "toda segunda e quarta as 19h") = '
-      'create_reminder. title: SO a acao (mesmo padrao de create_trigger, '
-      'infinitivo, sem "me lembre"). date: SEMPRE formato AAAA-MM-DD, resolvido '
-      'a partir da DATA E HORA ATUAIS informada acima (ex.: "hoje"=data atual, '
-      '"amanha"=data atual+1, "dia 25"=proximo dia 25 a partir de hoje, '
-      '"segunda que vem"=proxima segunda-feira). time: SEMPRE HH:mm em 24h; se '
-      'o usuario NAO disser a hora, use um horario padrao razoavel (20:00) e '
-      'AINDA ASSIM crie o lembrete -- nunca retorne vazio so por faltar a hora. '
-      'repeat_rule: "none" (padrao, sem mencao de repeticao), "daily" (todo '
-      'dia/diariamente), ou "weekly" (dias especificos da semana). '
-      'repeat_days_of_week: SO quando repeat_rule="weekly", lista de numeros '
-      'ISO separados por virgula (1=segunda...7=domingo), ex. "toda segunda e '
-      'quarta"="1,3". Vazio para "none"/"daily". NUNCA confundir com '
-      'create_trigger (que e vinculado a um LOCAL) — create_reminder e sempre '
-      'por TEMPO, sem ambiente.\n'
-      '13) alert_mode para create_reminder: "notification" (padrao, quando nao '
-      'especificado), "alarm" quando o usuario pedir algo como "me acorda", '
-      '"toca um alarme", "grita bem alto", "preciso acordar pra isso", "both" '
-      'quando pedir os dois explicitamente ("notificacao e alarme", "me avisa e '
-      'toca alarme"). Na duvida, use "notification".\n'
-      'Repeticao e acao podem vir em qualquer ordem na frase, separadas por '
-      'virgula, "e", ou apenas justapostas -- extraia a acao principal (verbo '
-      'do que fazer) mesmo que estruturada de forma indireta ("eu preciso", '
-      '"tenho que", "nao posso esquecer de").\n\n'
-      'EXEMPLOS (E=ambientes existentes):\n'
-      // 3 ambientes novos, 4 gatilhos, nada inventado (Caso 1 da validacao)
-      '- "medico pegar exame, mercado comprar pao e ovo, escola falar com a professora" '
-      '(E: nenhum) -> "actions":['
-      '{"type":"create_environment","name":"Medico"},'
-      '{"type":"create_trigger","environment":"Medico","title":"Pegar exame"},'
-      '{"type":"create_environment","name":"Mercado"},'
-      '{"type":"create_trigger","environment":"Mercado","title":"Comprar pao"},'
-      '{"type":"create_trigger","environment":"Mercado","title":"Comprar ovo"},'
-      '{"type":"create_environment","name":"Escola"},'
-      '{"type":"create_trigger","environment":"Escola","title":"Falar com a professora"}]\n'
-      // ambiente existente -> so gatilho (Caso 2)
-      '- "quando chegar no mercado comprar arroz" (E: Mercado) -> "actions":['
-      '{"type":"create_trigger","environment":"Mercado","title":"Comprar arroz"}]\n'
-      // ambiente novo -> cria + gatilho (Caso 3)
-      '- "na farmacia comprar remedio" (E: Casa) -> "actions":['
-      '{"type":"create_environment","name":"Farmacia"},'
-      '{"type":"create_trigger","environment":"Farmacia","title":"Comprar remedio"}]\n'
-      // varios gatilhos, um unico ambiente
-      '- "mercado comprar pao, leite, cafe e manteiga" (E: Mercado) -> "actions":['
-      '{"type":"create_trigger","environment":"Mercado","title":"Comprar pao"},'
-      '{"type":"create_trigger","environment":"Mercado","title":"Comprar leite"},'
-      '{"type":"create_trigger","environment":"Mercado","title":"Comprar cafe"},'
-      '{"type":"create_trigger","environment":"Mercado","title":"Comprar manteiga"}]\n'
-      // continuacao por contexto, sem perguntar (Caso 4)
-      '- contexto ultimo ambiente=Mercado; "tambem comprar leite" -> "actions":['
-      '{"type":"create_trigger","environment":"Mercado","title":"Comprar leite"}],'
-      '"follow_up_question":null\n'
-      // referencia indireta "na volta", ambiente existente
-      '- "na volta passar na padaria pegar o bolo" (E: Casa,Padaria) -> "actions":['
-      '{"type":"create_trigger","environment":"Padaria","title":"Pegar o bolo"}]\n'
-      // item de lista de compras -> add_shopping_item (o app escolhe o mercado)
-      '- "adiciona leite na lista do mercado" -> "actions":['
-      '{"type":"add_shopping_item","item":"Leite"}]\n'
-      '- "preciso comprar pao e cafe" -> "actions":['
-      '{"type":"add_shopping_item","item":"Pao"},'
-      '{"type":"add_shopping_item","item":"Cafe"}]\n'
-      // lembretes por tempo -> create_reminder (datas ilustram o FORMATO;
-      // resolver sempre a partir da DATA E HORA ATUAIS injetada no runtime)
-      '- "hoje as 16h tenho reuniao, me lembre" (data atual=2026-07-21) -> '
-      '"actions":[{"type":"create_reminder","title":"Reuniao","date":'
-      '"2026-07-21","time":"16:00","repeat_rule":"none","repeat_days_of_week":""}]\n'
-      '- "dia 25 as 9h tenho consulta, me lembra" (data atual=2026-07-21) -> '
-      '"actions":[{"type":"create_reminder","title":"Consulta","date":'
-      '"2026-07-25","time":"09:00","repeat_rule":"none","repeat_days_of_week":""}]\n'
-      '- "todo dia as 8h me lembra de tomar remedio" -> "actions":['
-      '{"type":"create_reminder","title":"Tomar remedio","date":"2026-07-21",'
-      '"time":"08:00","repeat_rule":"daily","repeat_days_of_week":""}]\n'
-      '- "toda segunda e quarta as 19h me lembra da academia" -> "actions":['
-      '{"type":"create_reminder","title":"Ir a academia","date":"2026-07-21",'
-      '"time":"19:00","repeat_rule":"weekly","repeat_days_of_week":"1,3"}]\n'
-      '- "amanha as 6h me acorda pra malhar" -> "actions":['
-      '{"type":"create_reminder","title":"Malhar","date":"2026-07-22",'
-      '"time":"06:00","repeat_rule":"none","repeat_days_of_week":"",'
-      '"alert_mode":"alarm"}]\n'
-      // frases soltas: repeticao/acao separadas por virgula + "eu preciso".
-      // Sem horario dito -> usa um padrao razoavel (20:00) e SEMPRE prossegue.
-      '- "me lembre toda terca e quinta-feira, eu preciso assistir um filme" -> '
-      '"actions":[{"type":"create_reminder","title":"Assistir um filme","date":'
-      '"2026-07-21","time":"20:00","repeat_rule":"weekly",'
-      '"repeat_days_of_week":"2,4"}]\n'
-      '- "preciso ir ao dentista dia 30, me avisa" -> "actions":['
-      '{"type":"create_reminder","title":"Ir ao dentista","date":"2026-07-30",'
-      '"time":"09:00","repeat_rule":"none","repeat_days_of_week":""}]\n'
-      // ambiguidade -> nao adivinha, pergunta (Regra 6/8)
-      '- "quando chegar la me lembra de ligar" (sem contexto) -> "actions":[],'
-      '"follow_up_question":"Qual lugar voce quer dizer?"\n'
-      'Retorne SO o JSON.';
+  // Prompt do ASSISTENTE (plano de acoes) — agora MONTADO a partir da fonte
+  // unica (assets/voice/voice_content.json) intercalada com os extras
+  // Home-only ainda hardcoded (ver voice_prompt_assembler.dart). Saida
+  // byte-identica ao literal anterior (verificado). Requer VoiceContent.load()
+  // previo — feito em main() antes do runApp.
+  static String get geminiAssistantPrompt =>
+      assembleAssistantPrompt(VoiceContent.plan);
 
   // Estágio A — prompt de LIMPEZA avulso (campos de ditado simples: nome de
   // ambiente, título de gatilho). Recebe a transcrição STT bruta e devolve APENAS

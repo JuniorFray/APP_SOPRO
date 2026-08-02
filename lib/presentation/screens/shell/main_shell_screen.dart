@@ -23,6 +23,8 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../providers/environment_providers.dart';
 import '../../providers/location_providers.dart';
+import '../../providers/scheduled_reminder_providers.dart';
+import '../../providers/shopping_list_providers.dart';
 import '../../providers/trigger_providers.dart';
 import '../../widgets/device_requirements_guard.dart';
 import '../../widgets/glass_surface.dart';
@@ -81,6 +83,12 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
     if (!mounted) return;
     ref.invalidate(environmentsProvider);
     ref.invalidate(triggersByEnvironmentProvider);
+    // Lembretes por tempo e lista de compras também são gravados pelo overlay via
+    // SQL raw (fora do stream do Drift, que não detecta gravação externa): invalida
+    // para refletir na tela sem precisar fechar/reabrir o app.
+    ref.invalidate(allActiveRemindersProvider);
+    ref.invalidate(nextReminderProvider);
+    ref.invalidate(shoppingListByEnvironmentProvider);
 
     // Ambiente criado por voz sem coords → abre a AddEnvironmentScreen em modo
     // só-localização. Limpa o pending antes de navegar (não reabre no próximo sync).

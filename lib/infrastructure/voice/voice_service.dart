@@ -17,7 +17,6 @@ import 'package:sopro/infrastructure/logging/core/correlation_manager.dart';
 import 'package:sopro/infrastructure/logging/core/logger.dart';
 import 'package:sopro/infrastructure/voice/execution_plan.dart';
 import 'package:sopro/infrastructure/voice/groq_stt_service.dart';
-import 'package:sopro/infrastructure/voice/sherpa_stt_service.dart';
 import 'package:sopro/infrastructure/voice/sherpa_tts_service.dart';
 
 // Intenções de voz que o app sabe executar.
@@ -112,50 +111,42 @@ class VoicePlanResult {
 // Processamento de intenção via Gemini Audio API (STT + NLU em uma chamada).
 // Fallback para regex local quando Gemini não está disponível.
 class VoiceService {
-  // FLAG DE TESTE — sherpa-onnx local vs. pipeline atual (speech_to_text/
-  // flutter_tts). false = reverte 100% ao comportamento anterior.
+  // FLAG DE TESTE — grava WAV p/ STT na nuvem vs. pipeline speech_to_text ao
+  // vivo. Mantida para reversão; o TTS Piper (sherpa) também depende dela.
   static const bool _useSherpa = true;
 
-  // Serviços sherpa (STT/TTS 100% offline). Criados sob demanda só quando a
-  // flag está ligada — não carrega os modelos se _useSherpa == false.
-  SherpaSttService? _sherpaSttInstance;
+  // TTS 100% offline (Piper). Criado sob demanda só quando a flag está ligada —
+  // não carrega o modelo se _useSherpa == false. (STT local Whisper foi removido
+  // do APK: STT agora é só nuvem.)
   SherpaTtsService? _sherpaTtsInstance;
-  SherpaSttService get _sherpaStt =>
-      _sherpaSttInstance ??= SherpaSttService();
   SherpaTtsService get _sherpaTts =>
       _sherpaTtsInstance ??= SherpaTtsService();
 
   // STT na nuvem (Groq Whisper-large-v3-turbo). Lazy: só instancia quando há
-  // chave/uso. Fallback automático para _sherpaStt em falha de rede.
+  // chave/uso. Sem fallback local — a nuvem é o único caminho de transcrição.
   GroqSttService? _groqSttInstance;
   GroqSttService get _groqStt => _groqSttInstance ??= GroqSttService();
 
-  // Exposto para o FAB do Home decidir o caminho de captura (WAV+Whisper vs.
+  // Exposto para o FAB do Home decidir o caminho de captura (WAV+nuvem vs.
   // speech_to_text ao vivo). Campos de ditado NÃO consultam isto — seguem
   // sempre no speech_to_text, independentemente da flag (fora de escopo).
   bool get useSherpaVoice => _useSherpa;
 
-  // Transcreve um WAV para texto. STT HÍBRIDO: tenta a NUVEM (Groq) primeiro —
-  // mais rápido e preciso; em qualquer falha (sem internet, timeout, erro) cai
-  // AUTOMATICAMENTE no Whisper LOCAL (sherpa-onnx, offline). Usado só pelo Home
-  // quando useSherpaVoice; devolve null se nada foi reconhecido. Loga a rota
-  // usada (stt_route: groq | local_fallback).
+  // Transcreve um WAV para texto SÓ pela NUVEM (Groq). O Whisper local foi
+  // removido do APK: não há mais fallback offline. Em qualquer indisponibilidade
+  // (sem chave, sem internet, timeout, erro) PROPAGA [GroqUnavailableException]
+  // para o chamador (FAB do Home) avisar o usuário e sugerir o campo de texto.
+  // Devolve null quando a nuvem respondeu mas nada foi reconhecido.
   Future<String?> transcribeWav(String wavPath) async {
-    if (AppConstants.groqApiKey.isNotEmpty) {
-      try {
-        final cloud = (await _groqStt.transcribe(wavPath))?.trim() ?? '';
-        Logger.info('stt_route', payload: {'route': 'groq'},
-            feature: 'voice', action: 'transcribe_wav');
-        return cloud.isEmpty ? null : cloud;
-      } on GroqUnavailableException catch (e) {
-        // Nuvem indisponível → segue para o fallback local (intacto) abaixo.
-        Logger.info('stt_route',
-            payload: {'route': 'local_fallback', 'reason': e.reason},
-            feature: 'voice', action: 'transcribe_wav');
-      }
+    if (AppConstants.groqApiKey.isEmpty) {
+      throw const GroqUnavailableException('no_key');
     }
-    final text = (await _sherpaStt.transcribe(wavPath)).trim();
-    return text.isEmpty ? null : text;
+    // _groqStt.transcribe lança GroqUnavailableException em falha de rede — deixa
+    // propagar (não engole): o chamador decide o aviso reativo.
+    final cloud = (await _groqStt.transcribe(wavPath))?.trim() ?? '';
+    Logger.info('stt_route', payload: {'route': 'groq'},
+        feature: 'voice', action: 'transcribe_wav');
+    return cloud.isEmpty ? null : cloud;
   }
 
   // Engine de gravação de áudio (pacote record ^5.x)
@@ -602,6 +593,25 @@ class VoiceService {
       return cleaned.isEmpty ? r : cleaned;
     } catch (_) {
       return r;
+    }
+  }
+
+  // Rota A do híbrido — 2ª chamada Gemini de TEXTO puro. Recebe [prompt]
+  // (instruções + dados) e [userText] (fala do usuário) e devolve a resposta
+  // natural já limpa. Reusa _sendTextRaw. Fail-open: sem chave/rede/erro → null,
+  // deixando o caller cair no comportamento padrão (ex.: template estático).
+  Future<String?> generateReply(String prompt, {String userText = ''}) async {
+    if (AppConstants.geminiApiKey.isEmpty) return null;
+    try {
+      final (resp, status) = await _sendTextRaw(userText, prompt);
+      if (status != 200 || resp == null) return null;
+      final env = jsonDecode(resp) as Map<String, dynamic>;
+      final text = (((env['candidates'] as List?)?.firstOrNull
+              as Map?)?['content'] as Map?)?['parts']?[0]?['text'] as String?;
+      final out = text == null ? '' : _stripMarkdown(text).trim();
+      return out.isEmpty ? null : out;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -1393,7 +1403,11 @@ class VoiceService {
     if (text == null) return null;
     final t = text.toLowerCase().trim();
     if (t.isEmpty) return null;
-    const yes = ['sim', 'pode', 'claro', 'isso', 'confirmar', 'confirma',
+    // "pode" sozinho é ambíguo: "pode ser/confirmar" = sim, mas "pode
+    // encerrar/cancelar" = desistir. Removido o "pode" cru; mantidos os
+    // positivos reais ("pode ser"; "pode confirmar" casa em "confirmar").
+    // O cancelamento é interceptado ANTES deste parse pelo _isCancelPhrase.
+    const yes = ['sim', 'pode ser', 'claro', 'isso', 'confirmar', 'confirma',
       'quero', 'manda', 'positivo', 'com certeza', 'certo', 'ok', 'okay',
       'aha', 'uhum', 'bora', 'vai', 'exato', 'exatamente', 'afirmativo'];
     const no  = ['não', 'nao', 'cancela', 'cancelar', 'deixa', 'para',
@@ -1467,7 +1481,6 @@ class VoiceService {
     _autoStopController.close();
     _recorder.dispose();
     _tts.stop();
-    _sherpaSttInstance?.dispose(); // libera modelo Whisper nativo se criado
     _sherpaTtsInstance?.dispose(); // libera Piper + player se criados
   }
 }

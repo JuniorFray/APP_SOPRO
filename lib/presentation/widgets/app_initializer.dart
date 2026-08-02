@@ -153,6 +153,12 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     final owKey = AppConstants.openWeatherKey;
     if (owKey.isNotEmpty) await prefs.setString('openweather_api_key', owKey);
 
+    // Persiste a chave Groq para o FloatingVoiceService (STT na nuvem, Kotlin sem
+    // Flutter Engine) — nativo lê flutter.groq_api_key. Vazia → overlay cai no
+    // envio de áudio ao Gemini (fallback), igual ao comportamento anterior.
+    final groqKey = AppConstants.groqApiKey;
+    if (groqKey.isNotEmpty) await prefs.setString('groq_api_key', groqKey);
+
     final notifEnabled = prefs.getBool('notifications_enabled') ?? true;
     if (!notifEnabled) {
       ref.read(notificationsEnabledProvider.notifier).state = false;

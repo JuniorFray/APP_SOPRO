@@ -30,13 +30,13 @@ class WeatherInfo {
     this.popToday,
   });
 
-  WeatherInfo copyWith({int? popToday}) => WeatherInfo(
+  WeatherInfo copyWith({int? popToday, String? cityName}) => WeatherInfo(
         tempCelsius: tempCelsius,
         condition: condition,
         description: description,
         iconCode: iconCode,
         humidity: humidity,
-        cityName: cityName,
+        cityName: cityName ?? this.cityName,
         popToday: popToday ?? this.popToday,
       );
 }
@@ -112,11 +112,11 @@ class WeatherService implements IWeatherProvider {
         'units': 'metric',
         'lang': 'pt_br',
       });
-      client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
       final request = await client.getUrl(uri);
       request.headers.set('Accept', 'application/json');
       final response =
-          await request.close().timeout(const Duration(seconds: 8));
+          await request.close().timeout(const Duration(seconds: 6));
       if (response.statusCode != 200) {
         client.close();
         return null;
@@ -184,11 +184,11 @@ class WeatherService implements IWeatherProvider {
         'units': 'metric',
         'lang': 'pt_br',
       });
-      client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+      client = HttpClient()..connectionTimeout = const Duration(seconds: 6);
       final request = await client.getUrl(uri);
       request.headers.set('Accept', 'application/json');
       final response =
-          await request.close().timeout(const Duration(seconds: 8));
+          await request.close().timeout(const Duration(seconds: 6));
       if (response.statusCode != 200) {
         client.close();
         return const [];

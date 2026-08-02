@@ -15,7 +15,6 @@ class AppStrings {
 
   // Home
   static const homeTitle = 'Sopro';
-  static const profileTooltip = 'Perfil';
   static const newEnvironment = 'Novo Ambiente';
   static const homeEmptyTitle = 'Nenhum ambiente ainda';
   static const homeEmptySubtitle =
@@ -40,8 +39,6 @@ class AppStrings {
   static const seeAll           = 'Ver todos';
   static const recentActivity   = 'Atividade Recente';
   static const createMenuTitle  = 'Criar';
-  static const newReminder      = 'Novo Lembrete';
-  static const newReminderSoon  = 'Em breve — crie por voz';
 
   // Subtítulo da saudação: contagem de lembretes para hoje.
   static String homeRemindersToday(int n) => n == 0
@@ -50,6 +47,14 @@ class AppStrings {
 
   // Aba Ambientes
   static const environmentsTabTitle = 'Ambientes';
+  static const environmentsAddTooltip = 'Adicionar ambiente';
+  static const environmentsMapTooltip = 'Ver no mapa';
+
+  // Card de privacidade (topo da aba Ambientes)
+  static const privacyCardMessage =
+      'Seus dados de localização não saem deste aparelho — ficam salvos só aqui, sem envio a servidor.';
+  static const privacyCardOk = 'OK';
+  static const privacyCardNeverAgain = 'Não avisar mais';
 
   // Aba Lembretes
   static const remindersTitle = 'Meus Lembretes';
@@ -508,6 +513,13 @@ class AppStrings {
   static const voiceHoldToRecord   = 'Segure para gravar';
   // Exibido quando o usuário solta antes de 500 ms (gravação muito curta)
   static const voiceHoldLonger     = 'Segure por mais tempo para gravar';
+  // REATIVO: Groq falhou por rede ao tentar transcrever (STT é só nuvem agora).
+  static const voiceNoInternet     =
+      'Sem internet — não consigo entender por voz agora. '
+      'Digite seu comando no campo de texto.';
+  // PROATIVO: banner discreto e temporário perto do composer quando offline.
+  static const voiceOfflineHint    =
+      'Sem internet: a transcrição por voz pode não funcionar. Você pode digitar.';
 
   // ── Voz — FIX 1/2 (auto-save GPS + env not found) ────────────────────────
   // Prefixo do snackbar ao criar ambiente por voz via GPS

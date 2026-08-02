@@ -27,6 +27,12 @@ class OverlaySkillContext(
     val writeEnvironment: (name: String, lat: Double, lon: Double, radius: Int) -> Boolean,
     val writeTrigger: (title: String, content: String, env: String) -> Boolean,
     val writeShopping: (items: List<String>, market: String) -> Boolean,
+    // Etapa 2 — atualizações e lembrete por tempo (nativo, sem Flutter Engine).
+    val updateTrigger: (env: String, title: String, newTitle: String?, content: String?) -> Boolean,
+    val updateEnvironment: (name: String, radius: Int?) -> Boolean,
+    // createReminder escreve o lembrete E agenda o alarme (ReminderScheduler).
+    val createReminder: (title: String, scheduledAtMillis: Long, repeatRule: String,
+                         repeatDays: String, alertMode: String) -> Boolean,
     val deleteEnvironment: (env: String) -> Boolean,
     val deleteTrigger: (env: String, title: String?) -> Boolean,
     val deleteAllEnvironments: () -> Int,
@@ -62,6 +68,59 @@ object CreateTriggerSkill {
 object AddShoppingItemSkill {
     fun execute(items: List<String>, market: String, ctx: OverlaySkillContext): Boolean =
         ctx.writeShopping(items, market)
+}
+
+// ── Atualizações + lembrete por tempo (Etapa 2) ──────────────────────────────
+// Espelham UpdateTriggerSkill / UpdateEnvironmentSkill / CreateReminderSkill do
+// lado Dart (voice_skills.dart). Síncronas: rodam DENTRO do loop IO do plano e
+// devolvem sucesso/falha (a fala é o resumo agregado do plano).
+
+// Atualiza um lembrete existente (título e/ou conteúdo) por match parcial de título.
+object UpdateTriggerSkill {
+    fun execute(env: String?, title: String?, newTitle: String?, content: String?,
+                ctx: OverlaySkillContext): Boolean =
+        if (env != null && title != null) ctx.updateTrigger(env, title, newTitle, content)
+        else false
+}
+
+// Atualiza um ambiente (por ora, o raio) e re-registra o geofence.
+object UpdateEnvironmentSkill {
+    fun execute(name: String?, radius: Int?, ctx: OverlaySkillContext): Boolean =
+        if (name != null) ctx.updateEnvironment(name, radius) else false
+}
+
+// Cria um lembrete por TEMPO (data/hora), sem vínculo com localização.
+// Faz o parse dos campos do Gemini (mesma semântica do CreateReminderSkill Dart)
+// e delega a escrita+agendamento ao contexto (writeReminderToDb + ReminderScheduler).
+object CreateReminderSkill {
+    // internal: recebe PlanAction (tipo internal do serviço) — mesmo módulo.
+    internal fun execute(a: FloatingVoiceService.PlanAction, ctx: OverlaySkillContext): Boolean {
+        val title = a.str("title") ?: return false
+        val date = a.str("date") ?: return false
+        val time = a.str("time") ?: return false
+        val millis = parseReminderMillis(date, time) ?: return false
+        // Default "daily": lembrete sem mencao de repeticao vale todos os dias.
+        val repeat = when (a.str("repeat_rule") ?: "daily") {
+            "daily" -> "daily"; "weekly" -> "weekly"; else -> "none"
+        }
+        val days = a.str("repeat_days_of_week") ?: ""
+        val alert = when (a.str("alert_mode") ?: "notification") {
+            "alarm" -> "alarm"; "both" -> "both"; else -> "notification"
+        }
+        return ctx.createReminder(title, millis, repeat, days, alert)
+    }
+
+    // "AAAA-MM-DD" + "HH:mm" -> epoch millis (hora local). null se formato inválido.
+    private fun parseReminderMillis(date: String, time: String): Long? = try {
+        val d = date.split("-").map { it.toInt() }
+        val t = time.split(":").map { it.toInt() }
+        val cal = java.util.Calendar.getInstance()
+        cal.set(d[0], d[1] - 1, d[2], t[0], t[1], 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        cal.timeInMillis
+    } catch (e: Exception) {
+        null
+    }
 }
 
 // ── Destrutivas ──────────────────────────────────────────────────────────────

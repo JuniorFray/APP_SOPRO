@@ -31,6 +31,11 @@ internal object OverlayPlanner {
 
         if (plan.actions.all { it.type == "add_shopping_item" }) return PlanRoute.Shopping
 
+        // Consulta de clima (Etapa 2): fala o tempo, não muta o banco nem usa o
+        // resumo genérico do loop. Tratada em rota própria (paridade com o Home).
+        if (plan.actions.size == 1 && plan.actions[0].type == "weather_query")
+            return PlanRoute.Weather(plan.actions[0])
+
         if (plan.actions.size == 1 && plan.actions[0].type == "create_environment") {
             val name = plan.actions[0].str("name", "environment")
             if (name != null && name.isNotBlank() && !isBlockedName(name))
@@ -51,6 +56,7 @@ internal sealed class PlanRoute {
     object Empty : PlanRoute()
     data class Destructive(val action: FloatingVoiceService.PlanAction) : PlanRoute()
     object Shopping : PlanRoute()
+    data class Weather(val action: FloatingVoiceService.PlanAction) : PlanRoute()
     data class SingleEnvironment(val name: String) : PlanRoute()
     object Construct : PlanRoute()
 }

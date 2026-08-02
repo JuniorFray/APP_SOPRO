@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../infrastructure/geocoding/geocoding_repository.dart';
 import '../../infrastructure/weather/weather_service.dart';
 import 'database_provider.dart';
 
@@ -23,7 +24,15 @@ final currentWeatherProvider = FutureProvider<WeatherInfo?>((ref) async {
   // /weather não traz pop — busca a chance de chuva "em breve" do /forecast
   // (cache compartilhado) e injeta no card.
   final pop = await svc.getPopSoon(lat, lon);
-  return info.copyWith(popToday: pop);
+  // O OWM rotula a cidade pela ESTAÇÃO mais próxima — às vezes a vizinha (ex.:
+  // Vila Caiçara/Praia Grande vinha como "Mongaguá"). Substitui pelo rótulo real
+  // "Bairro, Cidade" das coords via reverse (Photon, cacheado — barato).
+  var city = info.cityName;
+  try {
+    final label = await ref.read(geocodingRepositoryProvider).placeLabel(lat, lon);
+    if (label.isNotEmpty) city = label;
+  } catch (_) {/* mantém o nome do OWM se o reverso falhar */}
+  return info.copyWith(popToday: pop, cityName: city);
 });
 
 // Previsão dos próximos dias para a tira do card da Home. Mesma fonte de

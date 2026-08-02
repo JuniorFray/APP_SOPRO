@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,14 +24,10 @@ import '../../providers/database_provider.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../../widgets/glass_surface.dart';
+import '../../widgets/map/environment_markers_layer.dart';
 
-// Estilo do pin escolhido na tela do mapa (Fase 1 — pins personalizados).
-//   classic → teardrop em PNG (verde = seleção / azul = existentes)
-//   threeD  → plaquinha 3D (arte Sopro padrão OU foto do ambiente)
-enum PinStyle { classic, threeD }
-
-// Chave de persistência do estilo do pin (GLOBAL). A FOTO é por ambiente (banco).
-const String _kPinStylePref = 'map_pin_style'; // 'classic' | '3d'
+// PinStyle e kPinStylePref agora vivem em environment_markers_layer.dart
+// (compartilhados com a tela de mapa dedicada — mesma lógica de marcadores).
 
 // Tela de criação OU edição de Environment com mapa interativo.
 //
@@ -74,7 +68,8 @@ class AddEnvironmentScreen extends ConsumerStatefulWidget {
       _AddEnvironmentScreenState();
 }
 
-class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
+class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen>
+    with EnvironmentMarkersMixin<AddEnvironmentScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameController;
   late final TextEditingController _radiusController;
@@ -110,13 +105,12 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   // Pin de seleção renderizado como imagem (Symbol nativo do mapa).
   ml.Symbol?  _pinSymbol;
 
-  // Pins dos ambientes já existentes — camada de símbolos com fonte GeoJSON.
-  // Cada feature carrega a propriedade 'icon' com o nome do sprite a usar
-  // (por ambiente no 3D, único no clássico) — icon-image data-driven.
-  static const String _envSrcId   = 'sopro_env_src';
-  static const String _envLayerId = 'sopro_env_layer';
-  bool _envSrcAdded   = false;
-  bool _envLayerAdded = false;
+  // Marcadores dos ambientes existentes: fonte/camada/sprites 3D vêm do
+  // EnvironmentMarkersMixin. Este state só fornece o estilo/tamanho de pin ativos.
+  @override
+  PinStyle get markerPinStyle => _pinStyle;
+  @override
+  double get markerIconSize => _pinIconSize;
 
   // Tamanho FIXO de todos os pins (sem escala por zoom). Todos os PNGs têm
   // ~512px de altura → um único iconSize dá o MESMO tamanho visual em clássico
@@ -130,8 +124,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   // Em edição inicia com widget.environment.pinImagePath; em criação fica só em
   // memória até o _submit persistir (o ambiente ainda não existe no banco).
   String? _pinImagePath;
-  // Ambientes existentes que tiveram um sprite 3D próprio registrado ('env_pin_<id>').
-  final Set<String> _registeredEnvImages = {};
+  // (registeredEnvImages — sprites 3D já registrados — vem do mixin.)
   // Evita re-registrar as imagens antes das prefs de estilo terem sido lidas.
   bool _pinPrefsLoaded = false;
 
@@ -418,9 +411,14 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
         // Registra os sprites dos dois estilos (clássico verde/azul + 3D).
         await _registerPinImages();
 
-        // Camada GeoJSON com os ambientes já cadastrados (tamanho fixo).
-        await _ensureEnvData();
-        await _addEnvLayer();
+        // Camada GeoJSON com os ambientes já cadastrados (mixin compartilhado).
+        // Pula o ambiente em foco (não duplica o pin de seleção).
+        final c = _mapController;
+        if (c != null) {
+          await syncEnvironmentSource(c,
+              skipId: widget.environment?.id ?? _pendingEnvId);
+          await addEnvironmentLayer(c, interactive: false);
+        }
 
         if (_selectedPoint != null) {
           await _updateMapPin(_selectedPoint!);
@@ -729,7 +727,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   // ambiente sendo criado/editado (ou arte Sopro padrão se sem foto).
   Future<void> _reloadSelectionImage() async {
     await _mapController?.addImage(
-        _selPinImageName, await _render3dPinBytes(_pinImagePath));
+        _selPinImageName, await render3dPinBytes(_pinImagePath));
   }
 
   // Lê os bytes crus de um asset PNG (sprite pronto, sem composição).
@@ -738,158 +736,10 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     return data.buffer.asUint8List();
   }
 
-  // ── Camada GeoJSON dos ambientes existentes ───────────────────────────────
-  // Monta a fonte de pontos e, no modo 3D, registra um sprite por ambiente que
-  // tenha foto ('env_pin_<id>'). Cada feature carrega a propriedade 'icon' com o
-  // nome do sprite — o icon-image da camada é data-driven (['get','icon']).
-  // Pula o próprio ambiente em edição/só-localização (evita duplicar a seleção).
-  Future<void> _ensureEnvData() async {
-    final ctrl = _mapController;
-    if (ctrl == null) return;
-
-    final envs = await ref.read(environmentRepositoryProvider).getAll();
-    final skipId = widget.environment?.id ?? _pendingEnvId;
-    final is3d = _pinStyle == PinStyle.threeD;
-    final features = <Map<String, dynamic>>[];
-
-    for (final e in envs) {
-      if (e.id == skipId) continue; // não duplica o ambiente em foco
-
-      String icon;
-      if (!is3d) {
-        icon = 'pin_teardrop_azul'; // clássico: azul para todos os existentes
-      } else if (e.pinImagePath != null && File(e.pinImagePath!).existsSync()) {
-        // 3D com foto: registra (uma vez) o sprite próprio do ambiente.
-        icon = 'env_pin_${e.id}';
-        if (!_registeredEnvImages.contains(e.id)) {
-          await ctrl.addImage(icon, await _render3dPinBytes(e.pinImagePath));
-          _registeredEnvImages.add(e.id);
-        }
-      } else {
-        icon = 'pin_3d_sopro'; // 3D sem foto: plaquinha padrão Sopro
-      }
-
-      features.add({
-        'type': 'Feature',
-        'geometry': {
-          'type': 'Point',
-          'coordinates': [e.longitude, e.latitude], // GeoJSON = [lon, lat]
-        },
-        'properties': {'icon': icon},
-      });
-    }
-    final fc = {'type': 'FeatureCollection', 'features': features};
-
-    if (_envSrcAdded) {
-      await ctrl.setGeoJsonSource(_envSrcId, fc);
-    } else {
-      await ctrl.addGeoJsonSource(_envSrcId, fc);
-      _envSrcAdded = true;
-    }
-  }
-
-  // Adiciona a camada de símbolos dos ambientes. icon-image data-driven (lê a
-  // propriedade 'icon' de cada feature); tamanho FIXO igual ao pin de seleção.
-  // Sem interação (o toque no mapa continua criando/movendo a seleção).
-  Future<void> _addEnvLayer() async {
-    final ctrl = _mapController;
-    if (ctrl == null || _envLayerAdded) return;
-    await ctrl.addSymbolLayer(_envSrcId, _envLayerId, _envLayerProps(),
-        enableInteraction: false);
-    _envLayerAdded = true;
-  }
-
-  // Remove a camada de símbolos (mantém a fonte) — usado ao trocar de estilo.
-  Future<void> _removeEnvLayer() async {
-    final ctrl = _mapController;
-    if (ctrl == null || !_envLayerAdded) return;
-    await ctrl.removeLayer(_envLayerId);
-    _envLayerAdded = false;
-  }
-
-  // Propriedades da camada: sprite por feature ('icon'), âncora bottom, tamanho
-  // FIXO. Opacidade < 1 no 3D diferencia dos pins de seleção sem mudar a cor.
-  ml.SymbolLayerProperties _envLayerProps() {
-    final is3d = _pinStyle == PinStyle.threeD;
-    return ml.SymbolLayerProperties(
-      iconImage:           ['get', 'icon'],
-      iconAnchor:          'bottom',
-      iconAllowOverlap:    true,
-      iconIgnorePlacement: true,
-      iconOpacity:         is3d ? 0.85 : 1.0,
-      iconSize:            _pinIconSize,
-    );
-  }
-
-  // ── Composição da plaquinha 3D (moldura + foto) ───────────────────────────
-  // Compõe a plaquinha 3D como PNG. Sem foto → usa a arte Sopro pronta. Com foto
-  // → desenha a foto recortada num rounded-rect que preenche o interior da
-  // moldura e sobrepõe a moldura vazia por cima.
-  Future<Uint8List> _render3dPinBytes(String? userImagePath) async {
-    // Caso simples: arte padrão Sopro (ponta já encostada na borda inferior).
-    if (userImagePath == null || !File(userImagePath).existsSync()) {
-      final data = await rootBundle.load('assets/pin_3d_sopro.png');
-      return data.buffer.asUint8List();
-    }
-
-    // Moldura vazia + imagem do usuário decodificadas para composição no canvas.
-    final frameData = await rootBundle.load('assets/pin_3d_frame.png');
-    final frameImg  = await _decodeImage(frameData.buffer.asUint8List());
-    final userImg   = await _decodeImage(await File(userImagePath).readAsBytes());
-
-    // Dimensões nativas dos PNGs (395x512). Janela interna medida no canal alpha
-    // da moldura (bbox do buraco transparente) + leve sangria sob a borda para
-    // não deixar fresta entre a foto e a moldura.
-    const double fw = 395.0, fh = 512.0;
-    const inner = Rect.fromLTRB(38 - 6, 24 - 6, 348 + 6, 368 + 6);
-
-    final recorder = ui.PictureRecorder();
-    final canvas   = Canvas(recorder, const Rect.fromLTWH(0, 0, fw, fh));
-
-    // 1) Foto do usuário POR BAIXO, recortada em rounded-rect (cover-fit).
-    canvas.save();
-    canvas.clipRRect(RRect.fromRectAndRadius(inner, const Radius.circular(26)));
-    final src = _coverSrcRect(
-        userImg.width.toDouble(), userImg.height.toDouble(), inner);
-    canvas.drawImageRect(
-      userImg, src, inner,
-      Paint()..filterQuality = FilterQuality.high,
-    );
-    canvas.restore();
-
-    // 2) Moldura 3D por cima (interior transparente revela a foto).
-    canvas.drawImageRect(
-      frameImg,
-      Rect.fromLTWH(0, 0, frameImg.width.toDouble(), frameImg.height.toDouble()),
-      const Rect.fromLTWH(0, 0, fw, fh),
-      Paint(),
-    );
-
-    final pic   = recorder.endRecording();
-    final img   = await pic.toImage(fw.round(), fh.round());
-    final bytes = await img.toByteData(format: ui.ImageByteFormat.png);
-    return bytes!.buffer.asUint8List();
-  }
-
-  // Decodifica bytes PNG/JPG para ui.Image (para desenho no canvas).
-  Future<ui.Image> _decodeImage(Uint8List bytes) async {
-    final codec = await ui.instantiateImageCodec(bytes);
-    final frame = await codec.getNextFrame();
-    return frame.image;
-  }
-
-  // Retângulo-fonte para desenhar [iw]x[ih] cobrindo [dest] no estilo BoxFit.cover
-  // (recorta o excesso do lado mais longo, centralizado).
-  Rect _coverSrcRect(double iw, double ih, Rect dest) {
-    final da = dest.width / dest.height;
-    final ia = iw / ih;
-    if (ia > da) {
-      final w = ih * da;                       // imagem mais larga → corta laterais
-      return Rect.fromLTWH((iw - w) / 2, 0, w, ih);
-    }
-    final hh = iw / da;                         // imagem mais alta → corta topo/base
-    return Rect.fromLTWH(0, (ih - hh) / 2, iw, hh);
-  }
+  // ── Camada GeoJSON dos ambientes + plaquinha 3D ───────────────────────────
+  // EXTRAÍDAS para EnvironmentMarkersMixin (syncEnvironmentSource /
+  // addEnvironmentLayer / removeEnvironmentLayer / render3dPinBytes) e
+  // compartilhadas com EnvironmentsMapScreen — ver environment_markers_layer.dart.
 
   // ── Persistência do estilo (GLOBAL) + aplicação no mapa ───────────────────
   // Lê o estilo salvo (clássico/3D é preferência global). A FOTO é por ambiente
@@ -897,7 +747,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
   Future<void> _loadPinPrefs() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      _pinStyle = prefs.getString(_kPinStylePref) == '3d'
+      _pinStyle = prefs.getString(kPinStylePref) == '3d'
           ? PinStyle.threeD
           : PinStyle.classic;
     } catch (_) {
@@ -921,16 +771,19 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     setState(() => _pinStyle = style);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-        _kPinStylePref, style == PinStyle.threeD ? '3d' : 'classic');
+        kPinStylePref, style == PinStyle.threeD ? '3d' : 'classic');
     await _reapplyPins();
   }
 
   // Recompõe a fonte/camada dos existentes (recalcula 'icon' por feature) e o
   // pin de seleção conforme o estilo/foto atuais.
   Future<void> _reapplyPins() async {
-    await _ensureEnvData();
-    await _removeEnvLayer();
-    await _addEnvLayer();
+    final ctrl = _mapController;
+    if (ctrl == null) return;
+    await syncEnvironmentSource(ctrl,
+        skipId: widget.environment?.id ?? _pendingEnvId);
+    await removeEnvironmentLayer(ctrl);
+    await addEnvironmentLayer(ctrl, interactive: false);
     if (_selectedPoint != null) await _updateMapPin(_selectedPoint!);
   }
 
@@ -971,11 +824,11 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
     if (_pinStyle != PinStyle.threeD) {
       setState(() => _pinStyle = PinStyle.threeD);
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_kPinStylePref, '3d');
+      await prefs.setString(kPinStylePref, '3d');
     }
     await _reloadSelectionImage();
     // Ambiente existente: força recompor o sprite próprio na próxima montagem.
-    if (_envPersisted) _registeredEnvImages.remove(_currentEnvId);
+    if (_envPersisted) registeredEnvImages.remove(_currentEnvId);
     await _reapplyPins();
     if (mounted) setState(() {}); // atualiza preview no sheet, se aberto
   }
@@ -991,7 +844,7 @@ class _AddEnvironmentScreenState extends ConsumerState<AddEnvironmentScreen> {
         initialStyle: _pinStyle,
         hasUserImage: _pinImagePath != null,
         classicThumbAsset: 'assets/pin_teardrop_verde.png',
-        render3d: () => _render3dPinBytes(_pinImagePath),
+        render3d: () => render3dPinBytes(_pinImagePath),
         onSelectClassic: () => _setPinStyle(PinStyle.classic),
         onSelect3D:      () => _setPinStyle(PinStyle.threeD),
         onPickImage:     _pickPinImage,

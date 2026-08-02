@@ -39,6 +39,7 @@ import '../../../infrastructure/location/location_guard.dart';
 import '../../../infrastructure/logging/app_logger.dart';
 import '../../../infrastructure/weather/weather_service.dart';
 import '../../../infrastructure/voice/voice_service.dart';
+import '../../../infrastructure/voice/groq_stt_service.dart'; // GroqUnavailableException (aviso reativo sem internet)
 import '../../../infrastructure/voice/execution_plan.dart';
 import '../../../infrastructure/voice/voice_action_executor.dart';
 import '../../../infrastructure/voice/action_handlers_builder.dart';
@@ -61,6 +62,7 @@ import '../../providers/voice_providers.dart';
 import '../../providers/weather_providers.dart';
 import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_card.dart';
+import '../../widgets/voice_text_popup.dart';
 import '../../widgets/sopro_primary_button.dart';
 import '../ble/people_nearby_screen.dart';
 import '../environment/add_environment_screen.dart';
@@ -122,32 +124,9 @@ class HomeTabContent extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 4),
-          // DEBUG TEMPORÁRIO — remover junto com o motor de lembretes debug.
-          // InkWell único cobre tap (Perfil) e long-press ('/benchmark') sem
-          // GestureDetector externo — evita o conflito de gesture arena com o
-          // InkResponse interno do IconButton (long-press ficava não confiável).
-          // Estilo replicado do IconButton anterior (fundo/borda/raio 12).
-          Tooltip(
-            message: AppStrings.profileTooltip,
-            child: Container(
-              decoration: BoxDecoration(
-                color: AppColors.appBarButtonBg,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.border, width: 0.5),
-              ),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: () => Navigator.pushNamed(context, '/profile'),
-                onLongPress: () => Navigator.pushNamed(context, '/benchmark'),
-                child: const Padding(
-                  padding: EdgeInsets.all(8),
-                  child: Icon(Icons.person_outline,
-                      color: AppColors.appBarButtonIcon),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: 4),
+          // Ícone de Perfil removido da AppBar: redundante com a aba "Perfil"
+          // da bottom nav (mesma navegação). Junto saiu o long-press que abria
+          // a tela de benchmark (dev), agora deletada.
           IconButton(
             onPressed: () => pushScreen(context, const SettingsScreen()),
             icon: const Icon(Icons.settings_outlined, color: AppColors.appBarButtonIcon),
@@ -762,7 +741,42 @@ enum _FabState {
 class _VoiceConfirmRequest {
   final String question;
   final Future<void> Function() onYes;
-  const _VoiceConfirmRequest({required this.question, required this.onYes});
+  // TTL — confirmação pontual expira em 60s (mais curto que o contexto geral de
+  // 2min). Evita executar uma ação destrutiva a partir de uma resposta muito
+  // atrasada deixada pendurada na RAM. Mesmo padrão do _EnvLocationPending (30s).
+  final DateTime _setAt;
+  _VoiceConfirmRequest({required this.question, required this.onYes})
+      : _setAt = DateTime.now();
+  static const _ttl = Duration(seconds: 60);
+  bool get isExpired => DateTime.now().difference(_setAt) > _ttl;
+}
+
+// Encadeamento (Etapa 2) — após criar um ambiente por voz oferecemos criar um
+// gatilho ali. Enquanto pendente, a PRÓXIMA fala é a resposta sim/não (100%
+// local, sem Gemini). Efêmero (RAM), TTL 30s como os outros pendings. [envName]
+// é o ambiente recém-criado onde o gatilho nascerá se o usuário aceitar.
+class _ChainTriggerPending {
+  final String envName;
+  final DateTime _setAt;
+  _ChainTriggerPending(this.envName) : _setAt = DateTime.now();
+  static const _ttl = Duration(seconds: 30);
+  bool get isExpired => DateTime.now().difference(_setAt) > _ttl;
+}
+
+// Etapa 3.1 (completar em vez de falhar) — qual alvo esclarecer.
+enum _ClarifyKind { environment, trigger }
+
+// Ação original que falhou por alvo não encontrado (ambiente/gatilho),
+// aguardando o usuário dizer qual. A PRÓXIMA fala é a resposta (nome/título) e
+// re-tenta a MESMA ação uma vez; não casar/cancelar/timeout falha normal (sem
+// loop). RAM efêmero, TTL 30s como os outros pendings.
+class _ClarifyTargetPending {
+  final VoiceAction action;
+  final _ClarifyKind kind;
+  final DateTime _setAt;
+  _ClarifyTargetPending(this.action, this.kind) : _setAt = DateTime.now();
+  static const _ttl = Duration(seconds: 30);
+  bool get isExpired => DateTime.now().difference(_setAt) > _ttl;
 }
 
 // Resolução Inteligente de Localização — etapa da conversa de criação de ambiente
@@ -781,6 +795,9 @@ class _EnvLocationPending {
   final String name;
   final _EnvTurn turn;
   final List<GeocodingResult> candidates;
+  // BLOCO 1 — quando != null, o fluxo de local NÃO cria um ambiente novo: ATUALIZA
+  // as coords do ambiente existente com este id (retarget do fluxo do create).
+  final String? updateEnvId;
   // TTL — pendência efêmera em RAM expira em 30s sem resposta (mesmo padrão do
   // overlay nativo voice_state_set_at). Evita ficar presa para sempre se o
   // usuário desistir. Só o gate de expiração a zera por tempo; nunca o gate de
@@ -790,11 +807,102 @@ class _EnvLocationPending {
     required this.name,
     required this.turn,
     this.candidates = const [],
+    this.updateEnvId,
   }) : _setAt = DateTime.now();
+
+  // Restaura de um estado persistido preservando o timestamp original — o TTL
+  // conta desde a criação real, não desde o resume (senão nunca expiraria).
+  _EnvLocationPending._restored({
+    required this.name,
+    required this.turn,
+    required this.candidates,
+    required DateTime setAt,
+    this.updateEnvId,
+  }) : _setAt = setAt;
 
   static const _ttl = Duration(seconds: 30);
   bool get isExpired => DateTime.now().difference(_setAt) > _ttl;
   void touch() => _setAt = DateTime.now();
+
+  // Serialização para SharedPreferences (paridade com o overlay nativo: o fluxo
+  // sobrevive a fechar/trocar de app). Guarda turno, nome, timestamp e candidatos.
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'turn': turn.name,
+        'set_at': _setAt.millisecondsSinceEpoch,
+        'update_env_id': updateEnvId,
+        'candidates': candidates
+            .map((c) => {
+                  'displayName': c.displayName,
+                  'lat': c.lat,
+                  'lon': c.lon,
+                  'source': c.source,
+                })
+            .toList(),
+      };
+
+  // Reconstrói do JSON salvo. Null se o payload estiver corrompido/incompleto.
+  static _EnvLocationPending? fromJson(Map<String, dynamic> j) {
+    final turnName = j['turn'] as String?;
+    final name     = j['name'] as String?;
+    final setAtMs  = j['set_at'] as int?;
+    if (turnName == null || name == null || setAtMs == null) return null;
+    _EnvTurn? turn;
+    for (final t in _EnvTurn.values) {
+      if (t.name == turnName) { turn = t; break; }
+    }
+    if (turn == null) return null;
+    final cands = ((j['candidates'] as List?) ?? const [])
+        .map((e) {
+          final m = e as Map<String, dynamic>;
+          return GeocodingResult(
+            displayName: m['displayName'] as String? ?? '',
+            lat: (m['lat'] as num).toDouble(),
+            lon: (m['lon'] as num).toDouble(),
+            source: m['source'] as String? ?? '',
+          );
+        })
+        .toList();
+    return _EnvLocationPending._restored(
+      name: name, turn: turn, candidates: cands,
+      setAt: DateTime.fromMillisecondsSinceEpoch(setAtMs),
+      updateEnvId: j['update_env_id'] as String?,
+    );
+  }
+}
+
+// Casa um nome de ambiente contra os existentes (igualdade normalizada ou
+// similaridade > 95%). Top-level para ser reusável fora do _VoiceFabState —
+// a HomeComposerBar (texto) precisa da MESMA lógica de casamento do caminho de voz.
+EnvironmentEntity? matchEnvByName(List<EnvironmentEntity> envs, String? query) {
+  if (query == null || query.trim().isEmpty) return null;
+  final q = _VoiceFabState._normEnvName(query);
+  // 1. Igualdade exata (caixa/espaços normalizados) — prioridade máxima.
+  final exact = envs.where((e) => _VoiceFabState._normEnvName(e.name) == q).firstOrNull;
+  if (exact != null) return exact;
+  // 2. Similaridade alta (> 95%) — nunca reutiliza nomes distintos.
+  for (final e in envs) {
+    if (_VoiceFabState._nameSimilarity(_VoiceFabState._normEnvName(e.name), q) > 0.95) {
+      return e;
+    }
+  }
+  return null;
+}
+
+// Detecta, num plano, um update_environment com `address` preenchido cujo alvo já
+// existe. Compartilhado entre voz (_runAssistantPlan) e texto (HomeComposerBar):
+// os dois caminhos usam esta MESMA checagem para entrar no fluxo interativo de
+// confirmação de endereço, em vez de mandar a ação pro executor (que ignora address).
+({EnvironmentEntity env, String address})? findAddressUpdate(
+    ExecutionPlan plan, List<EnvironmentEntity> envs) {
+  for (final a in plan.actions) {
+    if (a.type != VoiceActionType.updateEnvironment) continue;
+    final address = a.str(['address']);
+    if (address == null) continue;
+    final env = matchEnvByName(envs, a.str(['name', 'environment']));
+    if (env != null) return (env: env, address: address);
+  }
+  return null;
 }
 
 // ── Botão de voz flutuante (WhatsApp-style) ───────────────────────────────────
@@ -856,10 +964,30 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   // Mantido em RAM (não persiste) — some se a tela for descartada.
   _VoiceConfirmRequest? _pendingConfirm;
 
+  // Encadeamento (Etapa 2) — quando != null, acabamos de criar um ambiente por
+  // voz e perguntamos se o usuário quer criar um gatilho ali. A próxima fala é
+  // resolvida localmente (parseYesNo): só sim/não/cancelamento contam como
+  // resposta; qualquer outra coisa DISPENSA a oferta e vira comando novo (nunca
+  // prende). RAM efêmero, TTL 30s.
+  _ChainTriggerPending? _chainTriggerPending;
+
+  // Etapa 3.1 — quando != null, uma ação falhou por alvo não encontrado e
+  // perguntamos qual ambiente/gatilho. A próxima fala é a resposta (nome/título);
+  // re-tenta a ação original uma vez. RAM efêmero, TTL 30s.
+  _ClarifyTargetPending? _clarifyPending;
+
   // Resolução Inteligente de Localização — quando != null, a próxima gravação
   // responde a uma pergunta da conversa de criação de ambiente (confirmar GPS,
-  // ditar endereço, escolher estabelecimento). Efêmero (RAM), como _pendingConfirm.
-  _EnvLocationPending? _envLocationPending;
+  // ditar endereço, escolher estabelecimento). Espelhado em SharedPreferences
+  // (getter/setter abaixo) para SOBREVIVER a fechar/trocar de app — paridade com
+  // o overlay nativo. A RAM é a fonte primária; o disco é só backup de resume.
+  static const _kEnvPendingKey = 'home_env_location_pending';
+  _EnvLocationPending? __envLocationPending;
+  _EnvLocationPending? get _envLocationPending => __envLocationPending;
+  set _envLocationPending(_EnvLocationPending? v) {
+    __envLocationPending = v;
+    _persistEnvPending(v); // toda escrita reflete no disco (null → remove)
+  }
 
   // Ações do plano (gatilhos etc.) que aguardam a criação do ambiente para rodar
   // no ambiente recém-criado — reutilizadas pelo executor SEM resolver GPS.
@@ -873,6 +1001,9 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   @override
   void initState() {
     super.initState();
+    // Retoma um fluxo de resolução de local salvo (ex.: processo morto em 2º
+    // plano). Fire-and-forget; descarta silenciosamente se expirado (>30s).
+    _restoreEnvPending();
     _pulseCtrl = AnimationController(
       duration: const Duration(milliseconds: 700),
       vsync: this,
@@ -901,10 +1032,22 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         if (json != null && mounted) _handleServicePendingIntent(json);
       }
     });
+
+    // Ponte texto→voz: registra o fluxo interativo de update de endereço para a
+    // HomeComposerBar (texto) reusar o MESMO caminho da voz. addPostFrameCallback
+    // evita alterar o provider durante o build inicial. Limpo no dispose.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(voiceAddressUpdateHandlerProvider.notifier).state =
+          (env, address) => _resolveEnvironmentAddressUpdate(
+              env, address, ref.read(conversationContextProvider));
+    });
   }
 
   @override
   void dispose() {
+    // Libera a ponte de update de endereço (não chamar um State desmontado).
+    ref.read(voiceAddressUpdateHandlerProvider.notifier).state = null;
     _autoStopSub?.cancel();
     _overlayChannel.setMethodCallHandler(null); // cancela o listener ao sair da tela
     _pulseCtrl.dispose();
@@ -938,6 +1081,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       if (mounted) setState(() => _isVisuallyPressed = false);
     });
     _pulseCtrl.repeat(reverse: true);
+    // Liga a onda + segundos no composer (troca o campo de texto enquanto grava).
+    ref.read(recordingActiveProvider.notifier).state = true;
     _recordingTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) { t.cancel(); return; }
       setState(() => _recordingSeconds++);
@@ -1011,6 +1156,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     _recordingTimer = null;
     _pulseCtrl.stop();
     _pulseCtrl.reset();
+    ref.read(recordingActiveProvider.notifier).state = false; // desliga a onda do composer
     setState(() => _fabState = _FabState.error);
     await Future.delayed(const Duration(milliseconds: 800));
     if (mounted) setState(() => _fabState = _FabState.idle);
@@ -1025,6 +1171,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     _recordingTimer = null;
     _pulseCtrl.stop();
     _pulseCtrl.reset();
+    ref.read(recordingActiveProvider.notifier).state = false; // desliga a onda do composer
     if (!mounted) return;
     setState(() => _fabState = _FabState.processing);
 
@@ -1035,7 +1182,26 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     final String? transcript;
     if (service.useSherpaVoice) {
       final wav = await service.stopRecording();
-      transcript = wav == null ? null : await service.transcribeWav(wav);
+      if (wav == null) {
+        transcript = null;
+      } else {
+        try {
+          transcript = await service.transcribeWav(wav);
+        } on GroqUnavailableException {
+          // STT é só nuvem (Whisper local removido): sem internet não dá para
+          // transcrever. Aviso reativo sugerindo o campo de texto e encerra —
+          // não processa nada.
+          if (mounted) {
+            setState(() => _fabState = _FabState.idle);
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content:  Text(AppStrings.voiceNoInternet),
+              duration: Duration(seconds: 4),
+              behavior: SnackBarBehavior.floating,
+            ));
+          }
+          return;
+        }
+      }
     } else {
       transcript = await service.stopListening();
     }
@@ -1061,6 +1227,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         // Nada reconhecido: NÃO descarta o pending — renova o TTL e pede para
         // repetir. A próxima fala continua respondendo a mesma pergunta.
         _envLocationPending!.touch();
+        _persistEnvPending(_envLocationPending); // renova o TTL salvo em disco
         if (mounted) setState(() => _fabState = _FabState.idle);
         await _speak(_say.notUnderstoodRepeat);
         return;
@@ -1089,6 +1256,56 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     if (_pendingConfirm != null) {
       await _resolveVoiceConfirmation(spoken);
       return;
+    }
+
+    // Encadeamento (Etapa 2) — se há oferta de criar gatilho pendente, esta fala
+    // pode ser a resposta sim/não (100% local, sem Gemini). Regra de dispensa
+    // (decisão do usuário): só sim/não/cancelamento contam; QUALQUER outra fala
+    // dispensa a oferta e segue como comando novo (não prende). TTL 30s.
+    final chain = _chainTriggerPending;
+    if (chain != null && !chain.isExpired) {
+      if (_isCancelPhrase(spoken)) {
+        _chainTriggerPending = null;
+        if (mounted) setState(() => _fabState = _FabState.idle);
+        await _speak(_say.operationCancelled);
+        return;
+      }
+      final ans = VoiceService.parseYesNo(spoken);
+      if (ans == true) {
+        _chainTriggerPending = null;
+        await _startChainTriggerFlow(chain.envName);
+        return;
+      }
+      if (ans == false) {
+        _chainTriggerPending = null;
+        if (mounted) setState(() => _fabState = _FabState.idle);
+        await _speak(_say.chainDeclined);
+        return;
+      }
+      // Ambíguo/comando novo: dispensa a oferta e CAI no fluxo normal abaixo
+      // (esta fala é processada como comando pelo Gemini). Nunca prende.
+      _chainTriggerPending = null;
+    } else if (chain != null) {
+      // Expirou (>30s): descarta e segue — esta fala é comando novo.
+      _chainTriggerPending = null;
+    }
+
+    // Etapa 3.1 — se há uma pergunta de "qual alvo?" pendente (ambiente/gatilho
+    // não encontrado), esta fala é a resposta. Mid-task como choose_place: a fala
+    // É o nome/título. Cancelamento encerra; senão re-tenta a ação original.
+    final clarify = _clarifyPending;
+    if (clarify != null && !clarify.isExpired) {
+      if (_isCancelPhrase(spoken)) {
+        _clarifyPending = null;
+        if (mounted) setState(() => _fabState = _FabState.idle);
+        await _speak(_say.operationCancelled);
+        return;
+      }
+      await _resolveClarifyTurn(spoken);
+      return;
+    } else if (clarify != null) {
+      // Expirou: descarta e segue — esta fala é comando novo.
+      _clarifyPending = null;
     }
 
     try {
@@ -1201,6 +1418,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     _recordingTimer = null;
     _pulseCtrl.stop();
     _pulseCtrl.reset();
+    ref.read(recordingActiveProvider.notifier).state = false; // desliga a onda do composer
     _cancelVoiceCapture();
     if (mounted) {
       setState(() => _fabState = _FabState.idle);
@@ -1218,6 +1436,9 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   // Fala [text] via TTS se o toggle "Responder com áudio" estiver ativo.
   // Respeita a velocidade configurada pelo usuário. Falha silenciosa.
   Future<void> _speak(String text) async {
+    // Modo "Responder com texto": mostra a fala como popup ANTES do guard de
+    // audio — assim audio OFF + texto ON vira modo so-leitura (acessibilidade).
+    VoiceTextPopup.show(context, ref, text);
     if (!ref.read(voiceAudioResponseProvider)) return;
     final rate = ref.read(voiceSpeechRateProvider);
     try {
@@ -1294,11 +1515,9 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     AppLogger.log('voice_confirmation_started', {'surface': 'home'}); // BUG 9
     await _speak(question);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content:  Text(AppStrings.voiceAnswerYesNo),
-      duration: Duration(seconds: 3),
-      behavior: SnackBarBehavior.floating,
-    ));
+    // Indicador "segure e responda sim/não" no MESMO popup do topo (duração +
+    // posição de VoiceTextPopup) — não cobre o botão como o SnackBar de rodapé.
+    VoiceTextPopup.show(context, ref, AppStrings.voiceAnswerYesNo);
   }
 
   // Interpreta a fala como resposta de confirmação (sim/não).
@@ -1312,6 +1531,14 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     final pending = _pendingConfirm;
     _pendingConfirm = null; // consome o estado antes de qualquer await/erro
     if (pending == null) return;
+    // Confirmação expirada (>60s): trata como cancelada (default seguro). Uma ação
+    // destrutiva nunca roda a partir de uma resposta muito atrasada.
+    if (pending.isExpired) {
+      AppLogger.log('voice_confirmation_expired', {'surface': 'home'});
+      if (mounted) setState(() => _fabState = _FabState.idle);
+      await _speak(_say.operationCancelled);
+      return;
+    }
 
     if (mounted) setState(() => _fabState = _FabState.processing);
     // Confirmação resolvida localmente (nunca remota).
@@ -1438,6 +1665,19 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     // qualquer plano com UM ambiente NOVO (mesmo misto) passa pelo resolvedor;
     // as demais ações ficam pendentes e rodam DEPOIS da criação (nunca GPS cego).
     final envs = await ref.read(environmentRepositoryProvider).getAll();
+
+    // BLOCO 1 — atualização de endereço: se o plano pede atualizar um ambiente
+    // EXISTENTE informando um endereço, conduz o MESMO fluxo interativo de local
+    // do create (busca + confirmação), mas retargetado pra ATUALIZAR as coords do
+    // ambiente existente. Roda antes do Planner (que não conhece "address").
+    final addrUpdate = findAddressUpdate(planRes.plan, envs);
+    if (addrUpdate != null) {
+      if (mounted) setState(() => _fabState = _FabState.idle);
+      await _resolveEnvironmentAddressUpdate(
+          addrUpdate.env, addrUpdate.address, ctx);
+      return;
+    }
+
     final swPlan = Stopwatch()..start(); // DEBUG TIMING
     final decision = const Planner().decide(
       planRes.plan,
@@ -1496,7 +1736,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     if (planRes.plan.needsLocation) sharedLoc = await _resolveSharedLocation();
 
     final execSw   = Stopwatch()..start(); // BUG 4 (temporário) — só a execução
-    final executor = VoiceActionExecutor(_buildActionHandlers(sharedLoc));
+    final executor = VoiceActionExecutor(
+        _buildActionHandlers(sharedLoc, transcript: planRes.transcript));
     final summary  = await executor.run(planRes.plan);
     final execMs   = execSw.elapsedMilliseconds;
     debugPrint('[SOPROPERF] EXECUTION_MS=$execMs'); // DEBUG TIMING
@@ -1544,6 +1785,18 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
 
     if (!mounted) return;
 
+    // Etapa 3.1 — "completar em vez de falhar": se alguma ação falhou por alvo
+    // não encontrado (ambiente/gatilho), pergunta qual em vez de só reportar erro.
+    // Só o 1º alvo ambíguo por turno; re-tentativa única em _resolveClarifyTurn.
+    for (final a in summary.plan.actions) {
+      if (a.status == ActionStatus.failed &&
+          (a.error == 'ambiente_nao_encontrado' ||
+              a.error == 'lembrete_nao_encontrado')) {
+        await _startClarifyFlow(a);
+        return;
+      }
+    }
+
     // Resposta final natural conforme o resultado
     if (summary.ok == 0 && summary.failed > 0) {
       setState(() => _fabState = _FabState.idle);
@@ -1552,12 +1805,42 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       setState(() => _fabState = _FabState.idle);
       await _speak(_say.partialFailure(summary.failed));
     } else {
+      // FIX regressao — no caminho destrutivo-confirmado o reply nunca e falado
+      // antes (so a pergunta de confirmacao passa por _speak; ver Planner:
+      // hasDestructive -> confirmDestructive, sem cair no ramo execute). Sem isto
+      // o sucesso ficava mudo (so o check verde). Fala a confirmacao por tipo de
+      // acao apagada, reusando as frases da persona (mesmas dos handlers legados).
+      if (planRes.plan.hasDestructive) {
+        for (final a in summary.plan.actions) {
+          if (a.status == ActionStatus.done && a.isDestructive) {
+            final line = _destructiveDoneLine(a);
+            if (line != null && mounted) await _speak(line);
+          }
+        }
+      }
       await _setSuccess();
       if (planRes.followUp != null &&
           planRes.followUp!.trim().isNotEmpty &&
           mounted) {
         await _speak(planRes.followUp!);
       }
+    }
+  }
+
+  // Frase de sucesso de uma acao destrutiva concluida — reusa a persona (mesmas
+  // frases dos handlers legados). Retorna null para tipos nao destrutivos.
+  String? _destructiveDoneLine(VoiceAction a) {
+    switch (a.type) {
+      case VoiceActionType.deleteTrigger:
+        return _say.reminderRemoved;
+      case VoiceActionType.deleteEnvironment:
+        return _say.environmentRemoved(a.str(['environment', 'name']) ?? '');
+      case VoiceActionType.deleteAllTriggers:
+        return _say.allRemindersRemoved(a.str(['environment', 'name']) ?? '');
+      case VoiceActionType.deleteAllEnvironments:
+        return _say.allEnvsDeleted;
+      default:
+        return null;
     }
   }
 
@@ -1573,6 +1856,21 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       debugPrint('[_VoiceFab] GPS do plano falhou: $e');
       return null;
     }
+  }
+
+  // BLOCO 1 — procura no plano a 1ª ação update_environment que traga um endereço
+  // (texto livre) E case com um ambiente já existente. Devolve (ambiente, endereço)
+  // pra conduzir o fluxo interativo de local retargetado pra UPDATE. Sem address,
+  // ou ambiente inexistente → null (segue o caminho normal: radius / clarify).
+  // BLOCO 1 — inicia a atualização de endereço de um ambiente existente. Vai
+  // DIRETO à busca do endereço ditado (sem GPS/classify), reutilizando todo o
+  // fluxo de geocoding/confirmação do create, com o alvo de UPDATE marcado (id).
+  Future<void> _resolveEnvironmentAddressUpdate(
+      EnvironmentEntity env, String address, ConversationContext ctx) async {
+    ctx.pendingEnvName = env.name;
+    ctx.state = ConversationState.awaitingInformation;
+    AppLogger.log('address_update_started', {'env': env.name});
+    await _runPlaceSearch(env.name, address, updateEnvId: env.id);
   }
 
   // ── Resolução Inteligente de Localização ─────────────────────────────────
@@ -1658,6 +1956,7 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     _recordingTimer = null;
     _pulseCtrl.stop();
     _pulseCtrl.reset();
+    ref.read(recordingActiveProvider.notifier).state = false; // desliga a onda do composer
     try {
       await _cancelVoiceCapture();
     } catch (_) {}
@@ -1680,12 +1979,13 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   }
 
   // Pede o endereço para geocodificar (Caso 4 e fallback de GPS/place negados).
-  Future<void> _askEnvAddress(String name) async {
+  Future<void> _askEnvAddress(String name, {String? updateEnvId}) async {
     final ctx = ref.read(conversationContextProvider);
     ctx.pendingLocationStage = 'await_address';
     const q = 'Qual o endereço?';
     ctx.lastQuestion = q;
-    _envLocationPending = _EnvLocationPending(name: name, turn: _EnvTurn.askAddress);
+    _envLocationPending = _EnvLocationPending(
+        name: name, turn: _EnvTurn.askAddress, updateEnvId: updateEnvId);
     await _askAndWait(q);
   }
 
@@ -1701,7 +2001,25 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
 
   // Executa a busca de estabelecimento REUTILIZANDO o geocodingRepository
   // (cache → Geocoder → Photon). [name] é o nome do ambiente; [query] o texto pesquisado.
-  Future<void> _runPlaceSearch(String name, String query) async {
+  // Aquece last_known_lat/lon com um fix GPS fresco quando estão vazios — assim a
+  // busca de lugar herda viés de proximidade em vez de cair pra global. Best-effort:
+  // GPS desligado/negado/lento não trava (timeout 4s). Mesma fonte de add_environment.
+  Future<void> _warmUpBiasCoords(SharedPreferences prefs) async {
+    try {
+      final locSvc = ref.read(nativeLocationServiceProvider);
+      if (!await locSvc.isLocationEnabled()) return;
+      final pos = await locSvc
+          .getCurrentPosition()
+          .timeout(const Duration(seconds: 4), onTimeout: () => null);
+      if (pos != null) {
+        await prefs.setDouble('last_known_lat', pos.latitude);
+        await prefs.setDouble('last_known_lon', pos.longitude);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _runPlaceSearch(String name, String query,
+      {String? updateEnvId}) async {
     if (mounted) setState(() => _fabState = _FabState.processing);
     // TEMP: remover após auditoria do Place Search
     final prefs = await SharedPreferences.getInstance();
@@ -1710,6 +2028,12 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       if (v is double) return v;
       if (v is String) return double.tryParse(v);
       return null;
+    }
+    // Viés depende de last_known_lat/lon; vazio → busca global (traz outra
+    // região). Aquece um fix fresco antes de buscar (best-effort, não bloqueia).
+    if ((lastCoord('last_known_lat') ?? 0.0) == 0.0) {
+      await _warmUpBiasCoords(prefs);
+      if (!mounted) return;
     }
     AppLogger.log('place_search_request', {
       'query':     query,
@@ -1745,13 +2069,14 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       brandHint: norm.brandHint,
       locationHints: norm.locationHints,
       categoryHint: norm.categoryHint,
+      proximityPrimary: norm.isGenericCategory,
     );
     // TEMP remover após validação da Etapa 2.
     AppLogger.log('ranking_confidence', {
       'confidence': rank.confidence.name,
       'reason':     rank.reason,
     });
-    await _presentPlaceResults(name, rank);
+    await _presentPlaceResults(name, rank, updateEnvId: updateEnvId);
   }
 
   // DecisionEngine (Etapa 2) — roteia pela CONFIANÇA do RankResult, sem score:
@@ -1759,14 +2084,16 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   //   MEDIUM   → confirma apenas o primeiro ("Você quis dizer …?");
   //   LOW      → lista os candidatos e pede a escolha;
   //   no_match → pede um endereço mais específico.
-  Future<void> _presentPlaceResults(String name, RankResult rank) async {
+  Future<void> _presentPlaceResults(String name, RankResult rank,
+      {String? updateEnvId}) async {
     final ctx = ref.read(conversationContextProvider);
     final results = rank.orderedCandidates;
 
     // Sem resultados / sem casamento → pede endereço.
     if (results.isEmpty || rank.reason == 'no_match') {
       ctx.pendingLocationStage = 'await_address';
-      _envLocationPending = _EnvLocationPending(name: name, turn: _EnvTurn.askAddress);
+      _envLocationPending = _EnvLocationPending(
+          name: name, turn: _EnvTurn.askAddress, updateEnvId: updateEnvId);
       await _askAndWait('Não encontrei $name. Qual o endereço?');
       return;
     }
@@ -1791,10 +2118,11 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       'auto_selected': autoSelected,
     });
 
-    // HIGH → cria automaticamente o primeiro.
+    // HIGH → cria (ou atualiza) automaticamente o primeiro.
     if (rank.confidence == LocationConfidence.high) {
       final r = results.first;
-      await _createEnvironmentAtCoords(name, r.lat, r.lon, ctx);
+      await _createEnvironmentAtCoords(name, r.lat, r.lon, ctx,
+          updateEnvId: updateEnvId);
       return;
     }
 
@@ -1803,7 +2131,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
       final r = results.first;
       ctx.pendingLocationStage = 'confirm_place';
       _envLocationPending = _EnvLocationPending(
-          name: name, turn: _EnvTurn.confirmPlace, candidates: [r]);
+          name: name, turn: _EnvTurn.confirmPlace, candidates: [r],
+          updateEnvId: updateEnvId);
       // LOG TEMPORÁRIO — confirmação de local único.
       AppLogger.log('location_confirmation_started',
           {'name': name, 'stage': 'confirm_place'});
@@ -1815,7 +2144,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     final top = results.take(3).toList();
     ctx.pendingLocationStage = 'choose_place';
     _envLocationPending = _EnvLocationPending(
-        name: name, turn: _EnvTurn.choosePlace, candidates: top);
+        name: name, turn: _EnvTurn.choosePlace, candidates: top,
+        updateEnvId: updateEnvId);
     final buf = StringBuffer('Encontrei alguns locais. ');
     for (var i = 0; i < top.length; i++) {
       buf.write('${i + 1}: ${_spoken(top[i].displayName)}. ');
@@ -1832,6 +2162,14 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     _envLocationPending = null;
     if (pending == null) return;
     final ctx = ref.read(conversationContextProvider);
+    // Desistência universal: em QUALQUER etapa do fluxo de local (confirm_gps,
+    // confirm_place, choose_place, await_address, await_specifier) uma frase de
+    // cancelamento encerra de vez — ANTES de parseYesNo ou geocoding. Sem isso,
+    // negativos só reciclavam pedindo endereço e não havia como abortar.
+    if (_isCancelPhrase(transcript)) {
+      await _cancelEnvFlow(ctx);
+      return;
+    }
     if (mounted) setState(() => _fabState = _FabState.processing);
 
     switch (pending.turn) {
@@ -1858,7 +2196,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         // BUG 2 — "nenhum/não é esse": descarta o resultado e pede endereço mais
         // específico (nunca reapresenta o mesmo local).
         if (_isNoneAnswer(replyPlace)) {
-          await _askMoreSpecificAddress(pending.name);
+          await _askMoreSpecificAddress(pending.name,
+              updateEnvId: pending.updateEnvId);
           return;
         }
         final ansPlace = VoiceService.parseYesNo(replyPlace);
@@ -1875,9 +2214,10 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
             'longitude':   r.lon,
             'source':      r.source,
           });
-          await _createEnvironmentAtCoords(pending.name, r.lat, r.lon, ctx);
+          await _createEnvironmentAtCoords(pending.name, r.lat, r.lon, ctx,
+              updateEnvId: pending.updateEnvId);
         } else {
-          await _askEnvAddress(pending.name);
+          await _askEnvAddress(pending.name, updateEnvId: pending.updateEnvId);
         }
       // Endereço ditado → geocodifica e apresenta.
       case _EnvTurn.askAddress:
@@ -1888,7 +2228,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
           await _speak(_say.addressNotUnderstood);
           return;
         }
-        await _runPlaceSearch(pending.name, addr);
+        await _runPlaceSearch(pending.name, addr,
+            updateEnvId: pending.updateEnvId);
       // Especificador da categoria ("Assaí") → pesquisa.
       case _EnvTurn.askSpecifier:
         final spec = transcript;
@@ -1906,7 +2247,8 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
         // BUG 2 — "nenhum/não é esse/outra opção": descarta a lista, limpa a
         // seleção e pede endereço mais específico. Nunca repete a mesma lista.
         if (_isNoneAnswer(answerChoose)) {
-          await _askMoreSpecificAddress(pending.name);
+          await _askMoreSpecificAddress(pending.name,
+              updateEnvId: pending.updateEnvId);
           return;
         }
         final chosen = _pickCandidate(answerChoose, pending.candidates);
@@ -1922,8 +2264,18 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
             'longitude':   chosen.lon,
             'source':      chosen.source,
           });
-          await _createEnvironmentAtCoords(pending.name, chosen.lat, chosen.lon, ctx);
+          await _createEnvironmentAtCoords(pending.name, chosen.lat, chosen.lon, ctx,
+              updateEnvId: pending.updateEnvId);
         } else {
+          // Ambíguo: RE-ARMA a MESMA lista (renova o TTL de 30s) para o reprompt
+          // valer de verdade — a próxima fala volta a escolher da lista em vez de
+          // virar um comando novo. Espelha o fix do overlay (AWAITING_ENV_CONFIRM).
+          _envLocationPending = _EnvLocationPending(
+            name: pending.name,
+            turn: _EnvTurn.choosePlace,
+            candidates: pending.candidates,
+            updateEnvId: pending.updateEnvId,
+          );
           setState(() => _fabState = _FabState.idle);
           await _speak(_say.notUnderstoodWhichRepeat);
         }
@@ -1970,16 +2322,97 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     return phrases.any((p) => t.contains(p));
   }
 
+  // Reconhece frases de DESISTÊNCIA do fluxo de local ("cancela", "pode
+  // encerrar", "esquece isso", "deixa pra lá", "para", "sair"...). Rodada ANTES
+  // de parseYesNo/geocoding para o usuário sempre poder abortar. Local, sem rede.
+  static bool _isCancelPhrase(String? text) {
+    if (text == null) return false;
+    final t = text.toLowerCase().trim();
+    if (t.isEmpty) return false;
+    // Frases distintivas — casam em qualquer posição (não ocorrem em endereços
+    // ou nomes de lugar reais, então são seguras via contains).
+    const strong = [
+      'cancel',                        // cancela, cancelar, cancelado
+      'encerr',                        // pode encerrar, encerra
+      'esquec',                        // esquece isso, esquecer
+      'desist',                        // desisto, desistir
+      'deixa pra', 'deixa para',       // deixa pra lá
+      'deixa quieto', 'deixa isso',
+      'sai dessa',
+      'nao quero mais', 'não quero mais',
+    ];
+    if (strong.any((p) => t.contains(p))) return true;
+    // Comandos curtos e ambíguos ("para", "sair") — só valem como cancelamento
+    // se forem a fala INTEIRA (poucas palavras), evitando falso positivo em
+    // endereços ("Rua Paraná", "vou para o centro").
+    final words = t.split(RegExp(r'\s+'));
+    if (words.length <= 3 &&
+        RegExp(r'\b(para|parar|pare|parou|sair|sai)\b').hasMatch(t)) {
+      return true;
+    }
+    return false;
+  }
+
+  // Encerramento REAL do fluxo de resolução de local: o usuário desistiu.
+  // Zera o estado pendente, marca a conversa como cancelada (estado do enum que
+  // antes nunca era usado) e confirma por voz. Volta o FAB ao idle.
+  Future<void> _cancelEnvFlow(ConversationContext ctx) async {
+    ctx.pendingEnvName = null;
+    ctx.pendingLocationStage = null;
+    ctx.state = ConversationState.cancelled;
+    ctx.touch();
+    // LOG TEMPORÁRIO — fluxo de local abortado pelo usuário.
+    AppLogger.log('location_resolution_finished',
+        {'created': false, 'cancelled': true});
+    if (mounted) setState(() => _fabState = _FabState.idle);
+    await _speak(_say.operationCancelled);
+  }
+
+  // ── Persistência do fluxo de resolução de local (paridade com o overlay) ────
+
+  // Espelha (ou limpa) o pending em SharedPreferences. Fire-and-forget: a RAM é a
+  // fonte primária; o disco só serve para sobreviver ao app morto em 2º plano.
+  Future<void> _persistEnvPending(_EnvLocationPending? p) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (p == null) {
+        await prefs.remove(_kEnvPendingKey);
+      } else {
+        await prefs.setString(_kEnvPendingKey, jsonEncode(p.toJson()));
+      }
+    } catch (_) {/* melhor esforço — nunca derruba o fluxo por falha de disco */}
+  }
+
+  // Retoma, no início da tela, um fluxo salvo (ex.: processo morto em 2º plano).
+  // Descarta se expirado (>30s) ou se já houver um fluxo ativo na RAM.
+  Future<void> _restoreEnvPending() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kEnvPendingKey);
+      if (raw == null) return;
+      final restored =
+          _EnvLocationPending.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      if (restored == null || restored.isExpired) {
+        await prefs.remove(_kEnvPendingKey); // corrompido/expirado → descarta
+        return;
+      }
+      // Não sobrescreve um fluxo já ativo na RAM (corrida com nova gravação).
+      if (!mounted || __envLocationPending != null) return;
+      __envLocationPending = restored; // restaura SEM re-persistir (já salvo)
+    } catch (_) {}
+  }
+
   // BUG 2 — descarta a seleção pendente e pede um endereço/ponto de referência
   // mais específico. Nunca reapresenta a mesma lista automaticamente.
-  Future<void> _askMoreSpecificAddress(String name) async {
+  Future<void> _askMoreSpecificAddress(String name, {String? updateEnvId}) async {
     final ctx = ref.read(conversationContextProvider);
     ctx.pendingLocationStage = 'await_address';
     const q =
         'Pode me informar um endereço mais específico ou um ponto de referência?';
     ctx.lastQuestion = q;
     // Novo turno de endereço com candidatos ZERADOS (lista antiga descartada).
-    _envLocationPending = _EnvLocationPending(name: name, turn: _EnvTurn.askAddress);
+    _envLocationPending = _EnvLocationPending(
+        name: name, turn: _EnvTurn.askAddress, updateEnvId: updateEnvId);
     await _askAndWait(q);
   }
 
@@ -1987,8 +2420,14 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   // repositório e o geofence nativo — mesmo caminho de _createEnvironmentFromGps.
   Future<void> _createEnvironmentAtCoords(
       String name, double lat, double lon, ConversationContext ctx,
-      {int radiusMeters = 100}) async {
+      {int radiusMeters = 100, String? updateEnvId}) async {
     if (mounted) setState(() => _fabState = _FabState.processing);
+    // BLOCO 1 — alvo de UPDATE: atualiza as coords do ambiente existente (mesmo
+    // id/nome/raio) e re-registra a geofence, em vez de criar um novo.
+    if (updateEnvId != null) {
+      await _updateEnvironmentCoords(updateEnvId, lat, lon, ctx);
+      return;
+    }
     // TEMP: remover após auditoria da resolução de localização
     AppLogger.log('environment_coordinates_before_creation', {
       'environment': name,
@@ -2044,6 +2483,55 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     await _finishEnvCreation(env.name, ctx);
   }
 
+  // BLOCO 1 — atualiza APENAS as coords (lat/lon) do ambiente existente, mantendo
+  // id/nome/raio/foto, e re-registra a geofence no novo ponto. Terminal do fluxo
+  // interativo quando é um update de endereço (não um create).
+  Future<void> _updateEnvironmentCoords(
+      String envId, double lat, double lon, ConversationContext ctx) async {
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    EnvironmentEntity? existing;
+    for (final e in envs) {
+      if (e.id == envId) { existing = e; break; }
+    }
+    if (existing == null) {
+      // Ambiente sumiu no meio do fluxo — aborta com feedback (não cria nada).
+      if (mounted) setState(() => _fabState = _FabState.idle);
+      await _speak(_say.environmentNotFoundGeneric);
+      return;
+    }
+    final updated = EnvironmentEntity(
+      id:           existing.id,
+      name:         existing.name,
+      latitude:     lat,
+      longitude:    lon,
+      radiusMeters: existing.radiusMeters,
+      createdAt:    existing.createdAt,
+      isMarket:     existing.isMarket,
+      pinImagePath: existing.pinImagePath,
+    );
+    await ref.read(environmentRepositoryProvider).save(updated);
+    await ref.read(nativeGeofenceServiceProvider).addSingleGeofence(updated);
+    AppLogger.log('env_address_updated',
+        {'env_id': updated.id, 'latitude': lat, 'longitude': lon});
+    await _finishEnvUpdate(updated.name, ctx);
+  }
+
+  // BLOCO 1 — encerra o update de endereço: refresh das listas, contexto concluído
+  // e confirmação falada. Sem oferta de encadeamento (é edição, não criação).
+  Future<void> _finishEnvUpdate(String name, ConversationContext ctx) async {
+    ref.invalidate(environmentsProvider);
+    ref.invalidate(triggersByEnvironmentProvider);
+    ctx.lastEnvironment = name;
+    ctx.pendingEnvName = null;
+    ctx.pendingLocationStage = null;
+    ctx.state = ConversationState.completed;
+    ctx.touch();
+    AppLogger.log('address_update_finished', {'name': name});
+    if (!mounted) return;
+    await _speak(_say.environmentAddressUpdated(name));
+    await _setSuccess();
+  }
+
   // Encerra a criação: atualiza providers e contexto, confirma por voz e mostra sucesso.
   Future<void> _finishEnvCreation(String name, ConversationContext ctx) async {
     ref.invalidate(environmentsProvider);
@@ -2055,11 +2543,140 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
     ctx.touch();
     // LOG TEMPORÁRIO — fim da resolução de localização.
     AppLogger.log('location_resolution_finished', {'created': true, 'name': name});
+    // Encadeamento (Etapa 2): a oferta só vale quando o comando criou SÓ o
+    // ambiente — nenhum gatilho/ação extra no plano (senão o usuário já disse o
+    // que queria). Capturado ANTES de _runPendingPostEnvActions zerar a lista.
+    final offerChain =
+        _pendingPostEnvActions == null || _pendingPostEnvActions!.isEmpty;
     // Executa os gatilhos pendentes do plano no ambiente recém-criado.
     await _runPendingPostEnvActions();
     if (!mounted) return;
     await _speak(_say.environmentCreated(name));
+    if (offerChain && mounted) {
+      // Arma a oferta e pergunta; a resposta sim/não vem na próxima fala e é
+      // resolvida localmente no dispatcher (sem chamada Gemini extra).
+      _chainTriggerPending = _ChainTriggerPending(name);
+      final q = _say.chainOffer(name);
+      ctx.lastQuestion = q; // contexto/telemetria; NÃO arma awaitingInformation
+      ctx.touch();
+      AppLogger.log('chain_trigger_offered', {'surface': 'home', 'env': name});
+      await _speak(q);
+    }
     await _setSuccess();
+  }
+
+  // Encadeamento (Etapa 2) — usuário aceitou criar um gatilho no ambiente
+  // recém-criado. Reutiliza EXATAMENTE o fluxo de follow-up já existente: arma
+  // awaitingInformation + a "pergunta" e a "fala original" (semente) para que a
+  // PRÓXIMA fala caia no continuationPreamble do Planner e o Gemini gere o
+  // create_trigger no ambiente certo — pulando a etapa de "qual ambiente".
+  Future<void> _startChainTriggerFlow(String envName) async {
+    final ctx = ref.read(conversationContextProvider);
+    final q = _say.chainAskTrigger(envName);
+    ctx.lastEnvironment = envName;      // ambiente já sabido → entra no contexto
+    ctx.lastQuestion = q;
+    // Semente do "comando original" que o continuationPreamble reconstrói.
+    ctx.lastTranscript = 'Criar um lembrete em $envName';
+    ctx.state = ConversationState.awaitingInformation;
+    ctx.touch();
+    AppLogger.log('chain_trigger_accepted', {'surface': 'home', 'env': envName});
+    if (mounted) setState(() => _fabState = _FabState.idle);
+    await _speak(q);
+  }
+
+  // Etapa 3.1 — alvo (ambiente/gatilho) da ação não existe no banco: em vez de
+  // reportar erro, arma um pending e pergunta qual. Oferece candidatos próximos
+  // quando houver (nomes de ambiente parecidos; ou títulos do ambiente casado).
+  Future<void> _startClarifyFlow(VoiceAction action) async {
+    final ctx = ref.read(conversationContextProvider);
+    final kind = action.error == 'ambiente_nao_encontrado'
+        ? _ClarifyKind.environment
+        : _ClarifyKind.trigger;
+    final envs = await ref.read(environmentRepositoryProvider).getAll();
+    final String q;
+    if (kind == _ClarifyKind.environment) {
+      final attempted = action.str(['environment', 'name']);
+      q = _say.clarifyEnvironment(attempted, _nearEnvNames(envs, attempted));
+    } else {
+      // Gatilho não achado: se o ambiente casa, lista seus títulos como opções.
+      final env = _matchEnv(envs, action.str(['environment', 'name']));
+      final cands = env == null
+          ? const <String>[]
+          : (await ref.read(triggerRepositoryProvider).getByEnvironment(env.id))
+              .map((t) => t.title)
+              .take(3)
+              .toList();
+      q = _say.clarifyTrigger(cands);
+    }
+    _clarifyPending = _ClarifyTargetPending(action, kind);
+    ctx.lastQuestion = q;
+    ctx.touch();
+    if (mounted) setState(() => _fabState = _FabState.idle);
+    AppLogger.log('clarify_target_asked', {'surface': 'home', 'kind': kind.name});
+    await _speak(q);
+  }
+
+  // Etapa 3.1 — resposta à pergunta de "qual alvo?": aplica o nome/título
+  // informado à ação original e re-tenta UMA vez (mesma Skill). Se não casar de
+  // novo, falha normal (couldNotFinishRetry) — sem loop.
+  Future<void> _resolveClarifyTurn(String answer) async {
+    final pending = _clarifyPending!;
+    _clarifyPending = null;
+    final action = pending.action;
+    if (pending.kind == _ClarifyKind.environment) {
+      // Cobre as duas chaves lidas pelas Skills ('environment' e 'name').
+      action.params['environment'] = answer;
+      action.params['name'] = answer;
+    } else {
+      action.params['title'] = answer;
+    }
+    // Reseta o estado da ação (estava 'failed') para a re-execução.
+    action.status = ActionStatus.pending;
+    action.error = null;
+    action.result = null;
+    // Segurança: se a ação é destrutiva, o "sim" anterior foi para o alvo ERRADO
+    // (nome que não existia). Re-confirma o alvo NOVO antes de apagar — reusa o
+    // mesmo fluxo de confirmação por voz. Não-destrutivo roda direto.
+    if (action.isDestructive) {
+      await _confirmByVoice(
+        _planDestructiveQuestion(ExecutionPlan([action])),
+        () => _runSingleAction(action),
+      );
+      return;
+    }
+    await _runSingleAction(action);
+  }
+
+  // Executa uma única ação já resolvida (re-tentativa do clarify) e fala o
+  // resultado. Sucesso → "Feito!"; falha (não casou de novo) → couldNotFinishRetry.
+  Future<void> _runSingleAction(VoiceAction action) async {
+    if (mounted) setState(() => _fabState = _FabState.processing);
+    final summary = await VoiceActionExecutor(_buildActionHandlers(null))
+        .run(ExecutionPlan([action]));
+    ref.invalidate(environmentsProvider);
+    ref.invalidate(triggersByEnvironmentProvider);
+    if (!mounted) return;
+    if (summary.ok > 0) {
+      await _setSuccess();
+      await _speak(AppStrings.remindersCommandSuccess); // "Feito!"
+    } else {
+      setState(() => _fabState = _FabState.idle);
+      await _speak(_say.couldNotFinishRetry);
+    }
+  }
+
+  // Nomes de ambiente PARECIDOS com o tentado (candidatos p/ a pergunta), sem os
+  // que já casariam (>0.95, esses nem chegam aqui). Ordena por similaridade.
+  List<String> _nearEnvNames(List<EnvironmentEntity> envs, String? attempted) {
+    if (attempted == null) return const [];
+    final q = _normEnvName(attempted);
+    final scored = <({double s, String name})>[];
+    for (final e in envs) {
+      final s = _nameSimilarity(_normEnvName(e.name), q);
+      if (s > 0.4 && s < 0.95) scored.add((s: s, name: e.name));
+    }
+    scored.sort((a, b) => b.s.compareTo(a.s));
+    return scored.take(3).map((e) => e.name).toList();
   }
 
   // Executa as ações restantes do plano (gatilhos) reutilizando o MESMO executor
@@ -2109,11 +2726,12 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   // (action_handlers_builder.dart), injetando o picker de mercado da Home
   // (_EnvPickerSheet é privado deste arquivo, por isso vai via callback).
   Map<VoiceActionType, ActionHandler> _buildActionHandlers(
-      ({double lat, double lng})? loc) {
+      ({double lat, double lng})? loc, {String transcript = ''}) {
     return buildActionHandlers(
       ref,
       context,
       loc: loc,
+      transcript: transcript,
       pickMarket: (subtitle, onPicked) => _showSheet(_EnvPickerSheet(
         title: AppStrings.marketVoicePickMarket,
         subtitle: subtitle,
@@ -2162,18 +2780,9 @@ class _VoiceFabState extends ConsumerState<VoiceFab>
   // igualdade exata (ignorando apenas caixa e espaços extras) OU similaridade > 95%.
   // BUG 1: sem contains/startsWith/prefixo — "Casa" ≠ "Casa da mãe",
   // "Mercado" ≠ "Mercado Extra". A similaridade só cobre acento/erro de digitação.
-  EnvironmentEntity? _matchEnv(List<EnvironmentEntity> envs, String? query) {
-    if (query == null || query.trim().isEmpty) return null;
-    final q = _normEnvName(query);
-    // 1. Igualdade exata (caixa/espaços normalizados) — prioridade máxima.
-    final exact = envs.where((e) => _normEnvName(e.name) == q).firstOrNull;
-    if (exact != null) return exact;
-    // 2. Similaridade alta (> 95%) — nunca reutiliza nomes distintos.
-    for (final e in envs) {
-      if (_nameSimilarity(_normEnvName(e.name), q) > 0.95) return e;
-    }
-    return null;
-  }
+  // Delegado ao top-level matchEnvByName (mesma lógica reusada pelo caminho de texto).
+  EnvironmentEntity? _matchEnv(List<EnvironmentEntity> envs, String? query) =>
+      matchEnvByName(envs, query);
 
   // Normaliza para comparação de nomes: minúsculas + colapsa espaços repetidos.
   static String _normEnvName(String s) =>

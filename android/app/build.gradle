@@ -44,6 +44,12 @@ android {
             // TODO: Add your own signing config for the release build.
             // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.debug
+            // R8 estava ofuscando as classes JNI do sherpa-onnx (com.k2fsa.**),
+            // renomeando campo "model" e as classes *ModelConfig que o .so acessa
+            // por nome fixo -> crash JNI (fid == null / SIGABRT). proguard-rules.pro
+            // mantem essas classes intactas.
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 }

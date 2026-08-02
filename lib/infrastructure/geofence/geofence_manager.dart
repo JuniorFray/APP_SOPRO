@@ -49,6 +49,11 @@ class GeofenceManager {
   // IDs dos ambientes que o usuário está dentro no momento atual
   final _inside = <String>{};
 
+  // Chave SharedPreferences que persiste o conjunto _inside entre execuções.
+  // Sobrevive ao cold start: sem isso, o Set zerava a cada abertura e a
+  // primeira posição GPS re-disparava "entrada" mesmo sem movimento real.
+  static const _insideKey = 'geofence_inside_ids';
+
   // Reutilizado a cada cálculo para evitar instâncias desnecessárias
   static const _dist = Distance();
 
@@ -142,6 +147,15 @@ class GeofenceManager {
     );
     debugPrint('[GeofenceManager] $registeredCount/${envs.length} geofence(s) nativo(s) registrado(s).');
 
+    // ── Restaura estado "dentro" persistido ────────────────────────────────
+    // Carrega antes de assinar o stream: se o usuário já estava dentro de um
+    // ambiente antes de fechar o app, o cold start reconhece isso e NÃO trata
+    // como entrada nova. Só uma transição REAL (fora→dentro) volta a disparar.
+    final prefs = await SharedPreferences.getInstance();
+    _inside
+      ..clear()
+      ..addAll(prefs.getStringList(_insideKey) ?? const []);
+
     // ── GPS stream (triggers completos quando app está vivo) ───────────────
     _sub = _locationService.getPositionStream().listen(
       _onPosition,
@@ -220,6 +234,25 @@ class GeofenceManager {
     }
   }
 
+  // Grava o conjunto _inside no SharedPreferences após cada transição.
+  // Chamado apenas em enter/exit REAIS — nunca em stop(), para não persistir o
+  // estado zerado (isso reintroduziria o re-disparo no cold start).
+  Future<void> _persistInside() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_insideKey, _inside.toList());
+    } catch (e, st) {
+      // Falha de persistência não pode quebrar a avaliação de geofence.
+      Logger.warn(
+        'geofence_inside_persist_failed',
+        exception:  e,
+        stackTrace: st,
+        feature:    'geofence',
+        action:     'persist_inside',
+      );
+    }
+  }
+
   // Callback do EventChannel — avaliado para cada posição recebida do GPS.
   Future<void> _onPosition(
     ({double latitude, double longitude, double accuracy}) pos,
@@ -247,6 +280,7 @@ class GeofenceManager {
 
       if (isNowInside && !wasInside) {
         _inside.add(env.id);
+        await _persistInside(); // sobrevive ao restart: não re-dispara no cold start
         Logger.info(
           'geofence_enter',
           payload: {
@@ -274,6 +308,7 @@ class GeofenceManager {
         }
       } else if (!isNowInside && wasInside) {
         _inside.remove(env.id);
+        await _persistInside(); // reflete a saída real no estado persistido
         Logger.info(
           'geofence_exit',
           payload: {

@@ -196,6 +196,17 @@ class MainActivity : FlutterActivity() {
             action = "configureFlutterEngine")
         super.configureFlutterEngine(flutterEngine)
 
+        // ── Overlay Sync Channel (push nativo→Flutter) — registrado PRIMEIRO ──
+        // Estreita ao máximo a janela de corrida do push: o FloatingVoiceService pode
+        // acordar a engine e disparar notifyDataChanged() logo em seguida; registrando
+        // este canal ANTES dos demais, o push já encontra o canal pronto assim que a
+        // engine sobe. Referência FRACA: avisa a engine viva (dataChanged) sem prender
+        // a Activity na memória. Só native→Dart (sem handler).
+        overlaySyncChannel = WeakReference(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, OVERLAY_SYNC_CHANNEL))
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to OVERLAY_SYNC_CHANNEL))
+
         fusedClient       = LocationServices.getFusedLocationProviderClient(this)
         geofencingClient  = LocationServices.getGeofencingClient(this)
 
@@ -779,14 +790,6 @@ class MainActivity : FlutterActivity() {
             }
         Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
             payload = mapOf("channel" to "com.sopro.sopro/geocoder"))
-
-        // ── Overlay Sync Channel (push nativo→Flutter) ────────────────────────
-        // Guardado como referência FRACA: o FloatingVoiceService avisa a engine viva
-        // (dataChanged) sem prender a Activity na memória. Só native→Dart (sem handler).
-        overlaySyncChannel = WeakReference(
-            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, OVERLAY_SYNC_CHANNEL))
-        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
-            payload = mapOf("channel" to OVERLAY_SYNC_CHANNEL))
 
         Logger.info("flutter_engine_configured", feature = "main_activity",
             action = "configureFlutterEngine",

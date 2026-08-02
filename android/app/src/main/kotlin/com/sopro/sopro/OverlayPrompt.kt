@@ -1,19 +1,21 @@
 package com.sopro.sopro
 
-// OverlayPrompt — Estágio 3 da reorganização do overlay de voz.
+import java.util.Calendar
+
+// OverlayPrompt — monta o prompt de PLANO (ACTIONS/REGRAS/EXEMPLOS) do overlay a
+// partir da FONTE UNICA (VoiceContent / assets/voice/voice_content.json), a mesma
+// lida pelo Home (Dart). Antes o texto era hardcoded aqui, cópia divergente do
+// AppConstants.geminiAssistantPrompt.
 //
-// Isola o texto do prompt de PLANO (ACTIONS/REGRAS/EXEMPLOS) e sua montagem com o
-// contexto de ambientes. Antes vivia inline em stopAudioCaptureAndProcess.
+// Etapa 2 (paridade total): o overlay agora executa TODAS as 11 ações do Home
+// (inclusive update_trigger, update_environment, create_reminder, weather_query),
+// então usa o prompt COMPLETO da fonte única — os mesmos schema/regras/exemplos
+// canônicos do Home. A prioridade destrutiva (regra + exemplos de delete), que o
+// Home ainda não tem, é anexada do próprio asset (segmento delete_priority) para
+// NÃO regredir o overlay.
 //
-// Fase 2.2 — CONTRATO ÚNICO com a Home: mesmo schema de PLANO (actions[]). O prompt
-// espelha AppConstants.geminiAssistantPrompt (Dart). O Gemini apenas ESTRUTURA a
-// fala como lista de ações; o app executa. Campos extras (reply, context_updates,
-// follow_up_question, metadata futura) são aceitos e IGNORADOS pelo executor quando
-// não usados — só "actions[].type" + params são obrigatórios para executar.
-//
-// COMPORTAMENTAL-PRESERVADO: texto byte-idêntico ao fullPrompt anterior (layout
-// flush-left mantido para o trimIndent render exatamente igual). O prompt mínimo
-// só-transcrição (usado em awaiting state) NÃO está aqui — segue inline no serviço.
+// O contexto de ambientes (nomes do SQLite) continua montado aqui — é específico
+// do overlay e injetado antes do rodapé, como antes.
 object OverlayPrompt {
 
     // Linha de contexto: ambientes existentes lidos do SQLite (nomes exatos).
@@ -24,47 +26,55 @@ object OverlayPrompt {
         else
             "Ambientes existentes: nenhum. Todo local citado e novo."
 
-    // Prompt de PLANO completo, com o contexto de ambientes interpolado ($envCtx).
+    // DATA E HORA ATUAIS do aparelho — MESMO texto/formato do _dateTimeContext do
+    // Home (voice_service.dart), só reimplementado com Calendar. O Gemini usa isto
+    // para resolver "hoje"/"amanha"/"segunda que vem"/datas relativas em
+    // create_reminder; sem isto, o Overlay ancorava nas datas ILUSTRATIVAS dos
+    // exemplos (bug da Etapa 2). Nomes de dia em pt-BR sem acento, iguais ao Dart.
+    private fun dateTimeContext(): String {
+        val cal = Calendar.getInstance()
+        val weekdayNames = arrayOf("segunda-feira", "terca-feira", "quarta-feira",
+            "quinta-feira", "sexta-feira", "sabado", "domingo")
+        val dow = cal.get(Calendar.DAY_OF_WEEK)              // 1=Dom..7=Sab
+        val iso = if (dow == Calendar.SUNDAY) 7 else dow - 1 // 1=Seg..7=Dom
+        fun p2(n: Int) = n.toString().padStart(2, '0')
+        return "\nDATA E HORA ATUAIS: ${cal.get(Calendar.YEAR)}-" +
+            "${p2(cal.get(Calendar.MONTH) + 1)}-${p2(cal.get(Calendar.DAY_OF_MONTH))} " +
+            "${p2(cal.get(Calendar.HOUR_OF_DAY))}:${p2(cal.get(Calendar.MINUTE))} " +
+            "(${weekdayNames[iso - 1]}). " +
+            "Use isso para resolver \"hoje\", \"amanha\", \"essa semana\", nomes de dias " +
+            "da semana e datas relativas."
+    }
+
+    // Prompt de PLANO completo montado do asset + prioridade destrutiva + o
+    // contexto de ambientes interpolado antes do rodapé.
     fun buildPlanPrompt(envNames: List<String>): String {
         val envCtx = environmentContext(envNames)
-        return """Voce e o Sopro, assistente de lembretes por localizacao (pt-BR).
-A entrada e o AUDIO em anexo. Transcreva e ESTRUTURE (nao execute). Responda SO com
-JSON valido, sem markdown, neste formato:
-{"transcricao":"","reply":"","actions":[],"follow_up_question":null,"context_updates":{"last_environment":null,"last_trigger":null}}
-ACTIONS (type + campos):
-create_environment {"type":"create_environment","name":"Local"}
-create_trigger {"type":"create_trigger","environment":"Local","title":"acao","content":null}
-delete_trigger {"type":"delete_trigger","environment":"Local","title":"aprox"}
-delete_all_triggers {"type":"delete_all_triggers","environment":"Local"}
-delete_environment {"type":"delete_environment","environment":"Local"}
-delete_all_environments {"type":"delete_all_environments"}
-add_shopping_item {"type":"add_shopping_item","item":"nome do item"}
-REGRAS:
-1) NUNCA invente ambiente. So locais ditos pelo usuario.
-2) Local ja existente = REUTILIZE: so create_trigger com o nome EXATO da lista.
-3) Local novo = create_environment e depois seus create_trigger (nessa ordem).
-4) title: SO a acao, infinitivo, max 50 chars, sem o local.
-4b) LISTA DE COMPRAS: pedidos de "comprar/adicionar/precisa de/poe na lista [item]"
-   SEM uma acao vinculada a um local especifico -> add_shopping_item (um por item),
-   SEM campo environment (o app decide o mercado). Acoes especificas de um lugar
-   ("falar com o gerente", "pagar o boleto", "pegar o exame") continuam create_trigger.
-5) PRIORIDADE DESTRUTIVA (MAXIMA): se a fala tem "todos/todas/tudo/limpar/apagar/
-   remover/excluir/deletar" referindo AMBIENTES/LOCAIS -> actions=[{"type":"delete_all_environments"}]
-   e NADA de create. Referindo GATILHOS/LEMBRETES de um local -> delete_all_triggers.
-   Nenhuma acao de criacao pode vencer uma de exclusao total.
-6) Duvida real sobre o local: actions=[] e pergunte em follow_up_question.
-7) reply curto e humano; nunca cite intent/acao.
-EXEMPLOS:
-- "medico pegar exame" (nenhum) -> "actions":[{"type":"create_environment","name":"Medico"},{"type":"create_trigger","environment":"Medico","title":"Pegar exame"}]
-- "adiciona leite e pao na lista de compras" -> "actions":[{"type":"add_shopping_item","item":"Leite"},{"type":"add_shopping_item","item":"Pao"}]
-- "preciso comprar arroz no mercado" -> "actions":[{"type":"add_shopping_item","item":"Arroz"}]
-- "apagar todos os ambientes" -> "actions":[{"type":"delete_all_environments"}]
-- "excluir todos os ambientes" -> "actions":[{"type":"delete_all_environments"}]
-- "remover tudo" -> "actions":[{"type":"delete_all_environments"}]
-- "limpar todos" -> "actions":[{"type":"delete_all_environments"}]
-- "deletar tudo" -> "actions":[{"type":"delete_all_environments"}]
-- "apaga todos os lembretes do mercado" (Mercado) -> "actions":[{"type":"delete_all_triggers","environment":"Mercado"}]
-$envCtx
-Retorne SO o JSON.""".trimIndent()
+        return buildString {
+            append(VoiceContent.plan("header"))
+            append(VoiceContent.plan("format"))
+            append(VoiceContent.plan("entrada"))
+            // ACTIONS: todas as 11 ações (mesmo bloco do Home).
+            append(VoiceContent.plan("actions_header"))
+            append(VoiceContent.plan("actions_full"))
+            // REGRAS: prioridade destrutiva PRIMEIRO (proeminente, como era antes da
+            // unificação) — evita que create_reminder "roube" comandos de apagar —,
+            // depois as regras numeradas comuns.
+            append(VoiceContent.plan("rules_header"))
+            append(VoiceContent.plan("delete_priority_rule"))
+            append(VoiceContent.plan("rules_full"))
+            // EXEMPLOS: exemplos de delete (single + all) PRIMEIRO (ancoram a intenção
+            // de apagar 1 gatilho/local específico), depois os demais; dica de clima ao fim.
+            append(VoiceContent.plan("examples_header"))
+            append(VoiceContent.plan("delete_priority_examples"))
+            append(VoiceContent.plan("examples_full"))
+            append(VoiceContent.plan("weather_hint"))
+            // Contexto de ambientes + DATA E HORA ATUAIS reais (mesma ordem do Dart:
+            // envContext e depois dateTimeContext) + rodapé. A data real é o que
+            // permite ao Gemini resolver datas relativas em create_reminder.
+            append(envCtx).append('\n')
+            append(dateTimeContext()).append('\n')
+            append(VoiceContent.plan("footer"))
+        }
     }
 }

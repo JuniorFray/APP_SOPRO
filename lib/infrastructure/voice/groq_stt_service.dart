@@ -1,10 +1,10 @@
 // STT na nuvem via Groq (endpoint compativel com OpenAI Whisper).
 //
-// Decisao de produto: a voz deixa de ser 100% on-device. O STT tenta a NUVEM
-// primeiro (mais rapido e preciso) e cai automaticamente no Whisper LOCAL
-// (SherpaSttService, sherpa-onnx) quando nao ha internet ou a nuvem falha.
+// Decisao de produto: a voz nao e mais on-device. A NUVEM (Groq) e o UNICO
+// caminho de STT — o Whisper local (sherpa-onnx) foi removido do APK.
 // Este servico NAO faz retry nem fallback: em qualquer indisponibilidade lanca
-// [GroqUnavailableException] para o CHAMADOR (VoiceService) decidir o fallback.
+// [GroqUnavailableException] para o CHAMADOR (VoiceService), que propaga ate o
+// FAB do Home avisar o usuario (sem internet) e sugerir o campo de texto.
 //
 // Modelo: whisper-large-v3-turbo (barato: US$0,04/h, 228x tempo real). pt-BR.
 // Envia o WAV como multipart/form-data usando dart:io HttpClient — mesmo padrao
@@ -19,7 +19,7 @@ import 'package:sopro/infrastructure/logging/core/logger.dart';
 
 // Lancada quando a transcricao na nuvem nao pode ser concluida por
 // indisponibilidade: sem chave, sem internet, timeout, erro de servidor (>=500)
-// ou qualquer status != 200. O chamador captura e cai no Whisper local.
+// ou qualquer status != 200. O chamador propaga ate o FAB do Home avisar.
 // [reason] e um rotulo curto para log (no_key, timeout, socket, http_500...).
 class GroqUnavailableException implements Exception {
   final String reason;

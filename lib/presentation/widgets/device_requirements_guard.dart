@@ -82,18 +82,31 @@ class DeviceRequirementsGuard {
     }
 
     // ── 4. Bluetooth habilitado ────────────────────────────────────────────
+    // Mesmo padrão do autostart: só avisa se desligado E ainda não avisamos
+    // antes. Concedido = resolvido (o check de estado já barra o diálogo).
+    // Se cancelar o diálogo, marca a flag e não repete a cada cold start.
     bool btOk = false;
     if (context.mounted) {
       btOk = await bleService.isBluetoothEnabled();
-      if (!btOk && context.mounted) {
+      final prefs = await SharedPreferences.getInstance();
+      var btWarned = prefs.getBool('bluetooth_warning_shown') ?? false;
+      // Desligado agora mas já avisado antes: no caminho ficou concedido e
+      // voltou a desligar. Reseta a flag para o aviso reaparecer.
+      if (!btOk && btWarned) {
+        await prefs.setBool('bluetooth_warning_shown', false);
+        btWarned = false;
+      }
+      if (!btOk && !btWarned && context.mounted) {
         Logger.debug('bluetooth_disabled', feature: 'device_guard', action: 'check');
-        await _showDialog(
+        final opened = await _showDialog(
           context,
           title: AppStrings.btDisabledTitle,
           body: AppStrings.btDisabledBody,
           onOpenSettings: bleService.openBluetoothSettings,
         );
-      } else {
+        // Cancelou (não foi às configurações): não incomodar de novo.
+        if (!opened) await prefs.setBool('bluetooth_warning_shown', true);
+      } else if (btOk) {
         Logger.debug('bluetooth_enabled', feature: 'device_guard', action: 'check');
       }
     }
@@ -160,15 +173,29 @@ class DeviceRequirementsGuard {
     if (context.mounted) {
       final scheduler = ReminderScheduler();
       fsIntentOk = await scheduler.hasFullScreenIntentPermission();
-      if (!fsIntentOk && context.mounted) {
+      final prefs = await SharedPreferences.getInstance();
+      var fsWarned = prefs.getBool('fullscreen_warning_shown') ?? false;
+      // Desligado agora mas já avisado antes: ficou concedido e voltou a
+      // desligar. Reseta a flag para o aviso reaparecer.
+      if (!fsIntentOk && fsWarned) {
+        await prefs.setBool('fullscreen_warning_shown', false);
+        fsWarned = false;
+      }
+      // Exceção ao "avisar só uma vez": o botão flutuante depende da tela-cheia
+      // para o alarme abrir sobre a tela bloqueada. Se ele está ligado, reavisa
+      // sempre que faltar a permissão — é o recurso que precisa dela agora.
+      final floatingEnabled = prefs.getBool('floating_voice_enabled') ?? false;
+      if (!fsIntentOk && (!fsWarned || floatingEnabled) && context.mounted) {
         Logger.debug('fullscreen_intent_disabled',
             feature: 'device_guard', action: 'check');
-        await _showDialog(
+        final opened = await _showDialog(
           context,
           title: AppStrings.reqFullScreenIntentTitle,
           body: AppStrings.reqFullScreenIntentBody,
           onOpenSettings: scheduler.openFullScreenIntentSettings,
         );
+        // Cancelou sem o botão flutuante ligado: não repetir no app_start geral.
+        if (!opened) await prefs.setBool('fullscreen_warning_shown', true);
       } else if (fsIntentOk) {
         Logger.debug('fullscreen_intent_enabled',
             feature: 'device_guard', action: 'check');
@@ -246,13 +273,15 @@ class DeviceRequirementsGuard {
   }
 
   // Exibe diálogo de requisito. Abre configurações se usuário aceitar.
-  static Future<void> _showDialog(
+  // Retorna true se o usuário foi abrir as configurações; false se cancelou —
+  // o chamador usa isso para marcar a flag "já avisado" só quando cancelam.
+  static Future<bool> _showDialog(
     BuildContext context, {
     required String title,
     required String body,
     required Future<void> Function() onOpenSettings,
   }) async {
-    if (!context.mounted) return;
+    if (!context.mounted) return false;
     final openSettings = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -271,7 +300,11 @@ class DeviceRequirementsGuard {
         ],
       ),
     );
-    if (openSettings == true) await onOpenSettings();
+    if (openSettings == true) {
+      await onOpenSettings();
+      return true;
+    }
+    return false;
   }
 
   static Future<void> _openOverlaySettings() async {

@@ -26,18 +26,29 @@ enum QueryKind { city, state, zipcode, address, establishment }
 //                   local ("Praia Grande", "Gonzaga"). SEM saber que são lugares —
 //                   o Ranker confirma casando contra city/district/state/etc.
 //   categoryHint  — tipo genérico quando lidera o texto ("Shopping", "Hospital").
+//   categoryOsmTag — osm_tag específico do Photon (ex.: "amenity:pharmacy") quando
+//                   a consulta é de uma categoria/rede conhecida. FILTRA por TIPO
+//                   de lugar em vez de por nome — resolve "farmácia"/"drogaria"/
+//                   "droga raia" trazendo farmácias, não POIs homônimos.
+//   isGenericCategory — categoria conhecida sem marca própria ("farmácia",
+//                   "drogaria são paulo"): dispara viés/raio mais apertado e
+//                   proximidade como critério PRIMÁRIO no ranking.
 class NormalizedQuery {
   final String query;
   final QueryKind kind;
   final String? brandHint;
   final List<String> locationHints;
   final String? categoryHint;
+  final String? categoryOsmTag;
+  final bool isGenericCategory;
   const NormalizedQuery(
     this.query,
     this.kind, {
     this.brandHint,
     this.locationHints = const [],
     this.categoryHint,
+    this.categoryOsmTag,
+    this.isGenericCategory = false,
   });
 }
 
@@ -85,6 +96,44 @@ class QueryNormalizer {
     'supermercados', 'farmácias', 'farmacias',
   };
 
+  // Categoria genérica → osm_tag OFICIAL do Photon (filtra por TIPO de lugar, não
+  // por nome). Chaves normalizadas (sem acento, minúsculas). Expansível.
+  static const _categoryTags = {
+    'farmacia':     'amenity:pharmacy',
+    'drogaria':     'amenity:pharmacy',
+    'mercado':      'shop:supermarket',
+    'supermercado': 'shop:supermarket',
+    'hipermercado': 'shop:supermarket',
+    'padaria':      'shop:bakery',
+    'acougue':      'shop:butcher',
+    'hospital':     'amenity:hospital',
+    'clinica':      'amenity:clinic',
+    'posto':        'amenity:fuel',
+    'restaurante':  'amenity:restaurant',
+    'lanchonete':   'amenity:fast_food',
+    'banco':        'amenity:bank',
+    'academia':     'leisure:fitness_centre',
+    'shopping':     'shop:mall',
+    'loja':         'shop',
+  };
+
+  // Redes/marcas conhecidas que NÃO contêm a palavra da categoria mas SÃO daquela
+  // categoria (ex.: "Droga Raia" é farmácia). Garante classificação como
+  // establishment + osm_tag correto. Chaves normalizadas. Expansível.
+  static const _brandTags = {
+    'droga raia': 'amenity:pharmacy',
+    'drogaraia':  'amenity:pharmacy',
+    'drogasil':   'amenity:pharmacy',
+    'drogao':     'amenity:pharmacy',
+    'ultrafarma': 'amenity:pharmacy',
+    'pague menos':'amenity:pharmacy',
+    'panvel':     'amenity:pharmacy',
+    'nissei':     'amenity:pharmacy',
+    'farmais':    'amenity:pharmacy',
+    'atacadao':   'shop:supermarket',
+    'carrefour':  'shop:supermarket',
+  };
+
   // Classifica a consulta (determinístico, sem rede). Ordem importa:
   // CEP → estabelecimento (categoria/marca) → endereço (logradouro/número) →
   // estado (UF por extenso) → cidade (padrão). Extrai hints só p/ establishment.
@@ -119,22 +168,39 @@ class QueryNormalizer {
     final core = tokens.sublist(start);
     final brandHint = core.isEmpty ? null : core.join(' ');
 
-    // 3. Sufixos após a cabeça do núcleo = modificadores de local candidatos.
-    final tail = core.length > 1 ? core.sublist(1) : const <String>[];
+    // 3. Sufixos = modificadores de local candidatos.
+    //    COM categoria líder ("farmácia são paulo"): o núcleo inteiro é contexto
+    //    (categoria + LUGAR), então geramos sufixos do CORE COMPLETO (mais longo
+    //    primeiro) — assim "são paulo" resolve como UNIDADE no Stage 1, sem
+    //    quebrar em "paulo". SEM categoria (marca real, "Assaí Gonzaga"): o 1º
+    //    token é a marca (discriminador) e só o restante é modificador de local.
+    final hintSource = categoryHint != null
+        ? core
+        : (core.length > 1 ? core.sublist(1) : const <String>[]);
+    // Rede conhecida SEM tokens extras ("droga raia") é marca pura — seus tokens
+    // ("raia") NÃO são local; não gera hint pra não recentrar o viés errado.
+    final pureBrand = _brandTags.containsKey(_strip(query.toLowerCase().trim()));
     final locationHints = <String>[];
-    for (var i = 0; i < tail.length; i++) {
-      final suffix = tail.sublist(i).join(' ');
-      // Exclui sufixos compostos apenas de modificadores de categoria/marca.
-      // Ex.: "atacadista" sozinho não é local geográfico.
-      // "atacadista piracicaba" → "piracicaba" não é modificador → incluído.
-      final suffixTokens = suffix
-          .split(RegExp(r'\s+'))
-          .map((t) => _strip(t.toLowerCase()))
-          .toList();
-      final allModifiers = suffixTokens.every(
-          (t) => _categoryWords.contains(t) || _brandModifiers.contains(t));
-      if (!allModifiers) locationHints.add(suffix);
+    if (!pureBrand) {
+      for (var i = 0; i < hintSource.length; i++) {
+        final suffix = hintSource.sublist(i).join(' ');
+        // Exclui sufixos compostos apenas de modificadores de categoria/marca.
+        // Ex.: "atacadista" sozinho não é local geográfico.
+        // "atacadista piracicaba" → "piracicaba" não é modificador → incluído.
+        final suffixTokens = suffix
+            .split(RegExp(r'\s+'))
+            .map((t) => _strip(t.toLowerCase()))
+            .toList();
+        final allModifiers = suffixTokens.every(
+            (t) => _categoryWords.contains(t) || _brandModifiers.contains(t));
+        if (!allModifiers) locationHints.add(suffix);
+      }
     }
+
+    final osmTag = _resolveOsmTag(_strip(query.toLowerCase()), categoryHint);
+    // Genérica = categoria conhecida líder (só categoria, ou categoria + lugar).
+    // Uma marca própria ("Assaí", "Droga Raia") NÃO é genérica.
+    final generic = categoryHint != null;
 
     return NormalizedQuery(
       query,
@@ -142,7 +208,25 @@ class QueryNormalizer {
       brandHint: brandHint,
       locationHints: locationHints,
       categoryHint: categoryHint,
+      categoryOsmTag: osmTag,
+      isGenericCategory: generic,
     );
+  }
+
+  // Resolve o osm_tag: categoria líder → marca conhecida (qualquer posição) →
+  // categoria em qualquer posição. [qStrip] já vem sem acento e minúsculo.
+  static String? _resolveOsmTag(String qStrip, String? categoryHead) {
+    if (categoryHead != null) {
+      final tag = _categoryTags[_strip(categoryHead.toLowerCase())];
+      if (tag != null) return tag;
+    }
+    for (final e in _brandTags.entries) {
+      if (qStrip.contains(e.key)) return e.value;
+    }
+    for (final e in _categoryTags.entries) {
+      if (qStrip.contains(e.key)) return e.value;
+    }
+    return null;
   }
 
   // Remove acentos (usado só p/ comparar categoria sem depender de acentuação).
@@ -156,6 +240,11 @@ class QueryNormalizer {
 
   static QueryKind _classify(String q) {
     if (RegExp(r'^\d{5}-?\d{3}$').hasMatch(q)) return QueryKind.zipcode;
+    // Rede conhecida sem a palavra da categoria ("Droga Raia") também é POI.
+    final qs = _strip(q);
+    if (_brandTags.keys.any((w) => qs.contains(w))) {
+      return QueryKind.establishment;
+    }
     if (_establishmentWords.any((w) => q.contains(w))) {
       return QueryKind.establishment;
     }

@@ -24,6 +24,12 @@ class GeocodingRepository implements IGeocodingProvider {
   Future<GeocodingResult?> reverse(double lat, double lon) =>
       _service.reverse(lat, lon);
 
+  // Rótulo "Bairro, Cidade" das coordenadas (reverse via Photon, cacheado). Só a
+  // cidade quando não há bairro; '' se indisponível. Usado pelo card de clima
+  // para corrigir o nome que o OWM erra e trazer o bairro.
+  Future<String> placeLabel(double lat, double lon) =>
+      (_service as AndroidGeocodingService).userPlaceLabel(lat, lon);
+
   // Camada 3 — chamada pela UI quando usuário toca "Nenhum desses"
   // após ver resultados do Photon + LocationIQ.
   @override

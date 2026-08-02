@@ -7,6 +7,8 @@ import '../../domain/repositories/i_shopping_list_repository.dart';
 import '../../domain/repositories/i_trigger_repository.dart';
 import '../conversation/behavior_engine.dart';
 import '../geofence/native_geofence_service.dart';
+import '../providers/i_geocoding_provider.dart';
+import '../providers/i_weather_provider.dart';
 import '../voice/execution_plan.dart';
 
 // Base Skill — contrato padrão de todas as Skills de voz do Sopro.
@@ -52,6 +54,22 @@ class SkillContext {
   // consultam ctx.persona em vez de literais/AppStrings direto.
   final BehaviorPersona persona;
 
+  // Provedor de clima desacoplado (Tool Provider) — consultado pela WeatherQuerySkill.
+  final IWeatherProvider weather;
+
+  // Provedor de geocoding (Tool Provider) — resolve "clima em <cidade>" (forward).
+  final IGeocodingProvider geocoding;
+
+  // Fala original do usuário (transcrição limpa). Usada por heurísticas locais —
+  // ex.: WeatherQuerySkill decide em código se a pergunta é qualitativa. Vazia
+  // quando o caller não tem o texto (ex.: ações pós-ambiente re-executadas).
+  final String transcript;
+
+  // Chamada Gemini de texto puro (Rota A do híbrido) — 2ª chamada opcional só
+  // onde raciocínio agrega (ex.: pergunta de clima qualitativa). [prompt] são as
+  // instruções + dados; [userText] é a fala do usuário. Fail-open: devolve null.
+  final Future<String?> Function(String prompt, String userText) askGemini;
+
   const SkillContext({
     required this.envRepo,
     required this.trgRepo,
@@ -63,6 +81,10 @@ class SkillContext {
     required this.context,
     required this.pickMarket,
     required this.persona,
+    required this.weather,
+    required this.geocoding,
+    required this.askGemini,
+    this.transcript = '',
   });
 }
 

@@ -18,8 +18,10 @@ class ScheduledReminders extends Table {
   // campo é recalculado/avançado após cada disparo)
   DateTimeColumn get scheduledAt => dateTime()();
 
-  // Regra de repetição: 'none' | 'daily' | 'weekly'
-  TextColumn get repeatRule => text().withDefault(const Constant('none'))();
+  // Regra de repetição: 'none' | 'daily' | 'weekly'. Default 'daily' (lembrete
+  // sem menção de repetição vale todos os dias). Só afeta INSERT que omita a
+  // coluna — o app sempre insere valor explícito, então é apenas fallback.
+  TextColumn get repeatRule => text().withDefault(const Constant('daily'))();
 
   // Dias da semana para repeatRule == 'weekly', formato "1,3,5"
   // (1=segunda ... 7=domingo, ISO 8601). Vazio para 'none'/'daily'.

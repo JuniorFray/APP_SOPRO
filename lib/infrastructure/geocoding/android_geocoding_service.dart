@@ -36,9 +36,10 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // Photon location_bias_scale (0.0–1.0). Peso da proximidade sobre a prominência.
   static const _locationBiasScale = '0.9';
 
-  // Zoom da location bias no Stage 2 (Photon `zoom`, default 12). 16 ≈ nível de
-  // bairro: raio pequeno em torno do ponto do locationHint resolvido no Stage 1.
-  static const _neighborhoodZoom = '16';
+  // Zoom quando o viés é recentrado numa CIDADE citada (ex.: "farmácia são
+  // paulo"): 11 ≈ nível de cidade — raio amplo o bastante pra cobrir o município.
+  // (Photon `zoom`, default 12; maior = raio menor.)
+  static const _cityZoom = '11';
 
   // Modificadores de categoria que podem aparecer no final do nome.
   // Ex.: "Assaí Atacadista" → strip "Atacadista" → busca "Assaí".
@@ -62,7 +63,10 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // ── Forward geocoding ─────────────────────────────────────────────────────
 
   @override
-  Future<List<GeocodingResult>> search(String query) async {
+  Future<List<GeocodingResult>> search(String rawQuery) async {
+    // Endereços BR: "Av Paulista 1000" → "Av Paulista número 1000" (paridade com
+    // a forma que o Photon resolve). Ver _insertHouseNumberKeyword.
+    final query = _insertHouseNumberKeyword(rawQuery);
     // 1. Normalização — só classifica (QueryNormalizer, componente puro).
     final normalized = QueryNormalizer.normalize(query);
 
@@ -77,8 +81,17 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
 
     // 2. Estratégia — provedor + constraints (SearchStrategy, componente puro).
     //    Computada antes do cache para orientar também o CandidateFilter.
-    final strategy = SearchStrategy.plan(normalized.kind);
+    final strategy = SearchStrategy.plan(normalized);
     final constraints = strategy.constraints;
+
+    // Viés desligado silenciosamente (sem last_known) vira busca global — o
+    // chamador deveria aquecer o GPS antes. Log pontual para auditar em campo.
+    if (constraints.useBias && (userLat == 0.0 || userLon == 0.0)) {
+      Logger.warn('geocoding_bias_off', payload: {
+        'query': normalized.query,
+        'kind':  normalized.kind.name,
+      }, feature: 'geocoding', action: 'bias_gate');
+    }
 
     // Camada 1: cache local (apenas resultados com qualidade suficiente).
     final cached = await _cacheDao.findByKey(key);
@@ -97,19 +110,27 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
               hasNumber: _addressHasNumber(row.displayName),
             ))
         .toList();
-    if (qualityCached.isNotEmpty) {
+    // Estabelecimento é sensível a viés/proximidade (e pode recentrar numa
+    // cidade citada) — a chave de cache é só texto, então servir do cache com o
+    // centro do usuário daria resultado incoerente. Cache-read só p/ tipos
+    // com coordenada absoluta (cidade/estado/endereço).
+    if (qualityCached.isNotEmpty && normalized.kind != QueryKind.establishment) {
       return _filterAndRank(normalized, constraints, qualityCached, userLat, userLon);
     }
 
     // 3. Execução — Photon (constraints) ou Geocoder nativo (fallback Photon).
+    //    Estabelecimento pode RECENTRAR o viés numa cidade citada (ver
+    //    _searchEstablishmentRaw); os demais tipos usam o ponto do usuário.
     List<GeocodingResult> raw;
+    double biasLat = userLat, biasLon = userLon;
     switch (strategy.provider) {
       case SearchProvider.photon:
-        // Busca em DOIS ESTÁGIOS só quando há locationHint (estabelecimento
-        // qualificado por bairro). Sem hint → caminho simples de sempre.
-        if (normalized.locationHints.isNotEmpty) {
-          raw = await _twoStageSearch(
+        if (normalized.kind == QueryKind.establishment) {
+          final est = await _searchEstablishmentRaw(
               normalized, constraints, key, userLat, userLon);
+          raw = est.raw;
+          biasLat = est.lat;
+          biasLon = est.lon;
         } else {
           raw = await _searchPhoton(query, key, constraints,
               userLat: userLat, userLon: userLon);
@@ -119,9 +140,9 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
             query, key, constraints, userLat, userLon);
     }
 
-    // 4. CandidateFilter → LocationRanker (resultado primário).
+    // 4. CandidateFilter → LocationRanker (centrado no viés efetivo).
     final primary = _filterAndRank(
-        normalized, constraints, raw, userLat, userLon);
+        normalized, constraints, raw, biasLat, biasLon);
     if (primary.isNotEmpty) return primary;
 
     // 5. LocationIQ — acionado quando Photon retornou vazio OU
@@ -191,6 +212,8 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   }
 
   // Aplica o LocationRanker e devolve os candidatos ordenados por confiança.
+  // Categoria genérica ("farmácia") ranqueia por PROXIMIDADE primeiro (senão um
+  // POI homônimo de alta prominência longe ganharia do vizinho — sintoma 1/2).
   List<GeocodingResult> _rankAndLog(
       NormalizedQuery normalized, List<GeocodingResult> raw,
       double userLat, double userLon) {
@@ -201,35 +224,51 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
       brandHint: normalized.brandHint,
       locationHints: normalized.locationHints,
       categoryHint: normalized.categoryHint,
+      proximityPrimary: normalized.isGenericCategory,
     );
     return rr.orderedCandidates;
   }
 
-  // ── Busca em dois estágios (estabelecimento + bairro) ─────────────────────
-  // Só chamada quando normalized.locationHints não é vazio. Stage 1 resolve o
-  // bairro/cidade do hint em coordenadas; Stage 2 busca a MARCA (sem o hint no
-  // q) com viés geográfico real (lat/lon do Stage 1 + zoom de bairro). Se o
-  // Stage 1 não resolver, cai no comportamento antigo (texto livre no q).
-  Future<List<GeocodingResult>> _twoStageSearch(
-      NormalizedQuery normalized, SearchConstraints c, String key,
-      double userLat, double userLon) async {
-    // Stage 1 — resolve o locationHint num lugar administrativo real.
-    final place =
-        await _resolveLocationHint(normalized.locationHints, c.countryCode);
-    if (place == null) {
-      // Não resolveu o bairro → comportamento antigo (q com o texto todo).
-      return _searchPhoton(normalized.query, key, c,
-          userLat: userLat, userLon: userLon);
+  // ── Busca de estabelecimento ──────────────────────────────────────────────
+  // Devolve os candidatos crus + o CENTRO do viés efetivo (usado no filtro/rank).
+  // Se a consulta cita uma cidade/bairro resolvível (locationHints), RECENTRA o
+  // viés nesse lugar e busca só a marca/categoria lá — nunca deixa o nome da
+  // cidade virar texto de nome pesquisado (corrige "drogaria são paulo"). Sem
+  // contexto de local, busca o texto todo em torno do usuário.
+  Future<({List<GeocodingResult> raw, double lat, double lon})>
+      _searchEstablishmentRaw(NormalizedQuery normalized, SearchConstraints c,
+          String key, double userLat, double userLon) async {
+    double biasLat = userLat, biasLon = userLon;
+    String queryText = normalized.query;
+    String? zoom;
+
+    if (normalized.locationHints.isNotEmpty) {
+      // Stage 1 — resolve o hint (mais longo primeiro) num lugar administrativo.
+      final place =
+          await _resolveLocationHint(normalized.locationHints, c.countryCode);
+      if (place != null) {
+        biasLat = place.lat;
+        biasLon = place.lon;
+        zoom = _cityZoom; // viés de cidade em torno do ponto resolvido
+        bool sameTxt(String a, String b) =>
+            a.trim().toLowerCase() == b.trim().toLowerCase();
+        // Marca sem o lugar. Quando o que sobra É o próprio lugar (a "marca" era
+        // a cidade, ex.: "farmácia são paulo" → brand "são paulo" == hint), a
+        // busca é de CATEGORIA no lugar → usa a categoria; o osm_tag filtra por
+        // tipo. Senão, busca a marca real ("Assaí Gonzaga" → "Assaí").
+        final brandOnly = _stripHintSuffix(normalized.brandHint, place.hint);
+        final brandIsPlace = brandOnly.trim().isEmpty ||
+            sameTxt(brandOnly, place.hint) ||
+            sameTxt(brandOnly, normalized.brandHint ?? '');
+        queryText = brandIsPlace
+            ? (normalized.categoryHint ?? normalized.query)
+            : brandOnly;
+      }
     }
 
-    // Marca sem o hint: remove o sufixo do bairro do brandHint (é sufixo por
-    // construção do QueryNormalizer). "Assaí Gonzaga" − "Gonzaga" → "Assaí".
-    final brandOnly = _stripHintSuffix(normalized.brandHint, place.hint);
-
-    // Stage 2 — busca a marca com viés no ponto do Stage 1 (zoom de bairro).
-    final raw = await _searchPhoton(brandOnly, key, c,
-        userLat: place.lat, userLon: place.lon, zoom: _neighborhoodZoom);
-    return raw;
+    final raw = await _searchPhoton(queryText, key, c,
+        userLat: biasLat, userLon: biasLon, zoom: zoom);
+    return (raw: raw, lat: biasLat, lon: biasLon);
   }
 
   // Stage 1: tenta cada locationHint (do mais específico ao mais curto) como
@@ -299,14 +338,36 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
     return tokens.sublist(0, end).join(' ');
   }
 
-  // Retorna o nome da cidade do usuário via Photon reverse geocoding.
-  // Resultado cacheado em SharedPreferences — chamada de rede só quando
-  // cidade não está em cache ou posição mudou mais de 10km.
+  // Rótulo "Bairro, Cidade" das coordenadas (reverse Photon), cacheado. Só a
+  // cidade quando o OSM não traz bairro. Usado pelo card de clima — o OWM rotula
+  // pela estação mais próxima e às vezes erra a cidade/bairro.
+  Future<String> userPlaceLabel(double lat, double lon) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getString('last_known_place') ?? '';
+    if (cached.isNotEmpty) return cached;
+    final p = await _photonReverse(lat, lon);
+    if (p.city.isEmpty) return '';
+    final label = p.district.isNotEmpty ? '${p.district}, ${p.city}' : p.city;
+    await prefs.setString('last_known_place', label);
+    return label;
+  }
+
+  // Retorna só o MUNICÍPIO do usuário (reverse Photon), cacheado. Usado no viés
+  // de busca forward — comportamento inalterado (só a cidade).
   Future<String> _getUserCity(double lat, double lon) async {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getString('last_known_city') ?? '';
+    if (cached.isNotEmpty) return cached;
+    final p = await _photonReverse(lat, lon);
+    if (p.city.isNotEmpty) await prefs.setString('last_known_city', p.city);
+    return p.city;
+  }
+
+  // Reverse geocoding puro via Photon → (cidade, bairro). Sem cache; cada
+  // chamador cacheia como precisa. Vazio em erro/rede/sem resultado.
+  Future<({String city, String district})> _photonReverse(
+      double lat, double lon) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final cached = prefs.getString('last_known_city') ?? '';
-      if (cached.isNotEmpty) return cached;
       final uri = Uri.https('photon.komoot.io', '/reverse', {
         'lat': lat.toString(),
         'lon': lon.toString(),
@@ -331,15 +392,16 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
               (props['town'] as String?) ??
               (props['locality'] as String?) ??
               '';
-          if (city.isNotEmpty) {
-            await prefs.setString('last_known_city', city);
-            return city;
-          }
+          final district = (props['district'] as String?) ??
+              (props['suburb'] as String?) ??
+              (props['neighbourhood'] as String?) ??
+              '';
+          return (city: city, district: district);
         }
       }
       client.close();
     } catch (_) {}
-    return '';
+    return (city: '', district: '');
   }
 
   // Camadas 2 + 3: Geocoder nativo Android (bounding box do usuário) e, se vazio
@@ -825,6 +887,33 @@ class AndroidGeocodingService implements GeocodingPlatformInterface {
   // Heurística: o endereço possui número se contiver dígito precedido de vírgula/espaço
   bool _addressHasNumber(String address) =>
       RegExp(r'[,\s]\d+').hasMatch(address);
+
+  // Logradouro líder (com/sem ponto e acento) → só então tratamos como endereço.
+  static final _leadStreet = RegExp(
+      r'^(rua|r\.|av\.?|avenida|travessa|alameda|estrada|rod(?:ovia|\.)?|pra[cç]a|largo)\b',
+      caseSensitive: false);
+  // Número da casa no fim ("1000", "1000A"). Não casa CEP (8 dígitos) por acaso —
+  // só usamos quando NÃO há palavra "número"/"nº" antes do dígito.
+  static final _trailingNumber = RegExp(r'(\d{1,6}[a-zA-Z]?)\s*$');
+  // Já contém "número N" / "nº N" / "n. N" → não mexe.
+  static final _hasNumberKeyword =
+      RegExp(r'(n[uú]mero|n[º°.])\s*\d', caseSensitive: false);
+
+  // Photon resolve endereços BR melhor com "logradouro número N" que com
+  // "logradouro N" solto. Quando o texto COMEÇA num logradouro e TERMINA num
+  // número puro SEM a palavra "número"/"nº", insere o termo — dá paridade entre
+  // "Av Paulista 1000" e "Av Paulista número 1000". Estabelecimentos ("Assaí",
+  // "Shopping X") não têm logradouro líder → ficam intactos.
+  static String _insertHouseNumberKeyword(String raw) {
+    final q = raw.trim();
+    if (!_leadStreet.hasMatch(q)) return q;      // não é logradouro
+    if (_hasNumberKeyword.hasMatch(q)) return q; // já tem "número N"
+    final m = _trailingNumber.firstMatch(q);
+    if (m == null) return q;                     // sem número no fim
+    final head = q.substring(0, m.start).replaceAll(RegExp(r'[,\s]+$'), '');
+    if (head.isEmpty) return q;                  // era só um número
+    return '$head número ${m.group(1)}';
+  }
 }
 
 // Resultado do Stage 1: o lugar do locationHint resolvido em coordenadas.

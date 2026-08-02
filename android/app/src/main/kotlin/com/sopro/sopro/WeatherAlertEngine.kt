@@ -131,6 +131,8 @@ object WeatherAlertEngine {
     private const val LAST_SEVERE    = "weather_alert_last_severe_at"
     private const val LAST_HYDRATION = "weather_alert_last_hydration_at"
     private const val LAST_HEAT      = "weather_alert_last_heat_at"
+    private const val LAST_WIND_RAIN_Y = "weather_alert_last_wind_rain_y_at"
+    private const val LAST_WIND_RAIN_R = "weather_alert_last_wind_rain_r_at"
 
     // ── Canais de notificação ────────────────────────────────────────────────
     private const val CHANNEL_ID     = "sopro_triggers"          // canal normal (IMPORTANCE_MAX)
@@ -145,6 +147,8 @@ object WeatherAlertEngine {
     private const val ID_SEVERE    = 0x5754
     private const val ID_HYDRATION = 0x5755
     private const val ID_HEAT      = 0x5756
+    private const val ID_WIND_RAIN_Y = 0x5757  // chuva/vento forte (amarelo)
+    private const val ID_WIND_RAIN_R = 0x5758  // chuva/vento severo (vermelho)
 
     // ── Intervalos e limiares ────────────────────────────────────────────────
     const val FIRST_DELAY_MS = 5L * 60L * 1000L          // primeira checagem (+5min)
@@ -155,6 +159,13 @@ object WeatherAlertEngine {
 
     private const val POP_THRESHOLD    = 30      // % de chance de chuva "relevante"
     private const val RAIN_MM_THRESHOLD = 4.0    // mm em rain.1h/3h para volume alto
+    // BLOCO 2 — chuva/vento SEVEROS (rain.1h em mm/h, wind.gust em m/s). Amarelo
+    // ~60km/h ou 20mm/h; vermelho ~80km/h ou 45mm/h. rain_volume (4mm) fica capado
+    // ABAIXO do amarelo (4–20mm) pra não duplicar alerta no mesmo evento de chuva.
+    private const val RAIN_YELLOW_MM = 20.0   // ≥20 mm/h = chuva forte (amarelo)
+    private const val RAIN_RED_MM    = 45.0   // ≥45 mm/h = chuva muito intensa (vermelho)
+    private const val GUST_YELLOW_MS = 16.7   // >~60 km/h (amarelo)
+    private const val GUST_RED_MS    = 22.2   // >~80 km/h (vermelho)
     private const val HUMIDITY_LOW      = 50     // umidade < 50% = ar seco
     private const val HEAT_THRESHOLD    = 33.0   // temp > 33°C = calor extremo
     private const val NOTABLE_POP_JUMP  = 30     // salto de pop (pts) = mudança notável
@@ -201,11 +212,14 @@ object WeatherAlertEngine {
         val condition = w0.optString("main", "")
         val weatherId = w0.optInt("id", 0)
         val description = w0.optString("description", "")
-        val city = current.optString("name", "")
+        // Cidade certa (híbrido cache Dart → Photon reverse). name do OWM é fallback.
+        val city = WeatherPlace.resolveLabel(context, lat, lon, current.optString("name", ""), corrId)
         // rain.1h (preferido) ou rain.3h do payload atual, se houver.
         val rainVol = current.optJSONObject("rain")?.let {
             it.optDouble("1h", it.optDouble("3h", 0.0))
         } ?: 0.0
+        // Rajada de vento (m/s) — condicional no payload, default 0.0 (padrão do rain).
+        val gust = current.optJSONObject("wind")?.optDouble("gust", 0.0) ?: 0.0
         // pop do período mais próximo de agora (0..1 → %).
         val popNext = forecast?.optJSONArray("list")?.optJSONObject(0)
             ?.optDouble("pop", 0.0)?.let { (it * 100).toInt() } ?: 0
@@ -242,12 +256,38 @@ object WeatherAlertEngine {
             eprefs.edit().putLong(LAST_RAIN, now).apply()
             fired.add("rain_started")
         }
-        // Volume de chuva alto no payload atual.
-        if (rainVol >= RAIN_MM_THRESHOLD && dueAgo(eprefs, LAST_VOLUME, now, COOLDOWN_8H)) {
+        // Volume de chuva MODERADO (4–20mm): acima de 20mm o alerta severo abaixo
+        // assume, evitando alerta duplo pro mesmo evento (cap confirmado no Bloco 2).
+        if (rainVol >= RAIN_MM_THRESHOLD && rainVol < RAIN_YELLOW_MM &&
+            dueAgo(eprefs, LAST_VOLUME, now, COOLDOWN_8H)) {
             notify(context, ID_VOLUME, CHANNEL_ID, false,
                 String.format(ptBr, WeatherAlertMessages.rainVolume.random(), rainVol), corrId)
             eprefs.edit().putLong(LAST_VOLUME, now).apply()
             fired.add("rain_volume")
+        }
+        // BLOCO 2 — chuva/vento SEVERO (rajada OU volume de chuva). Vermelho tem
+        // precedência sobre amarelo (limiares aninhados → só um dispara por evento).
+        // Vermelho usa o canal severo (som de alarme); amarelo, o canal normal. A
+        // mensagem reflete a causa dominante (vento se rajada estourou, senão chuva).
+        val gustKmh = gust * 3.6
+        if ((gust > GUST_RED_MS || rainVol >= RAIN_RED_MM) &&
+            dueAgo(eprefs, LAST_WIND_RAIN_R, now, COOLDOWN_8H)) {
+            val msg = if (gust > GUST_RED_MS)
+                String.format(ptBr, WeatherAlertMessages.strongWindRed.random(), gustKmh)
+            else
+                String.format(ptBr, WeatherAlertMessages.heavyRainRed.random(), rainVol)
+            notify(context, ID_WIND_RAIN_R, SEVERE_CHANNEL, true, msg, corrId)
+            eprefs.edit().putLong(LAST_WIND_RAIN_R, now).apply()
+            fired.add("wind_rain_red")
+        } else if ((gust > GUST_YELLOW_MS || rainVol >= RAIN_YELLOW_MM) &&
+            dueAgo(eprefs, LAST_WIND_RAIN_Y, now, COOLDOWN_8H)) {
+            val msg = if (gust > GUST_YELLOW_MS)
+                String.format(ptBr, WeatherAlertMessages.strongWindYellow.random(), gustKmh)
+            else
+                String.format(ptBr, WeatherAlertMessages.heavyRainYellow.random(), rainVol)
+            notify(context, ID_WIND_RAIN_Y, CHANNEL_ID, false, msg, corrId)
+            eprefs.edit().putLong(LAST_WIND_RAIN_Y, now).apply()
+            fired.add("wind_rain_yellow")
         }
         // Tempo severo → canal próprio (mais chamativo).
         if (isSevere && dueAgo(eprefs, LAST_SEVERE, now, COOLDOWN_8H)) {
