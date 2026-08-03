@@ -16,10 +16,11 @@ class TriggersDao extends DatabaseAccessor<SoproDatabase>
     with _$TriggersDaoMixin {
   TriggersDao(super.db);
 
-  // Retorna todos os triggers de um ambiente específico, ativos primeiro
+  // Retorna os triggers visíveis de um ambiente (exclui tombstones), ativos primeiro
   Future<List<TriggerRow>> findByEnvironment(String environmentId) =>
       (select(triggers)
-            ..where((t) => t.environmentId.equals(environmentId))
+            ..where((t) =>
+                t.environmentId.equals(environmentId) & t.deletedAt.isNull())
             ..orderBy([
               (t) => OrderingTerm(
                     expression: t.isActive,
@@ -28,10 +29,11 @@ class TriggersDao extends DatabaseAccessor<SoproDatabase>
             ]))
           .get();
 
-  // Observa em tempo real os triggers de um ambiente (para UI reativa)
+  // Observa em tempo real os triggers visíveis de um ambiente (UI reativa)
   Stream<List<TriggerRow>> watchByEnvironment(String environmentId) =>
       (select(triggers)
-            ..where((t) => t.environmentId.equals(environmentId))
+            ..where((t) =>
+                t.environmentId.equals(environmentId) & t.deletedAt.isNull())
             ..orderBy([
               (t) => OrderingTerm(
                     expression: t.isActive,
@@ -40,27 +42,42 @@ class TriggersDao extends DatabaseAccessor<SoproDatabase>
             ]))
           .watch();
 
-  // Retorna apenas os triggers ativos de um ambiente — usado pelo geofence service
+  // Retorna apenas os triggers ativos e visíveis de um ambiente — usado pelo geofence
   Future<List<TriggerRow>> findActiveByEnvironment(String environmentId) =>
       (select(triggers)
             ..where(
               (t) =>
                   t.environmentId.equals(environmentId) &
-                  t.isActive.equals(true),
+                  t.isActive.equals(true) &
+                  t.deletedAt.isNull(),
             ))
           .get();
 
-  // Insere ou atualiza um trigger
+  // Insere ou atualiza um trigger. Carimba updatedAt=agora (escrita do app → sync).
   Future<void> upsert(TriggersCompanion entry) =>
-      into(triggers).insertOnConflictUpdate(entry);
+      into(triggers).insertOnConflictUpdate(
+          entry.copyWith(updatedAt: Value(DateTime.now())));
 
   // Ativa ou desativa um trigger pelo ID
   Future<bool> setActive(String id, {required bool active}) =>
       (update(triggers)..where((t) => t.id.equals(id)))
-          .write(TriggersCompanion(isActive: Value(active)))
+          .write(TriggersCompanion(
+              isActive: Value(active), updatedAt: Value(DateTime.now())))
           .then((count) => count > 0);
 
-  // Remove um trigger pelo ID
-  Future<int> deleteById(String id) =>
-      (delete(triggers)..where((t) => t.id.equals(id))).go();
+  // Soft delete pelo ID: marca deletedAt (tombstone) em vez de remover a linha.
+  Future<int> deleteById(String id) {
+    final now = DateTime.now();
+    return (update(triggers)..where((t) => t.id.equals(id)))
+        .write(TriggersCompanion(deletedAt: Value(now), updatedAt: Value(now)));
+  }
+
+  // ── Motor de sync (Estágio 2.1) ────────────────────────────────────────────
+  Future<List<TriggerRow>> allForSync() => select(triggers).get();
+
+  Future<TriggerRow?> findByIdRaw(String id) =>
+      (select(triggers)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+  Future<void> applyRemote(TriggersCompanion entry) =>
+      into(triggers).insertOnConflictUpdate(entry);
 }

@@ -21,7 +21,8 @@ class ShoppingListItemsDao extends DatabaseAccessor<SoproDatabase>
   // sozinho — o stream reemite a lista já ordenada.
   Stream<List<ShoppingListItem>> watchByEnvironment(String environmentId) =>
       (select(shoppingListItems)
-            ..where((i) => i.environmentId.equals(environmentId))
+            ..where((i) =>
+                i.environmentId.equals(environmentId) & i.deletedAt.isNull())
             ..orderBy([
               (i) => OrderingTerm(expression: i.isChecked),
               (i) => OrderingTerm(expression: i.createdAt),
@@ -37,27 +38,49 @@ class ShoppingListItemsDao extends DatabaseAccessor<SoproDatabase>
             ..where(
               (i) =>
                   i.environmentId.equals(environmentId) &
-                  i.isChecked.equals(false),
+                  i.isChecked.equals(false) &
+                  i.deletedAt.isNull(),
             )
             ..orderBy([(i) => OrderingTerm(expression: i.createdAt)]))
           .get();
 
-  // Insere ou atualiza um item (upsert por ID)
+  // Insere ou atualiza um item (upsert por ID). Carimba updatedAt=agora (sync).
   Future<void> upsert(ShoppingListItemsCompanion entry) =>
-      into(shoppingListItems).insertOnConflictUpdate(entry);
+      into(shoppingListItems).insertOnConflictUpdate(
+          entry.copyWith(updatedAt: Value(DateTime.now())));
 
   // Marca/desmarca um item pelo ID — único ponto que altera isChecked
   Future<bool> setChecked(String id, {required bool checked}) =>
       (update(shoppingListItems)..where((i) => i.id.equals(id)))
-          .write(ShoppingListItemsCompanion(isChecked: Value(checked)))
+          .write(ShoppingListItemsCompanion(
+              isChecked: Value(checked), updatedAt: Value(DateTime.now())))
           .then((count) => count > 0);
 
-  // Remove um item pelo ID
-  Future<int> deleteById(String id) =>
-      (delete(shoppingListItems)..where((i) => i.id.equals(id))).go();
+  // Soft delete pelo ID: marca deletedAt (tombstone) em vez de remover a linha.
+  Future<int> deleteById(String id) {
+    final now = DateTime.now();
+    return (update(shoppingListItems)..where((i) => i.id.equals(id))).write(
+        ShoppingListItemsCompanion(
+            deletedAt: Value(now), updatedAt: Value(now)));
+  }
 
-  // Remove todos os itens de um ambiente (concluir compra)
-  Future<int> deleteAllByEnvironment(String environmentId) =>
-      (delete(shoppingListItems)..where((i) => i.environmentId.equals(environmentId)))
-          .go();
+  // Soft delete de todos os itens de um ambiente (concluir compra) — tombstona
+  // cada linha para a exclusão propagar no sync.
+  Future<int> deleteAllByEnvironment(String environmentId) {
+    final now = DateTime.now();
+    return (update(shoppingListItems)
+          ..where((i) => i.environmentId.equals(environmentId) & i.deletedAt.isNull()))
+        .write(ShoppingListItemsCompanion(
+            deletedAt: Value(now), updatedAt: Value(now)));
+  }
+
+  // ── Motor de sync (Estágio 2.1) ────────────────────────────────────────────
+  Future<List<ShoppingListItem>> allForSync() => select(shoppingListItems).get();
+
+  Future<ShoppingListItem?> findByIdRaw(String id) =>
+      (select(shoppingListItems)..where((i) => i.id.equals(id)))
+          .getSingleOrNull();
+
+  Future<void> applyRemote(ShoppingListItemsCompanion entry) =>
+      into(shoppingListItems).insertOnConflictUpdate(entry);
 }

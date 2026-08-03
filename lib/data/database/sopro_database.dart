@@ -59,6 +59,10 @@ part 'sopro_database.g.dart';
 //   v13: WeatherCacheEntries ganha humidity; nova tabela WeatherForecastCache
 //   v14: WeatherCacheEntries ganha cityName; flush do cache de clima/previsão
 //   v15: Environments ganha pinImagePath — foto por ambiente na plaquinha 3D
+//   v16 (Sync 2.1): updatedAt + deletedAt (tombstone) nas 4 tabelas sincronizadas
+//        (environments, triggers, scheduledReminders, shoppingListItems)
+//   v17 (Sync 2.2): normaliza created_at/updated_at legados gravados em MS pelo
+//        Overlay antigo para SEGUNDOS (convenção Drift), por coluna e idempotente
 @DriftDatabase(
   tables: [
     Environments,
@@ -91,7 +95,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 17;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -171,6 +175,41 @@ class SoproDatabase extends _$SoproDatabase {
             // v15: foto por ambiente na plaquinha 3D. Coluna nullable —
             // ambientes antigos ficam null (arte Sopro padrão). Nenhum dado perdido.
             await m.addColumn(environments, environments.pinImagePath);
+          }
+          if (from < 16) {
+            // v16 (Sync 2.1): colunas updatedAt + deletedAt nas 4 tabelas
+            // sincronizadas. Ambas nullable (ADD COLUMN sem default dinâmico é o
+            // que o SQLite permite). Backfill: updated_at = created_at nas linhas
+            // existentes para o primeiro sync tratá-las como já "modificadas".
+            await m.addColumn(environments, environments.updatedAt);
+            await m.addColumn(environments, environments.deletedAt);
+            await m.addColumn(triggers, triggers.updatedAt);
+            await m.addColumn(triggers, triggers.deletedAt);
+            await m.addColumn(scheduledReminders, scheduledReminders.updatedAt);
+            await m.addColumn(scheduledReminders, scheduledReminders.deletedAt);
+            await m.addColumn(shoppingListItems, shoppingListItems.updatedAt);
+            await m.addColumn(shoppingListItems, shoppingListItems.deletedAt);
+            await customStatement('UPDATE environments SET updated_at = created_at WHERE updated_at IS NULL');
+            await customStatement('UPDATE triggers SET updated_at = created_at WHERE updated_at IS NULL');
+            await customStatement('UPDATE scheduled_reminders SET updated_at = created_at WHERE updated_at IS NULL');
+            await customStatement('UPDATE shopping_list_items SET updated_at = created_at WHERE updated_at IS NULL');
+          }
+          if (from < 17) {
+            // v17 (Sync 2.2): o Overlay antigo gravava created_at de environments/
+            // triggers/shopping em MILISSEGUNDOS (reminders sempre em segundos). O
+            // Drift/SyncEngine leem como SEGUNDOS → datas infladas (~ano 55000) e
+            // LWW quebrado. Normaliza dividindo por 1000 SOMENTE o que está inflado.
+            // Por coluna (não só created_at): cobre a linha criada em ms mas já
+            // editada em segundos pelo Home. Idempotente (o guard > 1e11 nunca casa
+            // um timestamp que já está em segundos, válido até ~ano 5138).
+            for (final t in const [
+              'environments', 'triggers', 'scheduled_reminders', 'shopping_list_items'
+            ]) {
+              await customStatement(
+                  'UPDATE $t SET created_at = created_at / 1000 WHERE created_at > 100000000000');
+              await customStatement(
+                  'UPDATE $t SET updated_at = updated_at / 1000 WHERE updated_at > 100000000000');
+            }
           }
         },
       );

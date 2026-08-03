@@ -34,6 +34,7 @@ import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.tasks.Tasks
 import com.sopro.sopro.logging.CorrelationManager
+import com.sopro.sopro.logging.LogRedaction
 import com.sopro.sopro.logging.Logger
 import com.sopro.sopro.logging.LoggerConfiguration
 import com.sopro.sopro.logging.SessionManager
@@ -102,6 +103,9 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         private const val KEY_DEVICE_ID      = "flutter.logger_device_id"
         // Chave lida pelo Dart em VoiceService.speak() para evitar TTS duplicado
         private const val KEY_FLOATING_SPOKE = "flutter.floating_spoke_at"
+        // Toggles de acessibilidade (mesma fonte do Home): áudio (TTS) e texto (popup).
+        private const val KEY_VOICE_AUDIO    = "flutter.voice_audio_response"
+        private const val KEY_VOICE_TEXT     = "flutter.voice_text_response"
 
         // Posição salva do botão
         private const val PREF_FILE = "sopro_float_pos"
@@ -2128,10 +2132,13 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val envNameCapitalized = capitalizeEnvName(name)
             val id  = UUID.randomUUID().toString()
-            val now = System.currentTimeMillis()
+            // SEGUNDOS desde epoch (convenção Drift; o SyncEngine Dart lê como segundos).
+            // updated_at = created_at no INSERT (mesmo padrão do backfill Dart) → linha
+            // já entra elegível ao PUSH (updated_at nunca fica null).
+            val now = System.currentTimeMillis() / 1000L
             db.execSQL(
-                "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                arrayOf(id, envNameCapitalized, 0.0, 0.0, 100.0, now)
+                "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                arrayOf(id, envNameCapitalized, 0.0, 0.0, 100.0, now, now)
             )
             Logger.info("environment_created", feature = "floating_voice", action = "db_write",
                 durationMs = System.currentTimeMillis() - start,
@@ -2271,12 +2278,16 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             // Coleta os ids ANTES de apagar — necessários para remover geofences
             val ids = mutableListOf<String>()
-            db.rawQuery("SELECT id FROM environments", null).use { c ->
+            db.rawQuery("SELECT id FROM environments WHERE deleted_at IS NULL", null).use { c ->
                 while (c.moveToNext()) ids.add(c.getString(0))
             }
-            // Apaga gatilhos primeiro (FK), depois os ambientes
-            db.execSQL("DELETE FROM triggers")
-            db.execSQL("DELETE FROM environments")
+            // Soft delete (tombstone) em vez de remoção física: marca deleted_at +
+            // updated_at = agora (segundos). Gatilhos primeiro, depois os ambientes.
+            val nowSec = System.currentTimeMillis() / 1000L
+            db.execSQL("UPDATE triggers SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL",
+                arrayOf<Any>(nowSec, nowSec))
+            db.execSQL("UPDATE environments SET deleted_at = ?, updated_at = ? WHERE deleted_at IS NULL",
+                arrayOf<Any>(nowSec, nowSec))
             // Geofences exigem main thread; mapa de nomes do receiver é limpo aqui
             if (ids.isNotEmpty()) mainHandler.post { removeGeofences(ids) }
             getSharedPreferences(GeofenceReceiver.PREFS_NAME, Context.MODE_PRIVATE)
@@ -2414,7 +2425,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val cursor = db.rawQuery(
-                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) AND is_market = 1 LIMIT 1",
+                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) AND is_market = 1 AND deleted_at IS NULL LIMIT 1",
                 arrayOf(marketName)
             )
             val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
@@ -2426,14 +2437,15 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     correlationId = corrId)
                 return false
             }
-            val now = System.currentTimeMillis()
+            // SEGUNDOS desde epoch (convenção Drift). updated_at = created_at no INSERT.
+            val now = System.currentTimeMillis() / 1000L
             for (raw in items) {
                 val name = capitalizePt(raw)
                 val id = UUID.randomUUID().toString()
                 db.execSQL(
-                    "INSERT INTO shopping_list_items (id, environment_id, name, is_checked, created_at) " +
-                    "VALUES (?, ?, ?, 0, ?)",
-                    arrayOf(id, envId, name, now)
+                    "INSERT INTO shopping_list_items (id, environment_id, name, is_checked, created_at, updated_at) " +
+                    "VALUES (?, ?, ?, 0, ?, ?)",
+                    arrayOf(id, envId, name, now, now)
                 )
             }
             // Sinaliza a UI para atualizar ao voltar ao foreground (mesmos providers).
@@ -2601,10 +2613,11 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                         .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
                 }
             val id  = UUID.randomUUID().toString()
-            val now = System.currentTimeMillis()
+            // SEGUNDOS desde epoch (convenção Drift). updated_at = created_at no INSERT.
+            val now = System.currentTimeMillis() / 1000L
             db.execSQL(
-                "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                arrayOf(id, envNameCapitalized, lat, lon, radius.toDouble(), now)
+                "INSERT INTO environments (id, name, latitude, longitude, radius_meters, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                arrayOf(id, envNameCapitalized, lat, lon, radius.toDouble(), now, now)
             )
             // TEMP: remover após calibração da resolução de localização
             Logger.info("environment_location_assigned", feature = "floating_voice", action = "db_write",
@@ -2661,7 +2674,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         return try {
             db = SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
             val cursor = db.rawQuery(
-                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
+                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1",
                 arrayOf(envName)
             )
             val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
@@ -2675,10 +2688,11 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 return false
             }
             val id  = UUID.randomUUID().toString()
-            val now = System.currentTimeMillis()
+            // SEGUNDOS desde epoch (convenção Drift). updated_at = created_at no INSERT.
+            val now = System.currentTimeMillis() / 1000L
             db.execSQL(
-                "INSERT INTO triggers (id, environment_id, title, content, is_active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
-                arrayOf(id, envId, title, content, now)
+                "INSERT INTO triggers (id, environment_id, title, content, is_active, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+                arrayOf(id, envId, title, content, now, now)
             )
             Logger.info("trigger_created", feature = "floating_voice", action = "db_write",
                 durationMs = System.currentTimeMillis() - start,
@@ -2736,10 +2750,11 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             // Capitaliza só a 1a letra (mesma regra do CreateReminderSkill Dart).
             val capTitle = if (title.isEmpty()) title
                 else title.substring(0, 1).uppercase(java.util.Locale("pt", "BR")) + title.substring(1)
+            // updated_at = created_at = nowSec (segundos) → elegível ao PUSH do SyncEngine.
             db.execSQL(
                 "INSERT INTO scheduled_reminders (id, title, content, scheduled_at, repeat_rule, " +
-                "repeat_days_of_week, is_active, alert_mode, created_at) VALUES (?, ?, '', ?, ?, ?, 1, ?, ?)",
-                arrayOf<Any>(id, capTitle, schedSec, repeatRule, repeatDays, alertMode, nowSec)
+                "repeat_days_of_week, is_active, alert_mode, created_at, updated_at) VALUES (?, ?, '', ?, ?, ?, 1, ?, ?, ?)",
+                arrayOf<Any>(id, capTitle, schedSec, repeatRule, repeatDays, alertMode, nowSec, nowSec)
             )
             Logger.info("reminder_created", feature = "floating_voice", action = "db_write",
                 durationMs = System.currentTimeMillis() - start,
@@ -2789,7 +2804,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             var lat = 0.0; var lon = 0.0; var envName = name; var curRadius = 100.0
             db.rawQuery(
                 "SELECT id, latitude, longitude, name, radius_meters FROM environments " +
-                "WHERE LOWER(name) = LOWER(?) LIMIT 1", arrayOf(name)
+                "WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1", arrayOf(name)
             ).use { c ->
                 if (c.moveToFirst()) {
                     envId = c.getString(0); lat = c.getDouble(1); lon = c.getDouble(2)
@@ -2798,8 +2813,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             }
             val id = envId ?: return false
             val newRadius = radius?.toDouble() ?: curRadius
-            db.execSQL("UPDATE environments SET radius_meters = ? WHERE id = ?",
-                arrayOf<Any>(newRadius, id))
+            // UPDATE: carimba updated_at = agora (segundos) para o SyncEngine empurrar.
+            val nowSec = System.currentTimeMillis() / 1000L
+            db.execSQL("UPDATE environments SET radius_meters = ?, updated_at = ? WHERE id = ?",
+                arrayOf<Any>(newRadius, nowSec, id))
             mainHandler.post { registerGeofence(id, envName, lat, lon, newRadius) }
             Logger.info("environment_updated", feature = "floating_voice", action = "db_write",
                 durationMs = System.currentTimeMillis() - start,
@@ -2850,7 +2867,8 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             db.rawQuery(
                 "SELECT t.id, t.title, t.content FROM triggers t " +
                 "JOIN environments e ON t.environment_id = e.id " +
-                "WHERE LOWER(e.name) = LOWER(?) AND LOWER(t.title) LIKE LOWER(?) LIMIT 1",
+                "WHERE LOWER(e.name) = LOWER(?) AND LOWER(t.title) LIKE LOWER(?) " +
+                "AND t.deleted_at IS NULL AND e.deleted_at IS NULL LIMIT 1",
                 arrayOf(envName, "%$title%")
             ).use { c ->
                 if (c.moveToFirst()) {
@@ -2860,8 +2878,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
             val id = trigId ?: return false
             val finalTitle = newTitle ?: oldTitle
             val finalContent = content ?: oldContent
-            db.execSQL("UPDATE triggers SET title = ?, content = ? WHERE id = ?",
-                arrayOf(finalTitle, finalContent, id))
+            // UPDATE: carimba updated_at = agora (segundos) para o SyncEngine empurrar.
+            val nowSec = System.currentTimeMillis() / 1000L
+            db.execSQL("UPDATE triggers SET title = ?, content = ?, updated_at = ? WHERE id = ?",
+                arrayOf<Any>(finalTitle, finalContent, nowSec, id))
             Logger.info("trigger_updated", feature = "floating_voice", action = "db_write",
                 durationMs = System.currentTimeMillis() - start,
                 payload = if (LoggerConfiguration.debugLogging)
@@ -2913,7 +2933,7 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                         .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
                 }
             val cursor = db.rawQuery(
-                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) LIMIT 1",
+                "SELECT id FROM environments WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL LIMIT 1",
                 arrayOf(envNameCapitalized)
             )
             val envId = if (cursor.moveToFirst()) cursor.getString(0) else null
@@ -2926,9 +2946,13 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 mainHandler.post { speak(OverlayPersona.environmentNotFoundVerify(envNameCapitalized)) }
                 return false
             }
-            // Remove triggers primeiro (FK), depois o ambiente
-            db.execSQL("DELETE FROM triggers WHERE environment_id = ?", arrayOf(envId))
-            db.execSQL("DELETE FROM environments WHERE id = ?", arrayOf(envId))
+            // Soft delete (tombstone) em vez de remoção física: cascata manual nos
+            // gatilhos do ambiente + o próprio ambiente, marcando deleted_at/updated_at.
+            val nowSec = System.currentTimeMillis() / 1000L
+            db.execSQL("UPDATE triggers SET deleted_at = ?, updated_at = ? WHERE environment_id = ? AND deleted_at IS NULL",
+                arrayOf<Any>(nowSec, nowSec, envId))
+            db.execSQL("UPDATE environments SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                arrayOf<Any>(nowSec, nowSec, envId))
             Logger.info("environment_deleted", feature = "floating_voice", action = "db_write",
                 durationMs = System.currentTimeMillis() - start,
                 payload = if (LoggerConfiguration.debugLogging)
@@ -2988,13 +3012,20 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                     word.lowercase(java.util.Locale("pt", "BR"))
                         .replaceFirstChar { it.titlecase(java.util.Locale("pt", "BR")) }
                 }
+            // Soft delete (tombstone): UPDATE marcando deleted_at/updated_at = agora
+            // (segundos) em vez de DELETE físico. executeUpdateDelete ainda devolve o
+            // nº de linhas afetadas, então o feedback "não encontrei" segue funcionando.
+            val nowSec = System.currentTimeMillis() / 1000L
             if (triggerTitle != null) {
                 val stmt = db.compileStatement(
-                    "DELETE FROM triggers WHERE LOWER(title) LIKE LOWER(?) AND environment_id IN " +
+                    "UPDATE triggers SET deleted_at = ?, updated_at = ? " +
+                    "WHERE LOWER(title) LIKE LOWER(?) AND deleted_at IS NULL AND environment_id IN " +
                     "(SELECT id FROM environments WHERE LOWER(name) = LOWER(?))"
                 )
-                stmt.bindString(1, "%${triggerTitle}%")
-                stmt.bindString(2, envNameCapitalized)
+                stmt.bindLong(1, nowSec)
+                stmt.bindLong(2, nowSec)
+                stmt.bindString(3, "%${triggerTitle}%")
+                stmt.bindString(4, envNameCapitalized)
                 val rowsAffected = stmt.executeUpdateDelete()
                 if (rowsAffected == 0) {
                     Logger.warn("trigger_not_found", feature = "floating_voice", action = "db_write",
@@ -3006,9 +3037,10 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
                 }
             } else {
                 db.execSQL(
-                    "DELETE FROM triggers WHERE environment_id IN " +
+                    "UPDATE triggers SET deleted_at = ?, updated_at = ? " +
+                    "WHERE deleted_at IS NULL AND environment_id IN " +
                     "(SELECT id FROM environments WHERE LOWER(name) = LOWER(?))",
-                    arrayOf(envNameCapitalized)
+                    arrayOf<Any>(nowSec, nowSec, envNameCapitalized)
                 )
             }
             Logger.info("trigger_deleted", feature = "floating_voice", action = "db_write",
@@ -3311,7 +3343,9 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
         val body = JSONObject().apply {
             put("device_id",  deviceId)
             put("event_type", eventType)
-            put("payload",    JSONObject(payload as Map<*, *>))
+            // Redação de conteúdo livre (LGPD) antes do INSERT — mesmas chaves do
+            // lado Dart (LogRedaction espelha AppLogger._supabaseContentDenyKeys).
+            put("payload",    JSONObject(LogRedaction.redact(payload) as Map<*, *>))
         }.toString()
 
         try {
@@ -3345,8 +3379,14 @@ class FloatingVoiceService : Service(), TextToSpeech.OnInitListener {
     // se o app abrir dentro de 10 s após o botão flutuante ter falado.
     private fun speak(text: String) {
         // Grava timestamp SEMPRE (dedup do Home), qualquer que seja o motor usado.
-        getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
-            .edit().putLong(KEY_FLOATING_SPOKE, System.currentTimeMillis()).apply()
+        val prefs = getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+        prefs.edit().putLong(KEY_FLOATING_SPOKE, System.currentTimeMillis()).apply()
+
+        // Toggles de acessibilidade (default ligado, mesma fonte que o Home lê).
+        // Modo "Responder com texto": popup ANTES do guard de áudio — assim
+        // áudio OFF + texto ON vira modo só-leitura (paridade com VoiceTextPopup).
+        if (prefs.getBoolean(KEY_VOICE_TEXT, true)) OverlayTextPopup.show(applicationContext, text)
+        if (!prefs.getBoolean(KEY_VOICE_AUDIO, true)) return
 
         // Voz Piper faber-medium (idêntica ao Home) via OverlayTts. Se a carga ou
         // a geração falhar, cai no TTS nativo do sistema — overlay nunca fica mudo.

@@ -88,6 +88,8 @@ class MainActivity : FlutterActivity() {
         // ── Overlay (botão flutuante de voz) ──────────────────────────────────
         private const val OVERLAY_CHANNEL   = "com.sopro.sopro/overlay"
         private const val REMINDERS_CHANNEL = "com.sopro.sopro/reminders"
+        // ── Conta / Supabase Auth (Fase 1) — hook de teste do refresh nativo ──
+        private const val AUTH_CHANNEL      = "com.sopro.sopro/auth"
         private const val PERM_REQUEST_MIC = 1004
         private const val TAG              = "MainActivity"
 
@@ -791,10 +793,42 @@ class MainActivity : FlutterActivity() {
         Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
             payload = mapOf("channel" to "com.sopro.sopro/geocoder"))
 
+        // ── Conta / Supabase Auth (Fase 1) ────────────────────────────────────
+        // Hook de teste/validação do refresh nativo. Ainda NÃO consumido por
+        // nenhuma chamada de dados (dados seguem locais) — só prova a capacidade:
+        // o Overlay lê o token salvo pelo app e renova via GoTrue quando vencido.
+        // Chamadas de rede rodam em thread de fundo (result devolvido na UI thread).
+        val appCtx = applicationContext
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, AUTH_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    // Diagnóstico sem rede: existe token? está vencido? qual e-mail?
+                    "tokenInfo" -> result.success(SupabaseAuth.tokenInfo(appCtx))
+                    // Marca o token como vencido (para testar o refresh em seguida).
+                    "simulateExpiry" -> {
+                        SupabaseAuth.simulateExpiryForTest(appCtx)
+                        result.success(true)
+                    }
+                    // Força o refresh via GoTrue (rede → thread de fundo).
+                    "refresh" -> Thread {
+                        val ok = SupabaseAuth.refreshBlocking(appCtx)
+                        this@MainActivity.runOnUiThread { result.success(ok) }
+                    }.start()
+                    // Devolve um access_token válido (renova se necessário).
+                    "getValidToken" -> Thread {
+                        val token = SupabaseAuth.getValidAccessTokenBlocking(appCtx)
+                        this@MainActivity.runOnUiThread { result.success(token) }
+                    }.start()
+                    else -> result.notImplemented()
+                }
+            }
+        Logger.debug("channel_registered", feature = "main_activity", action = "configureFlutterEngine",
+            payload = mapOf("channel" to AUTH_CHANNEL))
+
         Logger.info("flutter_engine_configured", feature = "main_activity",
             action = "configureFlutterEngine",
             durationMs = System.currentTimeMillis() - engineStart,
-            payload = mapOf("channels_count" to "7"))
+            payload = mapOf("channels_count" to "8"))
     }
 
     // ═════════════════════════════════════════════════════════════════════════

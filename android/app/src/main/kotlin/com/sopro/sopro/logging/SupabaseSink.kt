@@ -60,7 +60,9 @@ object SupabaseSink : LogSink {
             JSONObject().apply {
                 put("device_id",  deviceId)
                 put("event_type", event.message)
-                put("payload",    mapToJson(event.payload ?: emptyMap()))
+                // Redação de conteúdo livre (LGPD) antes do INSERT — mesmas chaves
+                // do lado Dart (LogRedaction espelha AppLogger._supabaseContentDenyKeys).
+                put("payload",    mapToJson(LogRedaction.redact(event.payload ?: emptyMap())))
             }.toString()
         } catch (e: Exception) {
             Log.w(TAG, "[SupabaseSink] serialização falhou para '${event.message}': ${e.message}")

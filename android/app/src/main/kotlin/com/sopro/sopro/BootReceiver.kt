@@ -186,7 +186,7 @@ class BootReceiver : BroadcastReceiver() {
                 Logger.debug("sqlite_opened", feature = "boot",
                     action = "readEnvironmentsFromDb", correlationId = corrId)
                 db.rawQuery(
-                    "SELECT id, name, latitude, longitude, radius_meters FROM environments",
+                    "SELECT id, name, latitude, longitude, radius_meters FROM environments WHERE deleted_at IS NULL",
                     null
                 ).use { cursor ->
                     while (cursor.moveToNext()) {
@@ -230,7 +230,7 @@ class BootReceiver : BroadcastReceiver() {
             db = SQLiteDatabase.openDatabase(
                 dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
             db.rawQuery(
-                "SELECT id, scheduled_at FROM scheduled_reminders WHERE is_active = 1",
+                "SELECT id, scheduled_at FROM scheduled_reminders WHERE is_active = 1 AND deleted_at IS NULL",
                 null
             ).use { cursor ->
                 while (cursor.moveToNext()) {

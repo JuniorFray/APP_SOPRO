@@ -119,6 +119,57 @@ return try {
 - MethodChannel reverseGeocode adicionado ao MainActivity.kt
 - Menu benchmark geocoder removido das Configuracoes (tela inerte preservada)
 
+## Status — Fase 1 Concluida (Contas Supabase + Overlay)
+
+- Auth email/senha via GoTrue REST cru (dart:io, SEM supabase_flutter):
+  lib/infrastructure/auth/auth_service.dart — signUp/signIn/recover/signOut +
+  restoreAndRefresh no startup. Sessao espelhada em SharedPreferences com chaves
+  sem prefixo (sopro_access_token etc.) para o Overlay nativo consumir.
+- Telas de conta (lib/presentation/screens/auth/) + auth_providers.dart
+  (authSessionProvider reativo). Feedback service (infrastructure/feedback).
+- Overlay nativo: refresh de token proprio (SupabaseAuth.kt) — le/renova a mesma
+  sessao sem Flutter Engine. LogRedaction.kt para nao vazar dado sensivel nos logs.
+- Overlay: popup visual de texto (OverlayTextPopup.kt) — replica nativa do
+  VoiceTextPopup do Home (glass/blur via WindowManager, topo da tela, duracao
+  proporcional). Gateado por flutter.voice_text_response; audio por
+  flutter.voice_audio_response. 4 combinacoes audio/texto no funil speak().
+
+## Status — Sync Estagio 2.1 Concluido (Motor Drift <-> Supabase, so Home/Dart)
+
+- schemaV16: updatedAt + deletedAt (nullable) nas 4 tabelas sincronizadas
+  (environments, triggers, scheduled_reminders, shopping_list_items).
+  Migration v15->v16 faz backfill updated_at = created_at (testado em banco populado).
+- Soft delete: deleteById marca deletedAt (tombstone), nao remove a linha.
+  Leituras dos DAOs filtram deletedAt IS NULL. Sem rotina de limpeza fisica (V1).
+- Cascade manual: deletar environment tombstona os triggers do ambiente (o cascade
+  fisico do FK so dispara em DELETE real).
+- SyncEngine (lib/infrastructure/sync/sync_engine.dart): singleton, PostgREST cru
+  via dart:io (sem novas deps). PULL+PUSH das 4 tabelas, LWW por updatedAt.
+  Guardado: no-op se deslogado/sem config/token vencido; offline = falha de rede
+  engolida (fail-safe). Throttle 15s. Gatilhos: login (sessionStream), startup e
+  resume do app (AppInitializer). PUSH inclui user_id; environments SEM
+  pin_image_path (foto local-only, nao migra).
+- Repositorios/streams intactos (o motor roda por tras, DAOs sao o unico ponto).
+
+## Status — Sync Estagio 2.2 Concluido (Overlay compativel com o motor)
+
+- Overlay (FloatingVoiceService.kt) agora escreve compativel com o SyncEngine:
+  INSERT carimba updated_at = created_at; UPDATE carimba updated_at = agora;
+  DELETE virou soft delete (UPDATE deleted_at) — sem remocao fisica.
+- Timestamp em SEGUNDOS desde epoch em TODAS as escritas do Overlay (convencao
+  Drift). Antes env/trigger/shopping gravavam ms (bug latente); agora tudo em
+  segundos (System.currentTimeMillis() / 1000L). Reminders ja eram segundos.
+- Leituras nativas filtram deleted_at IS NULL: BootReceiver (reagenda geofences/
+  reminders), ReminderReceiver (dispara), GeofenceReceiver (triggers/is_market/
+  shopping) + lookups internos por nome/titulo no FloatingVoiceService.
+- ReminderReceiver: UPDATEs de recorrencia (advance/consume) carimbam updated_at.
+- Build Kotlin limpo. Overlay ainda NAO sincroniza com Supabase direto — PUSH/PULL
+  segue no SyncEngine Dart (roda quando o Home abre/resume).
+- schemaV17: migration normaliza created_at/updated_at legados (ms->s) por coluna,
+  idempotente (guard > 1e11). Testado (test/unit/sync_migration_test.dart).
+
+## NAO feito (proximos estagios): Realtime, compartilhamento (Fase 3).
+
 ## Proximos Passos — Fase 3
 
 - Sprint F3-2: Mapa Redesenhado — campo de busca com autocomplete usando geocoding F3-1

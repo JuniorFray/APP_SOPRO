@@ -28,6 +28,10 @@ class Triggers extends Table {
   // Timestamp de criação
   DateTimeColumn get createdAt => dateTime()();
 
+  // Sync (Estágio 2.1) — modificação local (LWW) + tombstone de exclusão.
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

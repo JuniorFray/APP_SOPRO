@@ -20,6 +20,10 @@ class ShoppingListItems extends Table {
   // Timestamp de criação (ordena a lista por ordem de inserção)
   DateTimeColumn get createdAt => dateTime()();
 
+  // Sync (Estágio 2.1) — modificação local (LWW) + tombstone de exclusão.
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

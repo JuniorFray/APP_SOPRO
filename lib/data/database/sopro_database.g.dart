@@ -62,6 +62,18 @@ class $EnvironmentsTable extends Environments
   late final GeneratedColumn<String> pinImagePath = GeneratedColumn<String>(
       'pin_image_path', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _deletedAtMeta =
+      const VerificationMeta('deletedAt');
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+      'deleted_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -71,7 +83,9 @@ class $EnvironmentsTable extends Environments
         radiusMeters,
         createdAt,
         isMarket,
-        pinImagePath
+        pinImagePath,
+        updatedAt,
+        deletedAt
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -130,6 +144,14 @@ class $EnvironmentsTable extends Environments
           pinImagePath.isAcceptableOrUnknown(
               data['pin_image_path']!, _pinImagePathMeta));
     }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(_deletedAtMeta,
+          deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta));
+    }
     return context;
   }
 
@@ -155,6 +177,10 @@ class $EnvironmentsTable extends Environments
           .read(DriftSqlType.bool, data['${effectivePrefix}is_market'])!,
       pinImagePath: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}pin_image_path']),
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at']),
+      deletedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}deleted_at']),
     );
   }
 
@@ -173,6 +199,8 @@ class Environment extends DataClass implements Insertable<Environment> {
   final DateTime createdAt;
   final bool isMarket;
   final String? pinImagePath;
+  final DateTime? updatedAt;
+  final DateTime? deletedAt;
   const Environment(
       {required this.id,
       required this.name,
@@ -181,7 +209,9 @@ class Environment extends DataClass implements Insertable<Environment> {
       required this.radiusMeters,
       required this.createdAt,
       required this.isMarket,
-      this.pinImagePath});
+      this.pinImagePath,
+      this.updatedAt,
+      this.deletedAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -194,6 +224,12 @@ class Environment extends DataClass implements Insertable<Environment> {
     map['is_market'] = Variable<bool>(isMarket);
     if (!nullToAbsent || pinImagePath != null) {
       map['pin_image_path'] = Variable<String>(pinImagePath);
+    }
+    if (!nullToAbsent || updatedAt != null) {
+      map['updated_at'] = Variable<DateTime>(updatedAt);
+    }
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
     }
     return map;
   }
@@ -210,6 +246,12 @@ class Environment extends DataClass implements Insertable<Environment> {
       pinImagePath: pinImagePath == null && nullToAbsent
           ? const Value.absent()
           : Value(pinImagePath),
+      updatedAt: updatedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -225,6 +267,8 @@ class Environment extends DataClass implements Insertable<Environment> {
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       isMarket: serializer.fromJson<bool>(json['isMarket']),
       pinImagePath: serializer.fromJson<String?>(json['pinImagePath']),
+      updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
     );
   }
   @override
@@ -239,6 +283,8 @@ class Environment extends DataClass implements Insertable<Environment> {
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'isMarket': serializer.toJson<bool>(isMarket),
       'pinImagePath': serializer.toJson<String?>(pinImagePath),
+      'updatedAt': serializer.toJson<DateTime?>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
     };
   }
 
@@ -250,7 +296,9 @@ class Environment extends DataClass implements Insertable<Environment> {
           double? radiusMeters,
           DateTime? createdAt,
           bool? isMarket,
-          Value<String?> pinImagePath = const Value.absent()}) =>
+          Value<String?> pinImagePath = const Value.absent(),
+          Value<DateTime?> updatedAt = const Value.absent(),
+          Value<DateTime?> deletedAt = const Value.absent()}) =>
       Environment(
         id: id ?? this.id,
         name: name ?? this.name,
@@ -261,6 +309,8 @@ class Environment extends DataClass implements Insertable<Environment> {
         isMarket: isMarket ?? this.isMarket,
         pinImagePath:
             pinImagePath.present ? pinImagePath.value : this.pinImagePath,
+        updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
+        deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
       );
   Environment copyWithCompanion(EnvironmentsCompanion data) {
     return Environment(
@@ -276,6 +326,8 @@ class Environment extends DataClass implements Insertable<Environment> {
       pinImagePath: data.pinImagePath.present
           ? data.pinImagePath.value
           : this.pinImagePath,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -289,14 +341,16 @@ class Environment extends DataClass implements Insertable<Environment> {
           ..write('radiusMeters: $radiusMeters, ')
           ..write('createdAt: $createdAt, ')
           ..write('isMarket: $isMarket, ')
-          ..write('pinImagePath: $pinImagePath')
+          ..write('pinImagePath: $pinImagePath, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode => Object.hash(id, name, latitude, longitude, radiusMeters,
-      createdAt, isMarket, pinImagePath);
+      createdAt, isMarket, pinImagePath, updatedAt, deletedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -308,7 +362,9 @@ class Environment extends DataClass implements Insertable<Environment> {
           other.radiusMeters == this.radiusMeters &&
           other.createdAt == this.createdAt &&
           other.isMarket == this.isMarket &&
-          other.pinImagePath == this.pinImagePath);
+          other.pinImagePath == this.pinImagePath &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
 }
 
 class EnvironmentsCompanion extends UpdateCompanion<Environment> {
@@ -320,6 +376,8 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
   final Value<DateTime> createdAt;
   final Value<bool> isMarket;
   final Value<String?> pinImagePath;
+  final Value<DateTime?> updatedAt;
+  final Value<DateTime?> deletedAt;
   final Value<int> rowid;
   const EnvironmentsCompanion({
     this.id = const Value.absent(),
@@ -330,6 +388,8 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     this.createdAt = const Value.absent(),
     this.isMarket = const Value.absent(),
     this.pinImagePath = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   EnvironmentsCompanion.insert({
@@ -341,6 +401,8 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     required DateTime createdAt,
     this.isMarket = const Value.absent(),
     this.pinImagePath = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         name = Value(name),
@@ -357,6 +419,8 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     Expression<DateTime>? createdAt,
     Expression<bool>? isMarket,
     Expression<String>? pinImagePath,
+    Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -368,6 +432,8 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       if (createdAt != null) 'created_at': createdAt,
       if (isMarket != null) 'is_market': isMarket,
       if (pinImagePath != null) 'pin_image_path': pinImagePath,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -381,6 +447,8 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       Value<DateTime>? createdAt,
       Value<bool>? isMarket,
       Value<String?>? pinImagePath,
+      Value<DateTime?>? updatedAt,
+      Value<DateTime?>? deletedAt,
       Value<int>? rowid}) {
     return EnvironmentsCompanion(
       id: id ?? this.id,
@@ -391,6 +459,8 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       createdAt: createdAt ?? this.createdAt,
       isMarket: isMarket ?? this.isMarket,
       pinImagePath: pinImagePath ?? this.pinImagePath,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -422,6 +492,12 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     if (pinImagePath.present) {
       map['pin_image_path'] = Variable<String>(pinImagePath.value);
     }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -439,6 +515,8 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
           ..write('createdAt: $createdAt, ')
           ..write('isMarket: $isMarket, ')
           ..write('pinImagePath: $pinImagePath, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -494,9 +572,29 @@ class $TriggersTable extends Triggers
   late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
       'created_at', aliasedName, false,
       type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
   @override
-  List<GeneratedColumn> get $columns =>
-      [id, environmentId, title, content, isActive, createdAt];
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _deletedAtMeta =
+      const VerificationMeta('deletedAt');
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+      'deleted_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        environmentId,
+        title,
+        content,
+        isActive,
+        createdAt,
+        updatedAt,
+        deletedAt
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -542,6 +640,14 @@ class $TriggersTable extends Triggers
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(_deletedAtMeta,
+          deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta));
+    }
     return context;
   }
 
@@ -563,6 +669,10 @@ class $TriggersTable extends Triggers
           .read(DriftSqlType.bool, data['${effectivePrefix}is_active'])!,
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at']),
+      deletedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}deleted_at']),
     );
   }
 
@@ -579,13 +689,17 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
   final String content;
   final bool isActive;
   final DateTime createdAt;
+  final DateTime? updatedAt;
+  final DateTime? deletedAt;
   const TriggerRow(
       {required this.id,
       required this.environmentId,
       required this.title,
       required this.content,
       required this.isActive,
-      required this.createdAt});
+      required this.createdAt,
+      this.updatedAt,
+      this.deletedAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -595,6 +709,12 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
     map['content'] = Variable<String>(content);
     map['is_active'] = Variable<bool>(isActive);
     map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || updatedAt != null) {
+      map['updated_at'] = Variable<DateTime>(updatedAt);
+    }
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
     return map;
   }
 
@@ -606,6 +726,12 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       content: Value(content),
       isActive: Value(isActive),
       createdAt: Value(createdAt),
+      updatedAt: updatedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -619,6 +745,8 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       content: serializer.fromJson<String>(json['content']),
       isActive: serializer.fromJson<bool>(json['isActive']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
     );
   }
   @override
@@ -631,6 +759,8 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       'content': serializer.toJson<String>(content),
       'isActive': serializer.toJson<bool>(isActive),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime?>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
     };
   }
 
@@ -640,7 +770,9 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
           String? title,
           String? content,
           bool? isActive,
-          DateTime? createdAt}) =>
+          DateTime? createdAt,
+          Value<DateTime?> updatedAt = const Value.absent(),
+          Value<DateTime?> deletedAt = const Value.absent()}) =>
       TriggerRow(
         id: id ?? this.id,
         environmentId: environmentId ?? this.environmentId,
@@ -648,6 +780,8 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
         content: content ?? this.content,
         isActive: isActive ?? this.isActive,
         createdAt: createdAt ?? this.createdAt,
+        updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
+        deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
       );
   TriggerRow copyWithCompanion(TriggersCompanion data) {
     return TriggerRow(
@@ -659,6 +793,8 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       content: data.content.present ? data.content.value : this.content,
       isActive: data.isActive.present ? data.isActive.value : this.isActive,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -670,14 +806,16 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
           ..write('title: $title, ')
           ..write('content: $content, ')
           ..write('isActive: $isActive, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, environmentId, title, content, isActive, createdAt);
+  int get hashCode => Object.hash(id, environmentId, title, content, isActive,
+      createdAt, updatedAt, deletedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -687,7 +825,9 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
           other.title == this.title &&
           other.content == this.content &&
           other.isActive == this.isActive &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
 }
 
 class TriggersCompanion extends UpdateCompanion<TriggerRow> {
@@ -697,6 +837,8 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
   final Value<String> content;
   final Value<bool> isActive;
   final Value<DateTime> createdAt;
+  final Value<DateTime?> updatedAt;
+  final Value<DateTime?> deletedAt;
   final Value<int> rowid;
   const TriggersCompanion({
     this.id = const Value.absent(),
@@ -705,6 +847,8 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
     this.content = const Value.absent(),
     this.isActive = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TriggersCompanion.insert({
@@ -714,6 +858,8 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
     required String content,
     this.isActive = const Value.absent(),
     required DateTime createdAt,
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         environmentId = Value(environmentId),
@@ -727,6 +873,8 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
     Expression<String>? content,
     Expression<bool>? isActive,
     Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -736,6 +884,8 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
       if (content != null) 'content': content,
       if (isActive != null) 'is_active': isActive,
       if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -747,6 +897,8 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
       Value<String>? content,
       Value<bool>? isActive,
       Value<DateTime>? createdAt,
+      Value<DateTime?>? updatedAt,
+      Value<DateTime?>? deletedAt,
       Value<int>? rowid}) {
     return TriggersCompanion(
       id: id ?? this.id,
@@ -755,6 +907,8 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
       content: content ?? this.content,
       isActive: isActive ?? this.isActive,
       createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -780,6 +934,12 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -795,6 +955,8 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
           ..write('content: $content, ')
           ..write('isActive: $isActive, ')
           ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2190,9 +2352,21 @@ class $ShoppingListItemsTable extends ShoppingListItems
   late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
       'created_at', aliasedName, false,
       type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _deletedAtMeta =
+      const VerificationMeta('deletedAt');
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+      'deleted_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns =>
-      [id, environmentId, name, isChecked, createdAt];
+      [id, environmentId, name, isChecked, createdAt, updatedAt, deletedAt];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -2232,6 +2406,14 @@ class $ShoppingListItemsTable extends ShoppingListItems
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(_deletedAtMeta,
+          deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta));
+    }
     return context;
   }
 
@@ -2251,6 +2433,10 @@ class $ShoppingListItemsTable extends ShoppingListItems
           .read(DriftSqlType.bool, data['${effectivePrefix}is_checked'])!,
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at']),
+      deletedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}deleted_at']),
     );
   }
 
@@ -2267,12 +2453,16 @@ class ShoppingListItem extends DataClass
   final String name;
   final bool isChecked;
   final DateTime createdAt;
+  final DateTime? updatedAt;
+  final DateTime? deletedAt;
   const ShoppingListItem(
       {required this.id,
       required this.environmentId,
       required this.name,
       required this.isChecked,
-      required this.createdAt});
+      required this.createdAt,
+      this.updatedAt,
+      this.deletedAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -2281,6 +2471,12 @@ class ShoppingListItem extends DataClass
     map['name'] = Variable<String>(name);
     map['is_checked'] = Variable<bool>(isChecked);
     map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || updatedAt != null) {
+      map['updated_at'] = Variable<DateTime>(updatedAt);
+    }
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
     return map;
   }
 
@@ -2291,6 +2487,12 @@ class ShoppingListItem extends DataClass
       name: Value(name),
       isChecked: Value(isChecked),
       createdAt: Value(createdAt),
+      updatedAt: updatedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -2303,6 +2505,8 @@ class ShoppingListItem extends DataClass
       name: serializer.fromJson<String>(json['name']),
       isChecked: serializer.fromJson<bool>(json['isChecked']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
     );
   }
   @override
@@ -2314,6 +2518,8 @@ class ShoppingListItem extends DataClass
       'name': serializer.toJson<String>(name),
       'isChecked': serializer.toJson<bool>(isChecked),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime?>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
     };
   }
 
@@ -2322,13 +2528,17 @@ class ShoppingListItem extends DataClass
           String? environmentId,
           String? name,
           bool? isChecked,
-          DateTime? createdAt}) =>
+          DateTime? createdAt,
+          Value<DateTime?> updatedAt = const Value.absent(),
+          Value<DateTime?> deletedAt = const Value.absent()}) =>
       ShoppingListItem(
         id: id ?? this.id,
         environmentId: environmentId ?? this.environmentId,
         name: name ?? this.name,
         isChecked: isChecked ?? this.isChecked,
         createdAt: createdAt ?? this.createdAt,
+        updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
+        deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
       );
   ShoppingListItem copyWithCompanion(ShoppingListItemsCompanion data) {
     return ShoppingListItem(
@@ -2339,6 +2549,8 @@ class ShoppingListItem extends DataClass
       name: data.name.present ? data.name.value : this.name,
       isChecked: data.isChecked.present ? data.isChecked.value : this.isChecked,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -2349,14 +2561,16 @@ class ShoppingListItem extends DataClass
           ..write('environmentId: $environmentId, ')
           ..write('name: $name, ')
           ..write('isChecked: $isChecked, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, environmentId, name, isChecked, createdAt);
+  int get hashCode => Object.hash(
+      id, environmentId, name, isChecked, createdAt, updatedAt, deletedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -2365,7 +2579,9 @@ class ShoppingListItem extends DataClass
           other.environmentId == this.environmentId &&
           other.name == this.name &&
           other.isChecked == this.isChecked &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
 }
 
 class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
@@ -2374,6 +2590,8 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
   final Value<String> name;
   final Value<bool> isChecked;
   final Value<DateTime> createdAt;
+  final Value<DateTime?> updatedAt;
+  final Value<DateTime?> deletedAt;
   final Value<int> rowid;
   const ShoppingListItemsCompanion({
     this.id = const Value.absent(),
@@ -2381,6 +2599,8 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
     this.name = const Value.absent(),
     this.isChecked = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ShoppingListItemsCompanion.insert({
@@ -2389,6 +2609,8 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
     required String name,
     this.isChecked = const Value.absent(),
     required DateTime createdAt,
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         environmentId = Value(environmentId),
@@ -2400,6 +2622,8 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
     Expression<String>? name,
     Expression<bool>? isChecked,
     Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2408,6 +2632,8 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
       if (name != null) 'name': name,
       if (isChecked != null) 'is_checked': isChecked,
       if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2418,6 +2644,8 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
       Value<String>? name,
       Value<bool>? isChecked,
       Value<DateTime>? createdAt,
+      Value<DateTime?>? updatedAt,
+      Value<DateTime?>? deletedAt,
       Value<int>? rowid}) {
     return ShoppingListItemsCompanion(
       id: id ?? this.id,
@@ -2425,6 +2653,8 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
       name: name ?? this.name,
       isChecked: isChecked ?? this.isChecked,
       createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2447,6 +2677,12 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2461,6 +2697,8 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
           ..write('name: $name, ')
           ..write('isChecked: $isChecked, ')
           ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2540,6 +2778,18 @@ class $ScheduledRemindersTable extends ScheduledReminders
   late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
       'created_at', aliasedName, false,
       type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _deletedAtMeta =
+      const VerificationMeta('deletedAt');
+  @override
+  late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
+      'deleted_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -2550,7 +2800,9 @@ class $ScheduledRemindersTable extends ScheduledReminders
         repeatDaysOfWeek,
         isActive,
         alertMode,
-        createdAt
+        createdAt,
+        updatedAt,
+        deletedAt
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -2611,6 +2863,14 @@ class $ScheduledRemindersTable extends ScheduledReminders
     } else if (isInserting) {
       context.missing(_createdAtMeta);
     }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(_deletedAtMeta,
+          deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta));
+    }
     return context;
   }
 
@@ -2638,6 +2898,10 @@ class $ScheduledRemindersTable extends ScheduledReminders
           .read(DriftSqlType.string, data['${effectivePrefix}alert_mode'])!,
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at']),
+      deletedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}deleted_at']),
     );
   }
 
@@ -2658,6 +2922,8 @@ class ScheduledReminder extends DataClass
   final bool isActive;
   final String alertMode;
   final DateTime createdAt;
+  final DateTime? updatedAt;
+  final DateTime? deletedAt;
   const ScheduledReminder(
       {required this.id,
       required this.title,
@@ -2667,7 +2933,9 @@ class ScheduledReminder extends DataClass
       required this.repeatDaysOfWeek,
       required this.isActive,
       required this.alertMode,
-      required this.createdAt});
+      required this.createdAt,
+      this.updatedAt,
+      this.deletedAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -2680,6 +2948,12 @@ class ScheduledReminder extends DataClass
     map['is_active'] = Variable<bool>(isActive);
     map['alert_mode'] = Variable<String>(alertMode);
     map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || updatedAt != null) {
+      map['updated_at'] = Variable<DateTime>(updatedAt);
+    }
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
     return map;
   }
 
@@ -2694,6 +2968,12 @@ class ScheduledReminder extends DataClass
       isActive: Value(isActive),
       alertMode: Value(alertMode),
       createdAt: Value(createdAt),
+      updatedAt: updatedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -2710,6 +2990,8 @@ class ScheduledReminder extends DataClass
       isActive: serializer.fromJson<bool>(json['isActive']),
       alertMode: serializer.fromJson<String>(json['alertMode']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
+      deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
     );
   }
   @override
@@ -2725,6 +3007,8 @@ class ScheduledReminder extends DataClass
       'isActive': serializer.toJson<bool>(isActive),
       'alertMode': serializer.toJson<String>(alertMode),
       'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime?>(updatedAt),
+      'deletedAt': serializer.toJson<DateTime?>(deletedAt),
     };
   }
 
@@ -2737,7 +3021,9 @@ class ScheduledReminder extends DataClass
           String? repeatDaysOfWeek,
           bool? isActive,
           String? alertMode,
-          DateTime? createdAt}) =>
+          DateTime? createdAt,
+          Value<DateTime?> updatedAt = const Value.absent(),
+          Value<DateTime?> deletedAt = const Value.absent()}) =>
       ScheduledReminder(
         id: id ?? this.id,
         title: title ?? this.title,
@@ -2748,6 +3034,8 @@ class ScheduledReminder extends DataClass
         isActive: isActive ?? this.isActive,
         alertMode: alertMode ?? this.alertMode,
         createdAt: createdAt ?? this.createdAt,
+        updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
+        deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
       );
   ScheduledReminder copyWithCompanion(ScheduledRemindersCompanion data) {
     return ScheduledReminder(
@@ -2764,6 +3052,8 @@ class ScheduledReminder extends DataClass
       isActive: data.isActive.present ? data.isActive.value : this.isActive,
       alertMode: data.alertMode.present ? data.alertMode.value : this.alertMode,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -2778,14 +3068,16 @@ class ScheduledReminder extends DataClass
           ..write('repeatDaysOfWeek: $repeatDaysOfWeek, ')
           ..write('isActive: $isActive, ')
           ..write('alertMode: $alertMode, ')
-          ..write('createdAt: $createdAt')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode => Object.hash(id, title, content, scheduledAt, repeatRule,
-      repeatDaysOfWeek, isActive, alertMode, createdAt);
+      repeatDaysOfWeek, isActive, alertMode, createdAt, updatedAt, deletedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -2798,7 +3090,9 @@ class ScheduledReminder extends DataClass
           other.repeatDaysOfWeek == this.repeatDaysOfWeek &&
           other.isActive == this.isActive &&
           other.alertMode == this.alertMode &&
-          other.createdAt == this.createdAt);
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt);
 }
 
 class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
@@ -2811,6 +3105,8 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
   final Value<bool> isActive;
   final Value<String> alertMode;
   final Value<DateTime> createdAt;
+  final Value<DateTime?> updatedAt;
+  final Value<DateTime?> deletedAt;
   final Value<int> rowid;
   const ScheduledRemindersCompanion({
     this.id = const Value.absent(),
@@ -2822,6 +3118,8 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
     this.isActive = const Value.absent(),
     this.alertMode = const Value.absent(),
     this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ScheduledRemindersCompanion.insert({
@@ -2834,6 +3132,8 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
     this.isActive = const Value.absent(),
     this.alertMode = const Value.absent(),
     required DateTime createdAt,
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         title = Value(title),
@@ -2849,6 +3149,8 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
     Expression<bool>? isActive,
     Expression<String>? alertMode,
     Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<DateTime>? deletedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2861,6 +3163,8 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
       if (isActive != null) 'is_active': isActive,
       if (alertMode != null) 'alert_mode': alertMode,
       if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2875,6 +3179,8 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
       Value<bool>? isActive,
       Value<String>? alertMode,
       Value<DateTime>? createdAt,
+      Value<DateTime?>? updatedAt,
+      Value<DateTime?>? deletedAt,
       Value<int>? rowid}) {
     return ScheduledRemindersCompanion(
       id: id ?? this.id,
@@ -2886,6 +3192,8 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
       isActive: isActive ?? this.isActive,
       alertMode: alertMode ?? this.alertMode,
       createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2920,6 +3228,12 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<DateTime>(deletedAt.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2938,6 +3252,8 @@ class ScheduledRemindersCompanion extends UpdateCompanion<ScheduledReminder> {
           ..write('isActive: $isActive, ')
           ..write('alertMode: $alertMode, ')
           ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4194,6 +4510,8 @@ typedef $$EnvironmentsTableCreateCompanionBuilder = EnvironmentsCompanion
   required DateTime createdAt,
   Value<bool> isMarket,
   Value<String?> pinImagePath,
+  Value<DateTime?> updatedAt,
+  Value<DateTime?> deletedAt,
   Value<int> rowid,
 });
 typedef $$EnvironmentsTableUpdateCompanionBuilder = EnvironmentsCompanion
@@ -4206,6 +4524,8 @@ typedef $$EnvironmentsTableUpdateCompanionBuilder = EnvironmentsCompanion
   Value<DateTime> createdAt,
   Value<bool> isMarket,
   Value<String?> pinImagePath,
+  Value<DateTime?> updatedAt,
+  Value<DateTime?> deletedAt,
   Value<int> rowid,
 });
 
@@ -4261,6 +4581,12 @@ class $$EnvironmentsTableFilterComposer
 
   ColumnFilters<String> get pinImagePath => $composableBuilder(
       column: $table.pinImagePath, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnFilters(column));
 
   Expression<bool> triggersRefs(
       Expression<bool> Function($$TriggersTableFilterComposer f) f) {
@@ -4318,6 +4644,12 @@ class $$EnvironmentsTableOrderingComposer
   ColumnOrderings<String> get pinImagePath => $composableBuilder(
       column: $table.pinImagePath,
       builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnOrderings(column));
 }
 
 class $$EnvironmentsTableAnnotationComposer
@@ -4352,6 +4684,12 @@ class $$EnvironmentsTableAnnotationComposer
 
   GeneratedColumn<String> get pinImagePath => $composableBuilder(
       column: $table.pinImagePath, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 
   Expression<T> triggersRefs<T extends Object>(
       Expression<T> Function($$TriggersTableAnnotationComposer a) f) {
@@ -4406,6 +4744,8 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             Value<DateTime> createdAt = const Value.absent(),
             Value<bool> isMarket = const Value.absent(),
             Value<String?> pinImagePath = const Value.absent(),
+            Value<DateTime?> updatedAt = const Value.absent(),
+            Value<DateTime?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EnvironmentsCompanion(
@@ -4417,6 +4757,8 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             createdAt: createdAt,
             isMarket: isMarket,
             pinImagePath: pinImagePath,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4428,6 +4770,8 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             required DateTime createdAt,
             Value<bool> isMarket = const Value.absent(),
             Value<String?> pinImagePath = const Value.absent(),
+            Value<DateTime?> updatedAt = const Value.absent(),
+            Value<DateTime?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EnvironmentsCompanion.insert(
@@ -4439,6 +4783,8 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             createdAt: createdAt,
             isMarket: isMarket,
             pinImagePath: pinImagePath,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -4492,6 +4838,8 @@ typedef $$TriggersTableCreateCompanionBuilder = TriggersCompanion Function({
   required String content,
   Value<bool> isActive,
   required DateTime createdAt,
+  Value<DateTime?> updatedAt,
+  Value<DateTime?> deletedAt,
   Value<int> rowid,
 });
 typedef $$TriggersTableUpdateCompanionBuilder = TriggersCompanion Function({
@@ -4501,6 +4849,8 @@ typedef $$TriggersTableUpdateCompanionBuilder = TriggersCompanion Function({
   Value<String> content,
   Value<bool> isActive,
   Value<DateTime> createdAt,
+  Value<DateTime?> updatedAt,
+  Value<DateTime?> deletedAt,
   Value<int> rowid,
 });
 
@@ -4545,6 +4895,12 @@ class $$TriggersTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnFilters(column));
 
   $$EnvironmentsTableFilterComposer get environmentId {
     final $$EnvironmentsTableFilterComposer composer = $composerBuilder(
@@ -4591,6 +4947,12 @@ class $$TriggersTableOrderingComposer
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnOrderings(column));
+
   $$EnvironmentsTableOrderingComposer get environmentId {
     final $$EnvironmentsTableOrderingComposer composer = $composerBuilder(
         composer: this,
@@ -4635,6 +4997,12 @@ class $$TriggersTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 
   $$EnvironmentsTableAnnotationComposer get environmentId {
     final $$EnvironmentsTableAnnotationComposer composer = $composerBuilder(
@@ -4686,6 +5054,8 @@ class $$TriggersTableTableManager extends RootTableManager<
             Value<String> content = const Value.absent(),
             Value<bool> isActive = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
+            Value<DateTime?> updatedAt = const Value.absent(),
+            Value<DateTime?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               TriggersCompanion(
@@ -4695,6 +5065,8 @@ class $$TriggersTableTableManager extends RootTableManager<
             content: content,
             isActive: isActive,
             createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4704,6 +5076,8 @@ class $$TriggersTableTableManager extends RootTableManager<
             required String content,
             Value<bool> isActive = const Value.absent(),
             required DateTime createdAt,
+            Value<DateTime?> updatedAt = const Value.absent(),
+            Value<DateTime?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               TriggersCompanion.insert(
@@ -4713,6 +5087,8 @@ class $$TriggersTableTableManager extends RootTableManager<
             content: content,
             isActive: isActive,
             createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -5464,6 +5840,8 @@ typedef $$ShoppingListItemsTableCreateCompanionBuilder
   required String name,
   Value<bool> isChecked,
   required DateTime createdAt,
+  Value<DateTime?> updatedAt,
+  Value<DateTime?> deletedAt,
   Value<int> rowid,
 });
 typedef $$ShoppingListItemsTableUpdateCompanionBuilder
@@ -5473,6 +5851,8 @@ typedef $$ShoppingListItemsTableUpdateCompanionBuilder
   Value<String> name,
   Value<bool> isChecked,
   Value<DateTime> createdAt,
+  Value<DateTime?> updatedAt,
+  Value<DateTime?> deletedAt,
   Value<int> rowid,
 });
 
@@ -5499,6 +5879,12 @@ class $$ShoppingListItemsTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnFilters(column));
 }
 
 class $$ShoppingListItemsTableOrderingComposer
@@ -5525,6 +5911,12 @@ class $$ShoppingListItemsTableOrderingComposer
 
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnOrderings(column));
 }
 
 class $$ShoppingListItemsTableAnnotationComposer
@@ -5550,6 +5942,12 @@ class $$ShoppingListItemsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 }
 
 class $$ShoppingListItemsTableTableManager extends RootTableManager<
@@ -5585,6 +5983,8 @@ class $$ShoppingListItemsTableTableManager extends RootTableManager<
             Value<String> name = const Value.absent(),
             Value<bool> isChecked = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
+            Value<DateTime?> updatedAt = const Value.absent(),
+            Value<DateTime?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ShoppingListItemsCompanion(
@@ -5593,6 +5993,8 @@ class $$ShoppingListItemsTableTableManager extends RootTableManager<
             name: name,
             isChecked: isChecked,
             createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -5601,6 +6003,8 @@ class $$ShoppingListItemsTableTableManager extends RootTableManager<
             required String name,
             Value<bool> isChecked = const Value.absent(),
             required DateTime createdAt,
+            Value<DateTime?> updatedAt = const Value.absent(),
+            Value<DateTime?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ShoppingListItemsCompanion.insert(
@@ -5609,6 +6013,8 @@ class $$ShoppingListItemsTableTableManager extends RootTableManager<
             name: name,
             isChecked: isChecked,
             createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -5644,6 +6050,8 @@ typedef $$ScheduledRemindersTableCreateCompanionBuilder
   Value<bool> isActive,
   Value<String> alertMode,
   required DateTime createdAt,
+  Value<DateTime?> updatedAt,
+  Value<DateTime?> deletedAt,
   Value<int> rowid,
 });
 typedef $$ScheduledRemindersTableUpdateCompanionBuilder
@@ -5657,6 +6065,8 @@ typedef $$ScheduledRemindersTableUpdateCompanionBuilder
   Value<bool> isActive,
   Value<String> alertMode,
   Value<DateTime> createdAt,
+  Value<DateTime?> updatedAt,
+  Value<DateTime?> deletedAt,
   Value<int> rowid,
 });
 
@@ -5696,6 +6106,12 @@ class $$ScheduledRemindersTableFilterComposer
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnFilters(column));
 }
 
 class $$ScheduledRemindersTableOrderingComposer
@@ -5734,6 +6150,12 @@ class $$ScheduledRemindersTableOrderingComposer
 
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnOrderings(column));
 }
 
 class $$ScheduledRemindersTableAnnotationComposer
@@ -5771,6 +6193,12 @@ class $$ScheduledRemindersTableAnnotationComposer
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 }
 
 class $$ScheduledRemindersTableTableManager extends RootTableManager<
@@ -5811,6 +6239,8 @@ class $$ScheduledRemindersTableTableManager extends RootTableManager<
             Value<bool> isActive = const Value.absent(),
             Value<String> alertMode = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
+            Value<DateTime?> updatedAt = const Value.absent(),
+            Value<DateTime?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ScheduledRemindersCompanion(
@@ -5823,6 +6253,8 @@ class $$ScheduledRemindersTableTableManager extends RootTableManager<
             isActive: isActive,
             alertMode: alertMode,
             createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -5835,6 +6267,8 @@ class $$ScheduledRemindersTableTableManager extends RootTableManager<
             Value<bool> isActive = const Value.absent(),
             Value<String> alertMode = const Value.absent(),
             required DateTime createdAt,
+            Value<DateTime?> updatedAt = const Value.absent(),
+            Value<DateTime?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ScheduledRemindersCompanion.insert(
@@ -5847,6 +6281,8 @@ class $$ScheduledRemindersTableTableManager extends RootTableManager<
             isActive: isActive,
             alertMode: alertMode,
             createdAt: createdAt,
+            updatedAt: updatedAt,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

@@ -6,11 +6,13 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/navigation/app_router.dart';
+import '../../infrastructure/auth/auth_service.dart';
 import '../../infrastructure/background/background_service_manager.dart';
 import '../../infrastructure/overlay/floating_voice_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
 import '../../infrastructure/logging/core/logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
+import '../../infrastructure/sync/sync_engine.dart';
 import '../providers/database_provider.dart';
 import '../providers/location_providers.dart';
 import '../providers/settings_providers.dart';
@@ -39,11 +41,29 @@ class AppInitializer extends ConsumerStatefulWidget {
   ConsumerState<AppInitializer> createState() => _AppInitializerState();
 }
 
-class _AppInitializerState extends ConsumerState<AppInitializer> {
+class _AppInitializerState extends ConsumerState<AppInitializer>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    // Observa o ciclo de vida para disparar um sync leve ao voltar ao foreground.
+    WidgetsBinding.instance.addObserver(this);
     _init();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Gatilho leve (não tempo real): ao retomar o app, tenta sincronizar. O motor
+    // é guardado/throttled — no-op se deslogado, offline ou chamado cedo demais.
+    if (state == AppLifecycleState.resumed) {
+      SyncEngine.instance.syncNow(reason: 'resume');
+    }
   }
 
   Future<void> _init() async {
@@ -158,6 +178,20 @@ class _AppInitializerState extends ConsumerState<AppInitializer> {
     // envio de áudio ao Gemini (fallback), igual ao comportamento anterior.
     final groqKey = AppConstants.groqApiKey;
     if (groqKey.isNotEmpty) await prefs.setString('groq_api_key', groqKey);
+
+    // Restaura a sessão de conta (Fase 1 — Supabase Auth) e faz refresh se o
+    // token estiver vencido. Mantém o usuário logado entre aberturas e reescreve
+    // os tokens frescos em SharedPreferences para o Overlay nativo consumir.
+    // Best-effort: falha de rede não bloqueia o restante da inicialização.
+    await AuthService.instance.restoreAndRefresh();
+
+    // Motor de sync (Estágio 2.1): registra o banco e passa a sincronizar a cada
+    // login. Se já há sessão restaurada, dispara o sync inicial agora. Roda por
+    // trás dos repositórios — telas/streams não sabem que ele existe.
+    SyncEngine.instance.init(ref.read(databaseProvider));
+    if (AuthService.instance.isLoggedIn) {
+      SyncEngine.instance.syncNow(reason: 'startup');
+    }
 
     final notifEnabled = prefs.getBool('notifications_enabled') ?? true;
     if (!notifEnabled) {

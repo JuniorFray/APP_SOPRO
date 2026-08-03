@@ -32,6 +32,7 @@ class SoproTextField extends StatelessWidget {
     this.autofocus = false,
     this.inputFormatters,
     this.textCapitalization = TextCapitalization.none,
+    this.obscureText = false,
   });
 
   final TextEditingController? controller;
@@ -54,6 +55,8 @@ class SoproTextField extends StatelessWidget {
   final bool autofocus;
   final List<TextInputFormatter>? inputFormatters;
   final TextCapitalization textCapitalization;
+  // Oculta o texto (campos de senha). Default false — não afeta campos existentes.
+  final bool obscureText;
 
   @override
   Widget build(BuildContext context) {
@@ -90,6 +93,7 @@ class SoproTextField extends StatelessWidget {
       textInputAction: textInputAction,
       maxLines: maxLines,
       maxLength: maxLength,
+      obscureText: obscureText,
       validator: validator,
       onChanged: onChanged,
       onFieldSubmitted: onSubmitted,

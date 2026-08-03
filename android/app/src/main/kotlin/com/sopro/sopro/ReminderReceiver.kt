@@ -115,7 +115,7 @@ class ReminderReceiver : BroadcastReceiver() {
             var scheduledAtMillis = 0L
             db.rawQuery(
                 "SELECT title, content, repeat_rule, repeat_days_of_week, scheduled_at, alert_mode " +
-                "FROM scheduled_reminders WHERE id = ? AND is_active = 1 LIMIT 1",
+                "FROM scheduled_reminders WHERE id = ? AND is_active = 1 AND deleted_at IS NULL LIMIT 1",
                 arrayOf(reminderId)
             ).use { cursor ->
                 if (!cursor.moveToFirst()) {
@@ -141,9 +141,10 @@ class ReminderReceiver : BroadcastReceiver() {
                     // Cálculo em millis; grava de volta em SEGUNDOS (Drift lê como segundos).
                     val nextMillis  = scheduledAtMillis + DAY_MS
                     val nextSeconds = nextMillis / 1000L
+                    // Carimba updated_at = agora (segundos) → o SyncEngine empurra o novo horário.
                     db.execSQL(
-                        "UPDATE scheduled_reminders SET scheduled_at = ? WHERE id = ?",
-                        arrayOf<Any>(nextSeconds, reminderId))
+                        "UPDATE scheduled_reminders SET scheduled_at = ?, updated_at = ? WHERE id = ?",
+                        arrayOf<Any>(nextSeconds, System.currentTimeMillis() / 1000L, reminderId))
                     ReminderScheduler.scheduleExact(context, reminderId, nextMillis)
                     Logger.info("reminder_repeat_advanced", feature = "reminders",
                         action = "processReminder", correlationId = corrId,
@@ -155,9 +156,10 @@ class ReminderReceiver : BroadcastReceiver() {
                     // Base em millis; grava de volta em SEGUNDOS (Drift lê como segundos).
                     val nextMillis  = nextWeeklyMillis(scheduledAtMillis, repeatDays)
                     val nextSeconds = nextMillis / 1000L
+                    // Carimba updated_at = agora (segundos) → o SyncEngine empurra o novo horário.
                     db.execSQL(
-                        "UPDATE scheduled_reminders SET scheduled_at = ? WHERE id = ?",
-                        arrayOf<Any>(nextSeconds, reminderId))
+                        "UPDATE scheduled_reminders SET scheduled_at = ?, updated_at = ? WHERE id = ?",
+                        arrayOf<Any>(nextSeconds, System.currentTimeMillis() / 1000L, reminderId))
                     ReminderScheduler.scheduleExact(context, reminderId, nextMillis)
                     Logger.info("reminder_repeat_advanced", feature = "reminders",
                         action = "processReminder", correlationId = corrId,
@@ -167,9 +169,10 @@ class ReminderReceiver : BroadcastReceiver() {
                 }
                 else -> {
                     // 'none': o lembrete consome a si mesmo.
+                    // Consome o lembrete + carimba updated_at (segundos) para o sync propagar.
                     db.execSQL(
-                        "UPDATE scheduled_reminders SET is_active = 0 WHERE id = ?",
-                        arrayOf(reminderId))
+                        "UPDATE scheduled_reminders SET is_active = 0, updated_at = ? WHERE id = ?",
+                        arrayOf<Any>(System.currentTimeMillis() / 1000L, reminderId))
                     Logger.info("reminder_consumed", feature = "reminders",
                         action = "processReminder", correlationId = corrId,
                         payload = mapOf("reminder_id" to reminderId))

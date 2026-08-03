@@ -379,6 +379,13 @@ class AppStrings {
   static const settingsShortcutSupport  = 'Suporte';
   static const settingsComingSoon       = 'Em breve';
 
+  // Tela de Comentários / Feedback (card Suporte)
+  static const feedbackTitle    = 'Comentários';
+  static const feedbackHeadline = 'Adoraríamos ouvir você';
+  static const feedbackHint     = 'Seu feedback';
+  static const feedbackSend     = 'Enviar';
+  static const feedbackSuccess  = 'Obrigado! Recebemos seu comentário.';
+
   // Mercado — confirmação de tipo, lista de compras
   static const marketConfirmTitle    = 'Este é um mercado?';
   static const marketConfirmBody      =
@@ -578,4 +585,56 @@ class AppStrings {
   static const voiceAllEnvsDeletedSnack = 'Todos os ambientes foram excluídos';
   // Aviso quando não há nenhum ambiente para excluir.
   static const voiceNoEnvsToDelete = 'Você ainda não tem nenhum ambiente cadastrado.';
+
+  // ── Conta (Fase 1 — Supabase Auth) ───────────────────────────────────────
+  // Seção nas Configurações e tela de conta.
+  static const accountSection        = 'Conta';
+  static const accountSignedOutTitle = 'Entrar ou criar conta';
+  static const accountSignedOutDesc  =
+      'Opcional por enquanto — prepara a sincronização e o compartilhamento';
+  static const accountSignedInDesc   = 'Você está conectado';
+  static const accountScreenTitle    = 'Conta';
+
+  // Formulário de login/cadastro
+  static const authEmailLabel      = 'E-mail';
+  static const authEmailHint       = 'voce@exemplo.com';
+  static const authPasswordLabel   = 'Senha';
+  static const authPasswordHint    = 'Mínimo 6 caracteres';
+  static const authLoginTitle      = 'Entrar';
+  static const authSignupTitle     = 'Criar conta';
+  static const authLoginCta        = 'Entrar';
+  static const authSignupCta       = 'Criar conta';
+  static const authToggleToSignup  = 'Não tem conta? Criar agora';
+  static const authToggleToLogin   = 'Já tem conta? Entrar';
+  static const authForgotPassword  = 'Esqueci minha senha';
+  static const authLogout          = 'Sair';
+  static const authLogoutConfirm   = 'Sair da sua conta?';
+
+  // Validação de campos
+  static const authEmailRequired    = 'Informe seu e-mail';
+  static const authEmailInvalid     = 'E-mail inválido';
+  static const authPasswordRequired = 'Informe sua senha';
+  static const authPasswordTooShort = 'A senha precisa ter ao menos 6 caracteres';
+
+  // Feedback de operações
+  static const authLoggingIn        = 'Entrando...';
+  static const authSigningUp        = 'Criando conta...';
+  static const authLoginSuccess     = 'Bem-vindo de volta!';
+  static const authSignupSuccess    = 'Conta criada com sucesso!';
+  // Exibida quando o Supabase exige confirmação de e-mail antes do primeiro login.
+  static const authConfirmEmailSent =
+      'Conta criada. Confirme pelo link enviado ao seu e-mail para entrar.';
+  static const authInvalidCredentials = 'E-mail ou senha incorretos.';
+  static const authEmailTaken       = 'Este e-mail já tem conta. Tente entrar.';
+  static const authNoInternet       = 'Sem internet. Tente novamente quando conectar.';
+  static const authGenericError     = 'Não foi possível concluir. Tente novamente.';
+  static const authUnavailable      = 'Conta indisponível: configuração ausente.';
+
+  // Recuperação de senha
+  static const authRecoverTitle     = 'Recuperar senha';
+  static const authRecoverBody      =
+      'Digite seu e-mail. Enviaremos um link para redefinir a senha.';
+  static const authRecoverCta       = 'Enviar link';
+  static const authRecoverSent      =
+      'Se existir uma conta com esse e-mail, o link de recuperação foi enviado.';
 }

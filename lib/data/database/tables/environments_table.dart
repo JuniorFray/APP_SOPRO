@@ -27,8 +27,14 @@ class Environments extends Table {
 
   // Caminho local (diretório de documentos do app) da foto usada na plaquinha 3D
   // deste ambiente. Nullable: sem foto → usa a arte Sopro padrão. Foto por
-  // ambiente (não global). Nunca sai do dispositivo.
+  // ambiente (não global). Nunca sai do dispositivo (não migra pro Supabase).
   TextColumn get pinImagePath => text().nullable()();
+
+  // Sync (Estágio 2.1) — última modificação local (LWW) e tombstone de exclusão.
+  // Nullable: linhas antigas ficam null até a migração/próxima escrita preencher.
+  // deletedAt != null = soft delete (linha some da UI, sobe como tombstone).
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+  DateTimeColumn get deletedAt => dateTime().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};

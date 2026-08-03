@@ -32,6 +32,15 @@ class AppConstants {
   static String get groqApiKey =>
       dotenv.env['GROQ_API_KEY'] ?? '';
 
+  // ── Supabase Auth (Fase 1 — contas) ──────────────────────────────────────
+  // URL do projeto Supabase e publishable key (anon). Lidas do .env em runtime.
+  // Não são segredo de servidor — a mesma dupla já é usada pelo logging nativo
+  // (SupabaseSink.kt). Vazias → telas de conta exibem indisponível.
+  static String get supabaseUrl =>
+      dotenv.env['SUPABASE_URL'] ?? '';
+  static String get supabaseAnonKey =>
+      dotenv.env['SUPABASE_ANON_KEY'] ?? '';
+
   // Endpoint de busca forward da LocationIQ (OSM + dados de endereço extras).
   static const locationIqEndpoint =
       'https://us1.locationiq.com/v1/search';

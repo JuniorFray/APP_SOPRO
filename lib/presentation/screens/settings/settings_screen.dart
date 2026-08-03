@@ -10,12 +10,15 @@ import '../../../core/theme/app_radius.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
+import '../../providers/auth_providers.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_card.dart';
 import '../../../infrastructure/overlay/floating_voice_service_manager.dart';
+import '../auth/account_screen.dart';
+import '../feedback/feedback_screen.dart';
 
 // Canal nativo para o FloatingVoiceService (botão flutuante de voz)
 const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
@@ -50,6 +53,8 @@ class SettingsScreen extends ConsumerWidget {
     final voiceText         = ref.watch(voiceTextResponseProvider);
     final voiceRate         = ref.watch(voiceSpeechRateProvider);
     final floatingVoice     = ref.watch(floatingVoiceEnabledProvider);
+    // Sessão de conta (Fase 1 — Supabase Auth). null = deslogado.
+    final authSession       = ref.watch(authSessionProvider);
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundPrimary,
@@ -244,6 +249,27 @@ class SettingsScreen extends ConsumerWidget {
             ],
           ),
 
+          // ─── Seção: Conta (Fase 1 — Supabase Auth) ────────────────────────
+          // Login OPCIONAL: prepara sync/compartilhamento sem bloquear o uso do
+          // app. Deslogado → convite pra entrar/criar; logado → mostra o e-mail.
+          const _SectionHeader(label: AppStrings.accountSection),
+          _SectionCard(
+            children: [
+              _SettingRow(
+                icon: authSession != null ? LucideIcons.userCheck : LucideIcons.userPlus,
+                title: authSession?.email ?? AppStrings.accountSignedOutTitle,
+                subtitle: authSession != null
+                    ? AppStrings.accountSignedInDesc
+                    : AppStrings.accountSignedOutDesc,
+                trailing: const Icon(LucideIcons.chevronRight,
+                    size: 16, color: AppColors.textDisabled),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const AccountScreen()),
+                ),
+              ),
+            ],
+          ),
+
           // ─── Seção: Acesso rápido (atalhos Privacidade / Suporte) ─────────
           const _SectionHeader(label: AppStrings.settingsShortcutsSection),
           Padding(
@@ -263,8 +289,12 @@ class SettingsScreen extends ConsumerWidget {
                   child: _ShortcutBlock(
                     icon: LucideIcons.lifeBuoy,
                     label: AppStrings.settingsShortcutSupport,
-                    // TODO: navegar para tela de Suporte quando existir
-                    onTap: () => _comingSoon(context),
+                    // Abre a tela de Comentários (feedback → tabela feedback).
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const FeedbackScreen(),
+                      ),
+                    ),
                   ),
                 ),
               ],

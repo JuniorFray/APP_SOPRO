@@ -302,7 +302,7 @@ class GeofenceReceiver : BroadcastReceiver() {
 
                 val cursor = db.rawQuery(
                     "SELECT title FROM triggers WHERE environment_id = ? " +
-                    "AND is_active = 1 ORDER BY created_at ASC LIMIT 1",
+                    "AND is_active = 1 AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 1",
                     arrayOf(environmentId)
                 )
                 val title = if (cursor.moveToFirst()) cursor.getString(0) else null
@@ -357,7 +357,7 @@ class GeofenceReceiver : BroadcastReceiver() {
                     dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY
                 )
                 val cursor = db.rawQuery(
-                    "SELECT is_market FROM environments WHERE id = ? LIMIT 1",
+                    "SELECT is_market FROM environments WHERE id = ? AND deleted_at IS NULL LIMIT 1",
                     arrayOf(environmentId)
                 )
                 val isMarket = if (cursor.moveToFirst()) cursor.getInt(0) == 1 else false
@@ -398,7 +398,7 @@ class GeofenceReceiver : BroadcastReceiver() {
                 )
                 val cursor = db.rawQuery(
                     "SELECT name FROM shopping_list_items " +
-                    "WHERE environment_id = ? AND is_checked = 0 " +
+                    "WHERE environment_id = ? AND is_checked = 0 AND deleted_at IS NULL " +
                     "ORDER BY created_at ASC",
                     arrayOf(environmentId)
                 )

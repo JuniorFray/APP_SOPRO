@@ -34,9 +34,11 @@ import 'core/session_manager.dart';
 class AppLogger {
   AppLogger._();
 
-  // URL da tabela app_logs no Supabase
-  static const _supabaseUrl =
-      'https://zqgkfqenrljtncoecegv.supabase.co/rest/v1/app_logs';
+  // Base REST do projeto Supabase (…/rest/v1/). O nome da tabela é concatenado
+  // em postToTable — assim o mesmo client/auth atende qualquer tabela nova
+  // (app_logs, feedback, …) sem duplicar a infraestrutura HTTP.
+  static const supabaseBase =
+      'https://zqgkfqenrljtncoecegv.supabase.co/rest/v1/';
 
   // Chave publishable do Supabase — projetada para ser embutida em apps cliente.
   //
@@ -49,7 +51,7 @@ class AppLogger {
   //
   // Nenhum dado pessoal é enviado: apenas event_type, environment_id e erros —
   // sem coordenadas exatas, nomes, telefones ou identificadores de usuário.
-  static const _apiKey =
+  static const supabaseApiKey =
       'sb_publishable_cw4YwcWkSNhGc-zkTjO7xw_lPS5NE09';
 
   // installation_id persistido — alimentado pelo SessionManager após init().
@@ -74,13 +76,44 @@ class AppLogger {
     }
   }
 
+  // Chaves de CONTEÚDO LIVRE do usuário que nunca podem sair para o Supabase:
+  // transcrição da fala, nome de ambiente, título/conteúdo de lembrete, etc.
+  // O LogSanitizer não as cobre porque não batem padrões de PII (coord/email/
+  // telefone/CPF/token). Aqui elas viram '[REDACTED]' SÓ no caminho Supabase —
+  // o console local (dev) já recebeu o payload completo em Logger._emit(), então
+  // o valor de debug ("o evento X aconteceu") é preservado sem o conteúdo literal.
+  // Espelhado no lado Kotlin em logging/LogRedaction.kt (mesmas chaves).
+  static const _supabaseContentDenyKeys = <String>{
+    'transcript', 'transcricao', 'environment_name', 'env_name',
+    'trigger_title', 'title', 'content', 'name', 'item_name',
+    'reply', 'gemini_response', 'speech_result', 'query', 'utterance', 'command',
+  };
+
   // Sink registrado no Logger — converte LogEvent para o formato HTTP existente.
   // Respeita LoggerConfiguration.enableSupabase para desativar em testes.
-  // Recebe o payload já sanitizado pelo LogSanitizer dentro do Logger._emit().
+  // Recebe o payload já sanitizado pelo LogSanitizer dentro do Logger._emit();
+  // aplica ainda a redação de conteúdo livre antes do POST (privacidade LGPD).
   static Future<void> _onLogEvent(LogEvent event) async {
     if (_deviceId == null) return;
     if (!LoggerConfiguration.enableSupabase) return;
-    await _send(event.message, event.payload ?? {});
+    await _send(event.message, _redactContentForSupabase(event.payload ?? {}));
+  }
+
+  // Substitui por '[REDACTED]' toda chave de conteúdo livre antes do envio ao
+  // Supabase. Recursivo (payloads aninhados). Não muta o mapa original — o log
+  // local já foi emitido com o conteúdo completo pelo Logger.
+  static Map<String, dynamic> _redactContentForSupabase(
+    Map<String, dynamic> payload,
+  ) {
+    return payload.map((key, value) {
+      if (_supabaseContentDenyKeys.contains(key.toLowerCase())) {
+        return MapEntry(key, '[REDACTED]');
+      }
+      if (value is Map<String, dynamic>) {
+        return MapEntry(key, _redactContentForSupabase(value));
+      }
+      return MapEntry(key, value);
+    });
   }
 
   // Registra um evento sem bloquear o chamador (fire-and-forget).
@@ -102,47 +135,56 @@ class AppLogger {
     ));
   }
 
-  // Upload HTTP fire-and-forget ao Supabase — inalterado em relação à
-  // implementação original. Falhas de rede são silenciosas em produção.
+  // Upload do evento na tabela app_logs — monta device_id/event_type/payload e
+  // delega o transporte HTTP a postToTable (comportamento idêntico ao original).
   static Future<void> _send(
     String eventType,
     Map<String, dynamic> payload,
+  ) {
+    return postToTable('app_logs', {
+      'device_id': _deviceId,
+      'event_type': eventType,
+      'payload': payload,
+    });
+  }
+
+  // POST fire-and-forget genérico a QUALQUER tabela do Supabase (…/rest/v1/<table>).
+  // Mesmo client/auth/encoding UTF-8 do logging original — reaproveitável por
+  // FeedbackService e futuras integrações. Falhas de rede são silenciosas.
+  static Future<void> postToTable(
+    String table,
+    Map<String, dynamic> body,
   ) async {
     try {
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 5);
 
-      final request = await client.postUrl(Uri.parse(_supabaseUrl));
+      final request = await client.postUrl(Uri.parse('$supabaseBase$table'));
       request.headers
-        ..set('apikey', _apiKey)
-        ..set('Authorization', 'Bearer $_apiKey')
+        ..set('apikey', supabaseApiKey)
+        ..set('Authorization', 'Bearer $supabaseApiKey')
         ..contentType = ContentType('application', 'json', charset: 'utf-8')
         ..set('Prefer', 'return=minimal'); // não retorna o registro inserido
 
-      final body = jsonEncode({
-        'device_id': _deviceId,
-        'event_type': eventType,
-        'payload': payload,
-      });
       // request.write() usa Latin-1 por padrão no HttpClientRequest,
       // corrompendo acentos (ã→Ã£, í→Ã­, etc.) no Supabase.
       // request.add() com bytes UTF-8 garante encoding correto.
-      final bodyBytes = utf8.encode(body);
+      final bodyBytes = utf8.encode(jsonEncode(body));
       request.contentLength = bodyBytes.length;
       request.add(bodyBytes);
 
       final response = await request.close();
-      // Em debug, avisa se o Supabase recusou o log (4xx/5xx).
-      // Em produção, silencioso — logging nunca pode crashar o app.
+      // Em debug, avisa se o Supabase recusou o INSERT (4xx/5xx).
+      // Em produção, silencioso — telemetria nunca pode crashar o app.
       if (kDebugMode && response.statusCode != 201) {
         debugPrint(
-            '[AppLogger] HTTP ${response.statusCode} ao logar "$eventType"');
+            '[AppLogger] HTTP ${response.statusCode} ao inserir em "$table"');
       }
       await response.drain<void>(); // consome o body para liberar a conexão
       client.close();
     } catch (e) {
-      // Ignora silenciosamente — logging não pode crashar o app
-      if (kDebugMode) debugPrint('[AppLogger] Falha ao logar "$eventType": $e');
+      // Ignora silenciosamente — telemetria não pode crashar o app
+      if (kDebugMode) debugPrint('[AppLogger] Falha ao inserir em "$table": $e');
     }
   }
 }
