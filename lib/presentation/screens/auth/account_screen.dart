@@ -10,6 +10,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../infrastructure/auth/auth_service.dart';
+import '../../../infrastructure/sync/sync_engine.dart';
 import '../../providers/auth_providers.dart';
 import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_primary_button.dart';
@@ -259,9 +260,14 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     );
     if (ok != true) return;
     setState(() => _busy = true);
+    // PUSH final das pendências enquanto o token ainda vale — o próximo login em
+    // outra conta limpa o banco local, então o que não subir agora se perde. Se o
+    // flush falhar (offline), avisa; mas segue com o logout do mesmo jeito.
+    final flushed = await SyncEngine.instance.flush();
     await ref.read(authServiceProvider).signOut();
     if (!mounted) return;
     setState(() => _busy = false);
+    if (!flushed) _snack(AppStrings.authLogoutSyncWarning);
   }
 
   Future<void> _showRecoverDialog() async {

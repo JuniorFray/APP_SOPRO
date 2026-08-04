@@ -213,6 +213,18 @@ class SoproDatabase extends _$SoproDatabase {
           }
         },
       );
+
+  // Limpeza física das 4 tabelas sincronizadas — usada na TROCA de conta (o
+  // SyncEngine detecta dono diferente, limpa e repopula via PULL da conta nova).
+  // Hard delete (NÃO tombstone/soft delete): é limpeza de contexto de conta, não
+  // uma exclusão do usuário que precise sincronizar. Ordem respeita as FKs —
+  // filhos (triggers, shopping_list_items) antes de environments.
+  Future<void> wipeSyncedTables() async {
+    await customStatement('DELETE FROM triggers');
+    await customStatement('DELETE FROM shopping_list_items');
+    await customStatement('DELETE FROM scheduled_reminders');
+    await customStatement('DELETE FROM environments');
+  }
 }
 
 // Abre a conexão com o banco usando LazyDatabase com caminho explícito.

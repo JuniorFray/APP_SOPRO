@@ -6,6 +6,12 @@
 // mudanças remotas (PULL) das 4 tabelas, quando (a) há sessão válida e (b) há
 // conectividade. Conflito: last-write-wins por updatedAt.
 //
+// Troca de conta no mesmo aparelho: o banco local é de UMA conta por vez. Ao
+// logar com dono diferente do último, reconcileAccount() limpa as 4 tabelas e o
+// PULL repopula com os dados da conta nova (padrão comum de apps com conta). Isso
+// mantém o PUSH correto: como o banco só tem linhas do dono atual, carimbar
+// user_id da sessão em cada linha nunca vaza dado entre contas.
+//
 // Sem novas dependências: HTTP via dart:io (mesmo padrão de AuthService/GroqStt),
 // PostgREST cru. Sem pacote de conectividade — offline é detectado pela própria
 // falha de rede (SocketException/timeout) e o sync vira no-op (fail-safe).
@@ -14,6 +20,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../data/database/sopro_database.dart';
@@ -28,24 +36,52 @@ class SyncEngine {
   static const _timeout = Duration(seconds: 20);
   // Intervalo mínimo entre execuções — evita rajada de syncs no resume.
   static const _minInterval = Duration(seconds: 15);
+  // Chave (SharedPreferences, só Dart) do último dono do banco neste aparelho.
+  // Sobrevive ao logout de propósito (signOut NÃO a apaga) para detectar troca de
+  // conta no próximo login. Não tem prefixo "flutter." — não é lida pelo Overlay.
+  static const _lastOwnerKey = 'sync_last_owner_id';
 
   SoproDatabase? _db;
   StreamSubscription<AuthSession?>? _authSub;
   bool _running = false;
   DateTime? _lastRun;
 
-  // Inicializa uma vez (AppInitializer). Guarda o banco e dispara um sync a cada
-  // login (sessão passa a não-nula). Idempotente.
+  // Inicializa uma vez (AppInitializer). Guarda o banco e, a cada login (sessão
+  // passa a não-nula), reconcilia a conta (detecta troca → wipe + PULL). Idempotente.
   void init(SoproDatabase db) {
     _db = db;
     _authSub ??= AuthService.instance.sessionStream.listen((session) {
-      if (session != null) syncNow(reason: 'login');
+      if (session != null) reconcileAccount();
     });
   }
 
+  // Chamado quando uma sessão é estabelecida (login em runtime ou restauração no
+  // boot). Detecta TROCA de conta: se o dono desta sessão difere do último dono
+  // que usou o banco neste aparelho, limpa as 4 tabelas locais (hard delete) para
+  // não misturar contas — o PULL a seguir repopula com os dados da conta nova.
+  // Primeiro login de sempre (sem dono anterior) e re-login da MESMA conta não
+  // limpam nada. Uso local puro (nunca logou) nunca chega aqui.
+  Future<void> reconcileAccount() async {
+    final db = _db;
+    if (db == null) return;
+    final session = AuthService.instance.currentSession;
+    if (session == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final lastOwner = prefs.getString(_lastOwnerKey);
+    final switched =
+        lastOwner != null && lastOwner.isNotEmpty && lastOwner != session.userId;
+    if (switched) {
+      await db.wipeSyncedTables();
+      Logger.info('account_switch_wipe', feature: 'sync', action: 'reconcile');
+    }
+    await prefs.setString(_lastOwnerKey, session.userId);
+    // force: garante o PULL imediato mesmo logo após um sync de startup (throttle).
+    await syncNow(reason: switched ? 'account_switch' : 'login', force: true);
+  }
+
   // Executa um ciclo completo de sync. Guardado: no-op se deslogado, sem config,
-  // token vencido, já rodando, ou chamado cedo demais. Nunca lança (fail-safe).
-  Future<void> syncNow({String reason = 'manual'}) async {
+  // token vencido, já rodando, ou chamado cedo demais (salvo force). Nunca lança.
+  Future<void> syncNow({String reason = 'manual', bool force = false}) async {
     final db = _db;
     if (db == null) return;
     final auth = AuthService.instance;
@@ -53,7 +89,9 @@ class SyncEngine {
     if (session == null || !auth.isConfigured) return; // deslogado/sem config
     if (session.isExpired) return; // token vencido → espera refresh no próximo start
     if (_running) return;
-    if (_lastRun != null && DateTime.now().difference(_lastRun!) < _minInterval) {
+    if (!force &&
+        _lastRun != null &&
+        DateTime.now().difference(_lastRun!) < _minInterval) {
       return;
     }
     _running = true;
@@ -74,35 +112,62 @@ class SyncEngine {
     }
   }
 
-  // ── Tabelas ────────────────────────────────────────────────────────────────
+  // PUSH final das pendências locais sob a sessão ATUAL, antes de o logout limpar
+  // a sessão. Ignora o throttle e NÃO faz PULL. Retorna false se algum envio falhou
+  // (offline/HTTP) — o chamador avisa que dados podem não ter subido. Nunca lança.
+  Future<bool> flush() async {
+    final db = _db;
+    if (db == null) return true;
+    final auth = AuthService.instance;
+    final session = auth.currentSession;
+    if (session == null || !auth.isConfigured || session.isExpired) return true;
+    var ok = true;
+    try {
+      ok = await _pushEnvironments(db, session) && ok;
+      ok = await _pushTriggers(db, session) && ok;
+      ok = await _pushReminders(db, session) && ok;
+      ok = await _pushShopping(db, session) && ok;
+    } catch (_) {
+      ok = false;
+    }
+    return ok;
+  }
+
+  // ── Tabelas (cada uma: PULL depois PUSH) ─────────────────────────────────────
 
   Future<void> _syncEnvironments(SoproDatabase db, AuthSession s) async {
+    await _pullEnvironments(db);
+    await _pushEnvironments(db, s);
+  }
+
+  Future<void> _pullEnvironments(SoproDatabase db) async {
     final dao = db.environmentsDao;
-    // PULL
     final remote = await _get('environments');
-    if (remote != null) {
-      final localById = {for (final r in await dao.allForSync()) r.id: r};
-      for (final m in remote) {
-        final id = m['id'] as String;
-        final rUpd = _parseTs(m['updated_at']);
-        final local = localById[id];
-        if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
-          // SEM pinImagePath: foto é local-only (não migra) — upsert não a toca.
-          await dao.applyRemote(EnvironmentsCompanion(
-            id: Value(id),
-            name: Value(m['name'] as String),
-            latitude: Value((m['latitude'] as num).toDouble()),
-            longitude: Value((m['longitude'] as num).toDouble()),
-            radiusMeters: Value((m['radius_meters'] as num).toDouble()),
-            isMarket: Value(m['is_market'] as bool? ?? false),
-            createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
-            updatedAt: Value(rUpd),
-            deletedAt: Value(_parseTs(m['deleted_at'])),
-          ));
-        }
+    if (remote == null) return;
+    final localById = {for (final r in await dao.allForSync()) r.id: r};
+    for (final m in remote) {
+      final id = m['id'] as String;
+      final rUpd = _parseTs(m['updated_at']);
+      final local = localById[id];
+      if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
+        // SEM pinImagePath: foto é local-only (não migra) — upsert não a toca.
+        await dao.applyRemote(EnvironmentsCompanion(
+          id: Value(id),
+          name: Value(m['name'] as String),
+          latitude: Value((m['latitude'] as num).toDouble()),
+          longitude: Value((m['longitude'] as num).toDouble()),
+          radiusMeters: Value((m['radius_meters'] as num).toDouble()),
+          isMarket: Value(m['is_market'] as bool? ?? false),
+          createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
+          updatedAt: Value(rUpd),
+          deletedAt: Value(_parseTs(m['deleted_at'])),
+        ));
       }
     }
-    // PUSH
+  }
+
+  Future<bool> _pushEnvironments(SoproDatabase db, AuthSession s) async {
+    final dao = db.environmentsDao;
     final rows = (await dao.allForSync()).where((r) => r.updatedAt != null);
     final payload = [
       for (final r in rows)
@@ -119,32 +184,41 @@ class SyncEngine {
           'deleted_at': r.deletedAt == null ? null : _fmt(r.deletedAt!),
         }
     ];
-    if (payload.isNotEmpty) await _upsert('environments', payload);
+    if (payload.isEmpty) return true;
+    return _upsert('environments', payload);
   }
 
   Future<void> _syncTriggers(SoproDatabase db, AuthSession s) async {
+    await _pullTriggers(db);
+    await _pushTriggers(db, s);
+  }
+
+  Future<void> _pullTriggers(SoproDatabase db) async {
     final dao = db.triggersDao;
     final remote = await _get('triggers');
-    if (remote != null) {
-      final localById = {for (final r in await dao.allForSync()) r.id: r};
-      for (final m in remote) {
-        final id = m['id'] as String;
-        final rUpd = _parseTs(m['updated_at']);
-        final local = localById[id];
-        if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
-          await dao.applyRemote(TriggersCompanion(
-            id: Value(id),
-            environmentId: Value(m['environment_id'] as String),
-            title: Value(m['title'] as String? ?? ''),
-            content: Value(m['content'] as String? ?? ''),
-            isActive: Value(m['is_active'] as bool? ?? true),
-            createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
-            updatedAt: Value(rUpd),
-            deletedAt: Value(_parseTs(m['deleted_at'])),
-          ));
-        }
+    if (remote == null) return;
+    final localById = {for (final r in await dao.allForSync()) r.id: r};
+    for (final m in remote) {
+      final id = m['id'] as String;
+      final rUpd = _parseTs(m['updated_at']);
+      final local = localById[id];
+      if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
+        await dao.applyRemote(TriggersCompanion(
+          id: Value(id),
+          environmentId: Value(m['environment_id'] as String),
+          title: Value(m['title'] as String? ?? ''),
+          content: Value(m['content'] as String? ?? ''),
+          isActive: Value(m['is_active'] as bool? ?? true),
+          createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
+          updatedAt: Value(rUpd),
+          deletedAt: Value(_parseTs(m['deleted_at'])),
+        ));
       }
     }
+  }
+
+  Future<bool> _pushTriggers(SoproDatabase db, AuthSession s) async {
+    final dao = db.triggersDao;
     final rows = (await dao.allForSync()).where((r) => r.updatedAt != null);
     final payload = [
       for (final r in rows)
@@ -160,35 +234,44 @@ class SyncEngine {
           'deleted_at': r.deletedAt == null ? null : _fmt(r.deletedAt!),
         }
     ];
-    if (payload.isNotEmpty) await _upsert('triggers', payload);
+    if (payload.isEmpty) return true;
+    return _upsert('triggers', payload);
   }
 
   Future<void> _syncReminders(SoproDatabase db, AuthSession s) async {
+    await _pullReminders(db);
+    await _pushReminders(db, s);
+  }
+
+  Future<void> _pullReminders(SoproDatabase db) async {
     final dao = db.scheduledRemindersDao;
     final remote = await _get('scheduled_reminders');
-    if (remote != null) {
-      final localById = {for (final r in await dao.allForSync()) r.id: r};
-      for (final m in remote) {
-        final id = m['id'] as String;
-        final rUpd = _parseTs(m['updated_at']);
-        final local = localById[id];
-        if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
-          await dao.applyRemote(ScheduledRemindersCompanion(
-            id: Value(id),
-            title: Value(m['title'] as String? ?? ''),
-            content: Value(m['content'] as String? ?? ''),
-            scheduledAt: Value(_parseTs(m['scheduled_at']) ?? DateTime.now()),
-            repeatRule: Value(m['repeat_rule'] as String? ?? 'daily'),
-            repeatDaysOfWeek: Value(m['repeat_days_of_week'] as String? ?? ''),
-            isActive: Value(m['is_active'] as bool? ?? true),
-            alertMode: Value(m['alert_mode'] as String? ?? 'notification'),
-            createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
-            updatedAt: Value(rUpd),
-            deletedAt: Value(_parseTs(m['deleted_at'])),
-          ));
-        }
+    if (remote == null) return;
+    final localById = {for (final r in await dao.allForSync()) r.id: r};
+    for (final m in remote) {
+      final id = m['id'] as String;
+      final rUpd = _parseTs(m['updated_at']);
+      final local = localById[id];
+      if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
+        await dao.applyRemote(ScheduledRemindersCompanion(
+          id: Value(id),
+          title: Value(m['title'] as String? ?? ''),
+          content: Value(m['content'] as String? ?? ''),
+          scheduledAt: Value(_parseTs(m['scheduled_at']) ?? DateTime.now()),
+          repeatRule: Value(m['repeat_rule'] as String? ?? 'daily'),
+          repeatDaysOfWeek: Value(m['repeat_days_of_week'] as String? ?? ''),
+          isActive: Value(m['is_active'] as bool? ?? true),
+          alertMode: Value(m['alert_mode'] as String? ?? 'notification'),
+          createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
+          updatedAt: Value(rUpd),
+          deletedAt: Value(_parseTs(m['deleted_at'])),
+        ));
       }
     }
+  }
+
+  Future<bool> _pushReminders(SoproDatabase db, AuthSession s) async {
+    final dao = db.scheduledRemindersDao;
     final rows = (await dao.allForSync()).where((r) => r.updatedAt != null);
     final payload = [
       for (final r in rows)
@@ -207,31 +290,40 @@ class SyncEngine {
           'deleted_at': r.deletedAt == null ? null : _fmt(r.deletedAt!),
         }
     ];
-    if (payload.isNotEmpty) await _upsert('scheduled_reminders', payload);
+    if (payload.isEmpty) return true;
+    return _upsert('scheduled_reminders', payload);
   }
 
   Future<void> _syncShopping(SoproDatabase db, AuthSession s) async {
+    await _pullShopping(db);
+    await _pushShopping(db, s);
+  }
+
+  Future<void> _pullShopping(SoproDatabase db) async {
     final dao = db.shoppingListItemsDao;
     final remote = await _get('shopping_list_items');
-    if (remote != null) {
-      final localById = {for (final r in await dao.allForSync()) r.id: r};
-      for (final m in remote) {
-        final id = m['id'] as String;
-        final rUpd = _parseTs(m['updated_at']);
-        final local = localById[id];
-        if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
-          await dao.applyRemote(ShoppingListItemsCompanion(
-            id: Value(id),
-            environmentId: Value(m['environment_id'] as String),
-            name: Value(m['name'] as String? ?? ''),
-            isChecked: Value(m['is_checked'] as bool? ?? false),
-            createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
-            updatedAt: Value(rUpd),
-            deletedAt: Value(_parseTs(m['deleted_at'])),
-          ));
-        }
+    if (remote == null) return;
+    final localById = {for (final r in await dao.allForSync()) r.id: r};
+    for (final m in remote) {
+      final id = m['id'] as String;
+      final rUpd = _parseTs(m['updated_at']);
+      final local = localById[id];
+      if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
+        await dao.applyRemote(ShoppingListItemsCompanion(
+          id: Value(id),
+          environmentId: Value(m['environment_id'] as String),
+          name: Value(m['name'] as String? ?? ''),
+          isChecked: Value(m['is_checked'] as bool? ?? false),
+          createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
+          updatedAt: Value(rUpd),
+          deletedAt: Value(_parseTs(m['deleted_at'])),
+        ));
       }
     }
+  }
+
+  Future<bool> _pushShopping(SoproDatabase db, AuthSession s) async {
+    final dao = db.shoppingListItemsDao;
     final rows = (await dao.allForSync()).where((r) => r.updatedAt != null);
     final payload = [
       for (final r in rows)
@@ -246,7 +338,8 @@ class SyncEngine {
           'deleted_at': r.deletedAt == null ? null : _fmt(r.deletedAt!),
         }
     ];
-    if (payload.isNotEmpty) await _upsert('shopping_list_items', payload);
+    if (payload.isEmpty) return true;
+    return _upsert('shopping_list_items', payload);
   }
 
   // ── LWW ──────────────────────────────────────────────────────────────────
@@ -285,7 +378,8 @@ class SyncEngine {
   }
 
   // POST em lote com upsert (merge por PK id). return=minimal reduz payload de volta.
-  Future<void> _upsert(String table, List<Map<String, dynamic>> rows) async {
+  // Retorna true em 2xx; false em erro de rede/HTTP (usado pelo flush do logout).
+  Future<bool> _upsert(String table, List<Map<String, dynamic>> rows) async {
     final session = AuthService.instance.currentSession!;
     final client = HttpClient()..connectionTimeout = _timeout;
     try {
@@ -302,9 +396,12 @@ class SyncEngine {
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         Logger.debug('sync_push_rejected', feature: 'sync', action: table,
             payload: {'status': resp.statusCode.toString()});
+        return false;
       }
+      return true;
     } catch (_) {
       // offline/erro no PUSH — silencioso; a próxima rodada tenta de novo.
+      return false;
     } finally {
       client.close(force: true);
     }

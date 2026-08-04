@@ -29,9 +29,11 @@ final bleTxPowerProvider = StateProvider<int>((ref) => 1);
 final shareWhatsAppProvider = StateProvider<bool>((ref) => true);
 
 // Provider que controla os alertas inteligentes de clima (motor nativo que faz
-// checagens periódicas ao longo do dia). Opt-in: default false — só liga quando
-// o usuário ativa. Persistência via SharedPreferences ('weather_alerts_enabled').
-final weatherAlertsEnabledProvider = StateProvider<bool>((ref) => false);
+// checagens periódicas ao longo do dia). Ligado por padrão (default true): o
+// AppInitializer, no PRIMEIRO run (pref ausente), persiste true e agenda o motor
+// nativo. Se o usuário desligar depois (pref = false), é respeitado.
+// Persistência via SharedPreferences ('weather_alerts_enabled').
+final weatherAlertsEnabledProvider = StateProvider<bool>((ref) => true);
 
 // Provider que controla se o botão flutuante de voz (overlay) está ativo.
 // Requer permissão SYSTEM_ALERT_WINDOW concedida pelo usuário.

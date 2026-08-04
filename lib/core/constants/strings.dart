@@ -609,6 +609,10 @@ class AppStrings {
   static const authForgotPassword  = 'Esqueci minha senha';
   static const authLogout          = 'Sair';
   static const authLogoutConfirm   = 'Sair da sua conta?';
+  // Exibida no logout quando o PUSH final falha (offline): dados locais criados
+  // e ainda não sincronizados podem se perder na troca de conta.
+  static const authLogoutSyncWarning =
+      'Alguns dados podem não ter sido salvos por falta de internet.';
 
   // Validação de campos
   static const authEmailRequired    = 'Informe seu e-mail';

@@ -558,7 +558,9 @@ class _WeatherNotifTileState extends State<_WeatherNotifTile> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      _enabled = prefs.getBool('weather_notification_enabled') ?? false;
+      // Ligado por padrão: o AppInitializer persiste a pref no primeiro run, mas
+      // o ?? true mantém o switch coerente mesmo antes disso.
+      _enabled = prefs.getBool('weather_notification_enabled') ?? true;
       _hour = prefs.getInt('weather_notification_hour') ?? 8;
       _minute = prefs.getInt('weather_notification_minute') ?? 0;
     });

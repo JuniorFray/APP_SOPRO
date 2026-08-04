@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -17,6 +18,10 @@ import '../providers/database_provider.dart';
 import '../providers/location_providers.dart';
 import '../providers/settings_providers.dart';
 import '../providers/voice_providers.dart';
+
+// Canal nativo dos lembretes/clima (mesmo usado pela tela de Configurações) —
+// para agendar os alarmes de clima no primeiro run.
+const _remindersChannel = MethodChannel('com.sopro.sopro/reminders');
 
 // Widget que inicializa serviços assíncronos dentro do ProviderScope.
 // Deve ser o primeiro widget construído depois do ProviderScope para que o
@@ -190,7 +195,9 @@ class _AppInitializerState extends ConsumerState<AppInitializer>
     // trás dos repositórios — telas/streams não sabem que ele existe.
     SyncEngine.instance.init(ref.read(databaseProvider));
     if (AuthService.instance.isLoggedIn) {
-      SyncEngine.instance.syncNow(reason: 'startup');
+      // reconcileAccount (não syncNow direto): no boot com sessão restaurada,
+      // detecta troca de conta desde o último uso (wipe + PULL) antes de sincronizar.
+      SyncEngine.instance.reconcileAccount();
     }
 
     final notifEnabled = prefs.getBool('notifications_enabled') ?? true;
@@ -235,12 +242,31 @@ class _AppInitializerState extends ConsumerState<AppInitializer>
       ref.read(voiceSpeechRateProvider.notifier).state = voiceRate;
     }
 
-    // Restaura o toggle dos alertas inteligentes de clima (default false).
-    // O motor nativo (WeatherAlertEngine) reagenda a si mesmo; aqui só refletimos
-    // o estado no provider para o switch das Configurações aparecer correto.
-    if (prefs.getBool('weather_alerts_enabled') ?? false) {
-      ref.read(weatherAlertsEnabledProvider.notifier).state = true;
+    // Clima ligado por padrão. Só no PRIMEIRO run (pref ausente) persistimos true
+    // e agendamos o alarme nativo; se o usuário desligar depois (pref = false),
+    // respeitamos. Distinguir "nunca configurou" de "desligou" exige checar == null.
+
+    // Notificação diária de clima (default 08:00).
+    if (prefs.getBool('weather_notification_enabled') == null) {
+      await prefs.setBool('weather_notification_enabled', true);
+      final h = prefs.getInt('weather_notification_hour') ?? 8;
+      final m = prefs.getInt('weather_notification_minute') ?? 0;
+      try {
+        await _remindersChannel.invokeMethod(
+            'scheduleWeatherNotification', {'hour': h, 'minute': m});
+      } catch (_) {/* canal indisponível — pref já persistida, boot reagenda */}
     }
+
+    // Motor de alertas inteligentes de clima.
+    if (prefs.getBool('weather_alerts_enabled') == null) {
+      await prefs.setBool('weather_alerts_enabled', true);
+      try {
+        await _remindersChannel.invokeMethod('scheduleWeatherAlertEngine');
+      } catch (_) {/* canal indisponível — pref já persistida, boot reagenda */}
+    }
+    // Reflete o estado (respeitando OFF) no provider do switch das Configurações.
+    ref.read(weatherAlertsEnabledProvider.notifier).state =
+        prefs.getBool('weather_alerts_enabled') ?? true;
 
     // 7. Inicia o foreground service apenas se o onboarding já foi concluído.
     //    Evita exibir "Sopro ativo" antes de o usuário configurar o app.
