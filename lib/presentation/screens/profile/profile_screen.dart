@@ -33,6 +33,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../domain/entities/context_card_entity.dart';
+import '../../../infrastructure/personalization/user_name_store.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/settings_providers.dart';
 import '../../widgets/glass_surface.dart';
@@ -52,9 +53,8 @@ class ProfileScreen extends ConsumerStatefulWidget {
 }
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
-  // Controladores dos campos de texto (Cargo não é mais exibido)
+  // Controladores dos campos de texto (Cargo e Empresa não são mais exibidos)
   final _nameCtrl    = TextEditingController();
-  final _companyCtrl = TextEditingController();
   final _tagsCtrl    = TextEditingController();
   final _bioCtrl     = TextEditingController();
   final _phoneCtrl   = TextEditingController();
@@ -65,6 +65,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   File? _photoFile;                 // foto do perfil (só local, nunca enviada via BLE)
   bool _loaded  = false;            // true após carregar dados do banco
   bool _saving  = false;            // true enquanto persiste no banco
+  bool _editing = false;            // false = modo leitura; true = campos liberados
 
   @override
   void didChangeDependencies() {
@@ -83,11 +84,16 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     _existingCard = card;
 
     if (card != null) {
-      _nameCtrl.text    = card.displayName;
-      _companyCtrl.text = card.company;
-      _tagsCtrl.text    = card.tags;
-      _bioCtrl.text     = card.bio;
-      _phoneCtrl.text   = card.phone;
+      _nameCtrl.text  = card.displayName;
+      _tagsCtrl.text  = card.tags;
+      _bioCtrl.text   = card.bio;
+      _phoneCtrl.text = card.phone;
+    }
+
+    // Sem nome próprio no card ainda → reaproveita o nome do onboarding/persona
+    // (UserNameStore) como fallback, evitando o campo nascer vazio.
+    if (_nameCtrl.text.trim().isEmpty) {
+      _nameCtrl.text = UserNameStore.current ?? '';
     }
 
     // Verifica se a foto ainda existe no disco antes de exibir
@@ -101,7 +107,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   @override
   void dispose() {
     _nameCtrl.dispose();
-    _companyCtrl.dispose();
     _tagsCtrl.dispose();
     _bioCtrl.dispose();
     _phoneCtrl.dispose();
@@ -214,9 +219,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       final entity = ContextCardEntity(
         id: _existingCard?.id ?? '',            // vazio → repositório gera UUID
         displayName: _nameCtrl.text.trim(),
-        // Cargo saiu da UI, mas o valor antigo é preservado silenciosamente.
+        // Cargo e Empresa saíram da UI, mas os valores antigos são preservados.
         role: _existingCard?.role ?? '',
-        company: _companyCtrl.text.trim(),
+        company: _existingCard?.company ?? '',
         bio: _bioCtrl.text.trim(),
         tags: _tagsCtrl.text.trim(),
         phone: _phoneCtrl.text.trim(),
@@ -227,6 +232,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       await ref.read(contextCardRepositoryProvider).save(entity);
 
       if (!mounted) return;
+      // Recarrega o card persistido (id/updatedAt reais — o repo gera UUID quando
+      // id vem vazio) e volta pro modo leitura. Sem isso, um novo card duplicaria.
+      _existingCard = await ref.read(contextCardRepositoryProvider).getActive();
+      if (!mounted) return;
+      setState(() => _editing = false);
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -235,8 +245,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           duration: Duration(seconds: 2),
         ),
       );
-
-      Navigator.pop(context);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -249,6 +257,23 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  // Entra em modo edição — libera os campos.
+  void _startEdit() => setState(() => _editing = true);
+
+  // Cancela a edição: restaura os controllers a partir do card salvo (descarta o
+  // que foi digitado) e volta pro modo leitura. Mesmo fallback de nome do load.
+  void _cancelEdit() {
+    final c = _existingCard;
+    _nameCtrl.text  = c?.displayName ?? '';
+    _tagsCtrl.text  = c?.tags ?? '';
+    _bioCtrl.text   = c?.bio ?? '';
+    _phoneCtrl.text = c?.phone ?? '';
+    if (_nameCtrl.text.trim().isEmpty) {
+      _nameCtrl.text = UserNameStore.current ?? '';
+    }
+    setState(() => _editing = false);
   }
 
   @override
@@ -322,18 +347,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               fontWeight: FontWeight.w600,
             ),
           ),
-          // Empresa/organização, se preenchida — cinza discreto abaixo do nome.
-          if (_companyCtrl.text.trim().isNotEmpty) ...[
-            const SizedBox(height: AppSpacing.xxs),
-            Text(
-              _companyCtrl.text.trim(),
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: AppColors.textDisabled,
-                fontSize: 13,
-              ),
-            ),
-          ],
           const SizedBox(height: AppSpacing.section),
 
           // ── Seção: Identidade ───────────────────────────────────────────
@@ -351,21 +364,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   controller: _nameCtrl,
                   label: AppStrings.profileName,
                   hint: AppStrings.profileNameHint,
+                  readOnly: !_editing,
                   textCapitalization: TextCapitalization.words,
                   maxLength: 50,
                   onChanged: (_) => setState(() {}), // atualiza herói em tempo real
                   validator: (v) => (v == null || v.trim().isEmpty)
                       ? AppStrings.profileNameRequired
                       : null,
-                ),
-                _fieldDivider,
-                _ProfileField(
-                  controller: _companyCtrl,
-                  label: AppStrings.profileCompany,
-                  hint: AppStrings.profileCompanyHint,
-                  textCapitalization: TextCapitalization.words,
-                  maxLength: 60,
-                  onChanged: (_) => setState(() {}), // atualiza herói em tempo real
                 ),
               ],
             ),
@@ -387,6 +392,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   controller: _tagsCtrl,
                   label: AppStrings.profileInterests,
                   hint: AppStrings.profileInterestsHint,
+                  readOnly: !_editing,
                   maxLength: 120,
                 ),
                 _fieldDivider,
@@ -394,6 +400,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   controller: _bioCtrl,
                   label: AppStrings.profileNote,
                   hint: AppStrings.profileNoteHint,
+                  readOnly: !_editing,
                   textCapitalization: TextCapitalization.sentences,
                   minLines: 3,
                   maxLines: null, // cresce conforme o texto
@@ -421,6 +428,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   controller: _phoneCtrl,
                   label: AppStrings.profilePhone,
                   hint: AppStrings.profilePhoneHint,
+                  readOnly: !_editing,
                   keyboardType: TextInputType.phone,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   maxLength: 13,
@@ -473,35 +481,42 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ),
           const SizedBox(height: AppSpacing.xxl),
 
-          SoproPrimaryButton(
-            label: AppStrings.profileSave,
-            onPressed: _saving ? null : _save,
-            loading: _saving,
-          ),
-          const SizedBox(height: AppSpacing.sm),
-
-          // Botão secundário: descarta e volta sem salvar.
-          SizedBox(
-            height: 52,
-            width: double.infinity,
-            child: OutlinedButton(
-              onPressed: _saving ? null : () => Navigator.pop(context),
-              style: OutlinedButton.styleFrom(
-                backgroundColor: AppColors.backgroundCard,
-                side: const BorderSide(color: AppColors.border),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(AppRadius.button),
+          // Modo leitura: só "Editar perfil". Modo edição: Salvar + Cancelar.
+          if (!_editing)
+            SoproPrimaryButton(
+              label: AppStrings.profileEdit,
+              onPressed: _startEdit,
+            )
+          else ...[
+            SoproPrimaryButton(
+              label: AppStrings.profileSave,
+              onPressed: _saving ? null : _save,
+              loading: _saving,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            // Cancela: descarta edições e volta ao modo leitura.
+            SizedBox(
+              height: 52,
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _saving ? null : _cancelEdit,
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: AppColors.backgroundCard,
+                  side: const BorderSide(color: AppColors.border),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.button),
+                  ),
                 ),
-              ),
-              child: Text(
-                AppStrings.cancel,
-                style: AppTypography.titleSmall.copyWith(
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w600,
+                child: Text(
+                  AppStrings.cancel,
+                  style: AppTypography.titleSmall.copyWith(
+                    color: AppColors.textSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -513,7 +528,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     return Tooltip(
       message: AppStrings.profilePhotoTooltip,
       child: GestureDetector(
-        onTap: _showPhotoOptions,
+        // Foto só é editável em modo edição (leitura = toque inerte).
+        onTap: _editing ? _showPhotoOptions : null,
         child: Stack(
           alignment: Alignment.bottomRight,
           children: [
@@ -545,19 +561,20 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     : null,
               ),
             ),
-            // Ícone de câmera indica que o avatar é clicável
-            Container(
-              decoration: const BoxDecoration(
-                color: AppColors.accent,
-                shape: BoxShape.circle,
+            // Ícone de câmera só em modo edição (sinaliza que o avatar é clicável).
+            if (_editing)
+              Container(
+                decoration: const BoxDecoration(
+                  color: AppColors.accent,
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(6),
+                child: const Icon(
+                  Icons.camera_alt,
+                  color: AppColors.textPrimary,
+                  size: 17,
+                ),
               ),
-              padding: const EdgeInsets.all(6),
-              child: const Icon(
-                Icons.camera_alt,
-                color: AppColors.textPrimary,
-                size: 17,
-              ),
-            ),
           ],
         ),
       ),
@@ -599,6 +616,7 @@ class _ProfileField extends StatefulWidget {
     required this.controller,
     required this.label,
     this.hint,
+    this.readOnly = false,
     this.maxLength,
     this.maxLines = 1,
     this.minLines,
@@ -614,6 +632,7 @@ class _ProfileField extends StatefulWidget {
   final TextEditingController controller;
   final String label;
   final String? hint;
+  final bool readOnly; // modo leitura do Perfil — mostra o valor sem permitir editar
   final int? maxLength;
   final int? maxLines;
   final int? minLines;
@@ -700,6 +719,7 @@ class _ProfileFieldState extends State<_ProfileField> {
                 child: TextFormField(
                   controller: widget.controller,
                   focusNode: _focusNode,
+                  readOnly: widget.readOnly,
                   keyboardType: widget.keyboardType,
                   maxLines: widget.maxLines,
                   minLines: widget.minLines,

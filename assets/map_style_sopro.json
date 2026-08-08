@@ -49,9 +49,9 @@
       "source-layer": "building",
       "minzoom": 13,
       "paint": {
-        "fill-color": "#232D45",
-        "fill-outline-color": "#333F5C",
-        "fill-opacity": 0.9
+        "fill-color": "#1B2232",
+        "fill-outline-color": "#242E42",
+        "fill-opacity": 0.7
       }
     },
     {
@@ -107,7 +107,7 @@
       "minzoom": 14,
       "layout": { "visibility": "none" },
       "paint": {
-        "fill-extrusion-color": "#1c2942",
+        "fill-extrusion-color": "#1B2232",
         "fill-extrusion-height": [
           "interpolate", ["linear"], ["zoom"],
           14, 0,

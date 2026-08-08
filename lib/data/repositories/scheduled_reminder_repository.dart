@@ -1,11 +1,15 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../database/daos/scheduled_reminders_dao.dart';
 import '../database/sopro_database.dart';
+import '../../core/navigation/app_router.dart';
 import '../../domain/entities/scheduled_reminder_entity.dart';
 import '../../domain/repositories/i_scheduled_reminder_repository.dart';
 import '../../infrastructure/reminders/reminder_scheduler.dart';
+import '../../presentation/widgets/device_requirements_guard.dart';
 
 // Implementação concreta do IScheduledReminderRepository usando Drift (SQLite).
 // Converte entre o row do banco (ScheduledReminder) e a entidade de domínio,
@@ -47,6 +51,20 @@ class ScheduledReminderRepository implements IScheduledReminderRepository {
     );
     // Sincroniza o alarme nativo: ativo → agenda; inativo → cancela.
     if (reminder.isActive) {
+      // Chokepoint único (voz + UI): lembrete em modo alarme (tela cheia)
+      // precisa de alarme exato + tela cheia. Checa no momento de salvar e, se
+      // faltar, dispara o diálogo via navigatorKey (fora da árvore de widgets).
+      // Fire-and-forget: não bloqueia nem cancela o agendamento — só nudge.
+      if (reminder.alertMode == ReminderAlertMode.alarm ||
+          reminder.alertMode == ReminderAlertMode.both) {
+        final ctx = navigatorKey.currentContext;
+        if (ctx != null) {
+          // ctx é lido fresco do navigatorKey (não um context guardado) e o
+          // helper revalida context.mounted internamente — seguro após o await.
+          // ignore: use_build_context_synchronously
+          unawaited(DeviceRequirementsGuard.promptAlarmPermissions(ctx));
+        }
+      }
       await _scheduler.scheduleReminder(
           id, reminder.scheduledAt.millisecondsSinceEpoch);
     } else {

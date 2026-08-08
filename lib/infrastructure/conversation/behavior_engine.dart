@@ -2,6 +2,7 @@ import 'dart:math';
 
 import '../../core/constants/strings.dart';
 import '../../core/constants/voice_content.dart';
+import '../personalization/user_name_store.dart';
 
 // Behavior Engine — ponto ÚNICO de onde saem as respostas faladas do assistente.
 //
@@ -421,7 +422,15 @@ String _greeting(int hour, Random r) {
       : (hour >= 11 && hour < 19)
           ? ['Boa tarde! ', 'Oi! ', 'Opa, boa tarde! ']
           : ['Boa noite! ', 'Oi! ', 'Opa! '];
-  return pool[r.nextInt(pool.length)];
+  final greeting = pool[r.nextInt(pool.length)];
+  // Personalização (Fase 3): quando há nome, insere-o na saudação em ALGUMAS
+  // vezes (nextBool ~50%) — natural sem soar repetitivo. 'Bom dia! ' → 'Bom dia,
+  // Fulano! '. Sem nome → saudação neutra, comportamento anterior intacto.
+  final name = UserNameStore.current;
+  if (name != null && r.nextBool()) {
+    return greeting.replaceFirst('! ', ', $name! ');
+  }
+  return greeting;
 }
 
 // Etapa 3.1 (tom por horário) — abridor curto de tom para as frases de SUCESSO,

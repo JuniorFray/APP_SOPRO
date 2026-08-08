@@ -16,9 +16,11 @@ import '../../providers/settings_providers.dart';
 import '../../providers/voice_providers.dart';
 import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_card.dart';
+import '../../widgets/sopro_switch.dart';
 import '../../../infrastructure/overlay/floating_voice_service_manager.dart';
 import '../auth/account_screen.dart';
 import '../feedback/feedback_screen.dart';
+import '../sharing/shares_list_screen.dart';
 
 // Canal nativo para o FloatingVoiceService (botão flutuante de voz)
 const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
@@ -82,11 +84,13 @@ class SettingsScreen extends ConsumerWidget {
                 title: AppStrings.settingsBleVisible,
                 subtitle: AppStrings.settingsBleVisibleDesc,
                 value: bleVisible,
-                onChanged: (v) {
-                  // Altera o estado em memória; PeopleNearbyScreen o lê antes
-                  // de iniciar advertising. Não precisa de persistência extra
-                  // porque o advertising é iniciado manualmente pelo usuário.
+                onChanged: (v) async {
+                  // Atualiza o estado em memória e persiste (mesmo padrão do
+                  // bleTxPower/shareWhatsApp): sem persistir, o StateProvider
+                  // volta ao default true a cada reabertura do app.
                   ref.read(bleVisibleProvider.notifier).state = v;
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setBool('ble_visible', v);
                 },
               ),
               const _ItemDivider(),
@@ -249,6 +253,10 @@ class SettingsScreen extends ConsumerWidget {
             ],
           ),
 
+          // Card discreto e dispensável (só sem conta): incentivo a criar conta
+          // para desbloquear compartilhamento + sync entre aparelhos.
+          if (authSession == null) const _SharingPromoCard(),
+
           // ─── Seção: Conta (Fase 1 — Supabase Auth) ────────────────────────
           // Login OPCIONAL: prepara sync/compartilhamento sem bloquear o uso do
           // app. Deslogado → convite pra entrar/criar; logado → mostra o e-mail.
@@ -265,6 +273,23 @@ class SettingsScreen extends ConsumerWidget {
                     size: 16, color: AppColors.textDisabled),
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const AccountScreen()),
+                ),
+              ),
+            ],
+          ),
+
+          // ─── Seção: Compartilhamento ──────────────────────────────────────
+          const _SectionHeader(label: AppStrings.settingsSharingSection),
+          _SectionCard(
+            children: [
+              _SettingRow(
+                icon: LucideIcons.share2,
+                title: AppStrings.settingsSharingEntry,
+                subtitle: AppStrings.settingsSharingEntryDesc,
+                trailing: const Icon(LucideIcons.chevronRight,
+                    size: 16, color: AppColors.textDisabled),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const SharesListScreen()),
                 ),
               ),
             ],
@@ -425,8 +450,7 @@ class _SettingRow extends StatelessWidget {
   }
 }
 
-// Switch com contraste ON/OFF explícito: ligado coral, desligado neutro
-// (trilho cinza-escuro + thumb cinza), sem outline residual.
+// Delega ao SoproSwitch (ponto único de estilo/tamanho dos toggles do app).
 class _SettingSwitch extends StatelessWidget {
   final bool value;
   final ValueChanged<bool> onChanged;
@@ -434,18 +458,8 @@ class _SettingSwitch extends StatelessWidget {
   const _SettingSwitch({required this.value, required this.onChanged});
 
   @override
-  Widget build(BuildContext context) {
-    return Switch(
-      value: value,
-      onChanged: onChanged,
-      activeColor: AppColors.textPrimary,
-      activeTrackColor: AppColors.accent,
-      inactiveThumbColor: AppColors.textDisabled,
-      inactiveTrackColor: AppColors.backgroundElevated,
-      trackOutlineColor:
-          const WidgetStatePropertyAll(Colors.transparent),
-    );
-  }
+  Widget build(BuildContext context) =>
+      SoproSwitch(value: value, onChanged: onChanged);
 }
 
 // Dropdown padronizado: valor cinza-claro (~70%) + chevron discreto.
@@ -788,6 +802,75 @@ class _ShortcutBlock extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// Card discreto e dispensável (Fase 3) — só aparece pra quem não tem conta.
+// Incentiva criar conta para desbloquear compartilhamento + sync. O "X" persiste
+// a dispensa em SharedPreferences (não volta a aparecer).
+class _SharingPromoCard extends StatefulWidget {
+  const _SharingPromoCard();
+
+  @override
+  State<_SharingPromoCard> createState() => _SharingPromoCardState();
+}
+
+class _SharingPromoCardState extends State<_SharingPromoCard> {
+  static const _prefKey = 'sharing_promo_dismissed';
+  bool _loaded = false;
+  bool _dismissed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _dismissed = prefs.getBool(_prefKey) ?? false;
+      _loaded = true;
+    });
+  }
+
+  Future<void> _dismiss() async {
+    setState(() => _dismissed = true);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_prefKey, true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Antes de carregar o pref ou após dispensar: não ocupa espaço.
+    if (!_loaded || _dismissed) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+      child: SoproCard(
+        glass: true,
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Text(
+                AppStrings.sharingPromoCard,
+                style: AppTypography.bodySmall
+                    .copyWith(color: AppColors.textSecondary, height: 1.35),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            InkWell(
+              onTap: _dismiss,
+              child: const Icon(LucideIcons.x,
+                  size: 16, color: AppColors.textDisabled),
+            ),
+          ],
         ),
       ),
     );

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:workmanager/workmanager.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 import 'core/constants/strings.dart';
 import 'core/constants/voice_content.dart';
@@ -24,6 +25,9 @@ import 'presentation/widgets/app_initializer.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Inicializa dados de formatação de data para o pt_BR
+  await initializeDateFormatting('pt_BR', null);
 
   // Registra o dispatcher Dart do WorkManager — chamado pelo FloatingVoiceService
   // para persistir ambientes e gatilhos via Drift sem abrir o app.

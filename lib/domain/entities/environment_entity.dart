@@ -24,6 +24,10 @@ class EnvironmentEntity {
   // Opcional para não quebrar construções existentes; nunca sai do dispositivo.
   final String? pinImagePath;
 
+  // Dono da linha quando este ambiente é uma CÓPIA read-only compartilhada por
+  // outro usuário (Fase 3). null = ambiente próprio. Guia a UI read-only.
+  final String? ownerId;
+
   const EnvironmentEntity({
     required this.id,
     required this.name,
@@ -33,5 +37,9 @@ class EnvironmentEntity {
     required this.createdAt,
     required this.isMarket,
     this.pinImagePath,
+    this.ownerId,
   });
+
+  // true = ambiente compartilhado por outro dono → geometria é somente leitura.
+  bool get isShared => ownerId != null;
 }

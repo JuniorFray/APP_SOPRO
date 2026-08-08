@@ -10,6 +10,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../infrastructure/auth/auth_service.dart';
+import '../../../infrastructure/personalization/user_name_store.dart';
 import '../../../infrastructure/sync/sync_engine.dart';
 import '../../providers/auth_providers.dart';
 import '../../widgets/glass_surface.dart';
@@ -36,14 +37,26 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
+  // Nome (cadastro) — pré-preenchido com o nome local do onboarding, se houver.
+  final _nameCtrl = TextEditingController();
+  // Telefone (cadastro) — obrigatório; sobe via signUp data → profiles.phone.
+  final _phoneCtrl = TextEditingController();
 
   bool _signupMode = false; // false = login, true = cadastro
   bool _busy = false;
 
   @override
+  void initState() {
+    super.initState();
+    _nameCtrl.text = UserNameStore.current ?? '';
+  }
+
+  @override
   void dispose() {
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
     super.dispose();
   }
 
@@ -141,6 +154,31 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
             style: AppTypography.titleLarge.copyWith(color: AppColors.textPrimary),
           ),
           const SizedBox(height: AppSpacing.lg),
+          // Nome + telefone só no cadastro, ambos obrigatórios. Nome pré-preenchido
+          // com o do onboarding. Telefone só dígitos → profiles.phone via trigger.
+          if (_signupMode) ...[
+            SoproTextField(
+              controller: _nameCtrl,
+              label: AppStrings.authNameLabel,
+              hint: AppStrings.authNameHint,
+              textCapitalization: TextCapitalization.words,
+              textInputAction: TextInputAction.next,
+              prefixIcon: const Icon(LucideIcons.user, size: 18),
+              validator: _validateName,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            SoproTextField(
+              controller: _phoneCtrl,
+              label: AppStrings.authPhoneLabel,
+              hint: AppStrings.authPhoneHint,
+              keyboardType: TextInputType.phone,
+              textInputAction: TextInputAction.next,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              prefixIcon: const Icon(LucideIcons.phone, size: 18),
+              validator: _validatePhone,
+            ),
+            const SizedBox(height: AppSpacing.md),
+          ],
           SoproTextField(
             controller: _emailCtrl,
             label: AppStrings.authEmailLabel,
@@ -208,6 +246,20 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     return null;
   }
 
+  // Cadastro: nome obrigatório (mín. 2 chars, sem contar espaços).
+  String? _validateName(String? v) {
+    if ((v ?? '').trim().length < 2) return AppStrings.authNameRequired;
+    return null;
+  }
+
+  // Cadastro: telefone obrigatório. Só dígitos (formatter garante); exige 10-11
+  // (fixo/celular BR com DDD).
+  String? _validatePhone(String? v) {
+    final s = (v ?? '').trim();
+    if (s.length < 10 || s.length > 11) return AppStrings.authPhoneRequired;
+    return null;
+  }
+
   // ── Ações ────────────────────────────────────────────────────────────────────
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
@@ -217,8 +269,13 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     final service = ref.read(authServiceProvider);
     final email = _emailCtrl.text.trim();
     final password = _passwordCtrl.text;
+    // No cadastro, persiste o nome localmente e envia como metadata (→ profiles.name).
+    if (_signupMode) {
+      await UserNameStore.save(_nameCtrl.text);
+    }
     final result = _signupMode
-        ? await service.signUp(email, password)
+        ? await service.signUp(email, password,
+            displayName: _nameCtrl.text, phone: _phoneCtrl.text)
         : await service.signIn(email, password);
 
     if (!mounted) return;

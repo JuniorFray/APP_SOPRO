@@ -34,6 +34,7 @@ import '../home/home_composer_bar.dart';
 import '../home/home_tab_content.dart';
 import '../profile/profile_screen.dart';
 import '../reminders/reminders_tab_content.dart';
+import '../agenda/agenda_screen.dart';
 
 class MainShellScreen extends ConsumerStatefulWidget {
   const MainShellScreen({super.key});
@@ -143,6 +144,7 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
   static const _tabs = <({IconData icon, IconData active, String label})>[
     (icon: Icons.home_outlined,          active: Icons.home,          label: AppStrings.navHome),
     (icon: Icons.notifications_outlined, active: Icons.notifications, label: AppStrings.navReminders),
+    (icon: Icons.calendar_today_outlined,active: Icons.calendar_today,label: 'Agenda'),
     (icon: Icons.location_on_outlined,   active: Icons.location_on,   label: AppStrings.navEnvironments),
     (icon: Icons.person_outline,         active: Icons.person,        label: AppStrings.navProfile),
   ];
@@ -180,6 +182,7 @@ class _MainShellScreenState extends ConsumerState<MainShellScreen> {
                   onNavigateToTab: (i) => setState(() => _currentTabIndex = i),
                 ),
                 const RemindersTabContent(),
+                const AgendaScreen(),
                 const EnvironmentsTabContent(),
                 const ProfileScreen(showBackButton: false),
               ],

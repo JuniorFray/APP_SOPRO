@@ -36,6 +36,12 @@ class Environments extends Table {
   DateTimeColumn get updatedAt => dateTime().nullable()();
   DateTimeColumn get deletedAt => dateTime().nullable()();
 
+  // Sync (Fase 3 — compartilhamento) — dono da linha quando ela é uma CÓPIA
+  // read-only de um ambiente compartilhado por OUTRO usuário. null = linha própria
+  // (meu dado ou legado). Preenchido no PULL com o user_id remoto quando != eu.
+  // O PUSH nunca reenvia linhas com ownerId != null (o convidado não é dono delas).
+  TextColumn get ownerId => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

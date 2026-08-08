@@ -61,9 +61,11 @@ class SoproTextField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final borderRadius = BorderRadius.circular(AppRadius.input);
+    // Repouso: fundo discreto (cor do card) + borda fina translúcida — indica área
+    // clicável sem o bloco azul sólido. Foco: borda coral, mesmo fundo discreto.
     final baseBorder = OutlineInputBorder(
       borderRadius: borderRadius,
-      borderSide: BorderSide.none,
+      borderSide: const BorderSide(color: AppColors.borderHighlight, width: 1),
     );
     final focusedBorder = OutlineInputBorder(
       borderRadius: borderRadius,
@@ -130,7 +132,7 @@ class SoproTextField extends StatelessWidget {
           color: AppColors.textDisabled,
         ),
         filled: true,
-        fillColor: AppColors.backgroundInput,
+        fillColor: AppColors.backgroundCard,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,
           vertical: 14,

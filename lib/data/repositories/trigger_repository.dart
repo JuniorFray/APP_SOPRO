@@ -65,5 +65,6 @@ class TriggerRepository implements ITriggerRepository {
         content: row.content,
         isActive: row.isActive,
         createdAt: row.createdAt,
+        ownerId: row.ownerId,
       );
 }

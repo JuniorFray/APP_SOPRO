@@ -75,6 +75,15 @@ class AuthResult {
       AuthResult._(success: false, errorCode: errorCode);
 }
 
+// Perfil público mínimo de uma conta Sopro (tabela profiles), resolvido por
+// e-mail via RPC. Usado no convite de compartilhamento (Fase 3).
+class SoproProfile {
+  final String id;
+  final String email;
+  final String? name;
+  const SoproProfile({required this.id, required this.email, this.name});
+}
+
 class AuthService {
   AuthService._();
   static final AuthService instance = AuthService._();
@@ -131,12 +140,25 @@ class AuthService {
   // Cadastro email/senha. Se o Supabase exigir confirmação de e-mail, a resposta
   // vem SEM access_token → devolvemos needsEmailConfirm (usuário confirma e depois
   // faz login). Se confirmação estiver desligada, já vem a sessão e logamos direto.
-  Future<AuthResult> signUp(String email, String password) async {
+  Future<AuthResult> signUp(String email, String password,
+      {String? displayName, String? phone}) async {
     if (!isConfigured) return AuthResult.fail('unavailable');
     try {
+      // [displayName]/[phone] vão em 'data' → raw_user_meta_data no GoTrue; o
+      // trigger handle_new_user copia para profiles.name/phone (Fase 3).
+      final name = displayName?.trim();
+      final tel = phone?.trim();
+      final data = <String, dynamic>{
+        if (name != null && name.isNotEmpty) 'name': name,
+        if (tel != null && tel.isNotEmpty) 'phone': tel,
+      };
       final (status, json) = await _post(
         '/auth/v1/signup',
-        body: {'email': email, 'password': password},
+        body: {
+          'email': email,
+          'password': password,
+          if (data.isNotEmpty) 'data': data,
+        },
       );
       if (status >= 200 && status < 300) {
         final session = _sessionFromJson(json);
@@ -211,6 +233,46 @@ class AuthService {
       try {
         await _post('/auth/v1/logout', body: const {}, bearer: token);
       } catch (_) {/* revogação é best-effort */}
+    }
+  }
+
+  // Resolve um e-mail para uma conta EXISTENTE do Sopro via RPC
+  // resolve_user_by_email (security definer no Postgres). Retorna o perfil
+  // (id/email/name) ou null se não houver conta com esse e-mail. Só permitimos
+  // convidar quem já tem conta (decisão de produto da Fase 3).
+  Future<SoproProfile?> resolveUserByEmail(String email) async {
+    final trimmed = email.trim();
+    if (!isConfigured || _session == null || trimmed.isEmpty) return null;
+    final client = HttpClient()..connectionTimeout = _timeout;
+    try {
+      final req = await client
+          .postUrl(Uri.parse('$_base/rest/v1/rpc/resolve_user_by_email'))
+          .timeout(_timeout);
+      req.headers.set('apikey', _key);
+      req.headers
+          .set(HttpHeaders.authorizationHeader, 'Bearer ${_session!.accessToken}');
+      req.headers.contentType = ContentType.json;
+      req.add(utf8.encode(jsonEncode({'p_email': trimmed})));
+      final resp = await req.close().timeout(_timeout);
+      final text = await resp.transform(utf8.decoder).join();
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final decoded = jsonDecode(text);
+      // A função retorna table(...) → array. Vazio = e-mail sem conta.
+      if (decoded is List && decoded.isNotEmpty) {
+        final m = decoded.first as Map<String, dynamic>;
+        return SoproProfile(
+          id: m['id'] as String,
+          email: (m['email'] as String?) ?? trimmed,
+          name: m['name'] as String?,
+        );
+      }
+      return null;
+    } catch (e) {
+      Logger.debug('resolve_email_failed',
+          feature: 'auth', action: 'resolve', exception: e);
+      return null;
+    } finally {
+      client.close(force: true);
     }
   }
 

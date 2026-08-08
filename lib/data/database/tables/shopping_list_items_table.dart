@@ -24,6 +24,11 @@ class ShoppingListItems extends Table {
   DateTimeColumn get updatedAt => dateTime().nullable()();
   DateTimeColumn get deletedAt => dateTime().nullable()();
 
+  // Sync (Fase 3) — autor do item quando é cópia read-only de OUTRO usuário.
+  // null = eu criei. A lista é colaborativa (o PUSH sobe TODOS os itens); ownerId
+  // só é usado pra separar as MINHAS contribuições ao revogar um compartilhamento.
+  TextColumn get ownerId => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

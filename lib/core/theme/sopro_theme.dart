@@ -22,6 +22,13 @@ abstract final class SoproTheme {
 
       scaffoldBackgroundColor: AppColors.backgroundPrimary,
 
+      // Seleção/cursor em coral (accent), não no azul default do seed/Material.
+      textSelectionTheme: const TextSelectionThemeData(
+        cursorColor: AppColors.accent,
+        selectionColor: Color(0x33E03050),      // accent ~20%
+        selectionHandleColor: AppColors.accent,
+      ),
+
       // ── AppBar ────────────────────────────────────────────────────────────
       appBarTheme: AppBarTheme(
         backgroundColor: AppColors.backgroundSurface,
@@ -72,18 +79,20 @@ abstract final class SoproTheme {
       // ── Campos de texto ───────────────────────────────────────────────────
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: AppColors.backgroundInput,
+        // Fundo discreto (cor do card) + borda fina translúcida no repouso — sem
+        // o retângulo azul sólido. Foco troca a borda para coral (abaixo).
+        fillColor: AppColors.backgroundCard,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,
           vertical: 14,
         ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(AppRadius.input),
-          borderSide: BorderSide.none,
+          borderSide: const BorderSide(color: AppColors.borderHighlight, width: 1),
         ),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(AppRadius.input),
-          borderSide: BorderSide.none,
+          borderSide: const BorderSide(color: AppColors.borderHighlight, width: 1),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(AppRadius.input),

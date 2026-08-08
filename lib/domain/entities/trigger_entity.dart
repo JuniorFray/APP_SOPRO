@@ -19,6 +19,9 @@ class TriggerEntity {
   // Data de criação do registro
   final DateTime createdAt;
 
+  // Dono do gatilho quando é cópia read-only de outro usuário (Fase 3). null = meu.
+  final String? ownerId;
+
   const TriggerEntity({
     required this.id,
     required this.environmentId,
@@ -26,5 +29,10 @@ class TriggerEntity {
     required this.content,
     required this.isActive,
     required this.createdAt,
+    this.ownerId,
   });
+
+  // true = gatilho de outra pessoa (do dono, ou do convidado visto pelo dono) →
+  // exibido somente leitura na tela do ambiente.
+  bool get isReadOnly => ownerId != null;
 }

@@ -76,5 +76,6 @@ class EnvironmentRepository implements IEnvironmentRepository {
         createdAt: row.createdAt,
         isMarket: row.isMarket,
         pinImagePath: row.pinImagePath,
+        ownerId: row.ownerId,
       );
 }

@@ -15,6 +15,7 @@ import 'daos/scheduled_reminders_dao.dart';
 import 'daos/shopping_list_items_dao.dart';
 import 'daos/triggers_dao.dart';
 import 'daos/weather_cache_dao.dart';
+import 'daos/agenda_event_dao.dart';
 import 'tables/activity_log_table.dart';
 import 'tables/ble_encounters_table.dart';
 import 'tables/context_cards_table.dart';
@@ -25,6 +26,7 @@ import 'tables/shopping_list_items_table.dart';
 import 'tables/triggers_table.dart';
 import 'tables/weather_cache_table.dart';
 import 'tables/weather_forecast_cache_table.dart';
+import 'tables/agenda_event_table.dart';
 
 // Arquivo gerado automaticamente pelo build_runner — não editar manualmente.
 // Execute: dart run build_runner build --delete-conflicting-outputs
@@ -63,6 +65,9 @@ part 'sopro_database.g.dart';
 //        (environments, triggers, scheduledReminders, shoppingListItems)
 //   v17 (Sync 2.2): normaliza created_at/updated_at legados gravados em MS pelo
 //        Overlay antigo para SEGUNDOS (convenção Drift), por coluna e idempotente
+//   v18 (Agenda): nova tabela AgendaEventTable (eventos exclusivos Sopro)
+//   v19 (Fase 3): ownerId (nullable) em environments/triggers/shoppingListItems —
+//        marca cópias read-only de ambientes compartilhados por outro dono
 @DriftDatabase(
   tables: [
     Environments,
@@ -75,6 +80,7 @@ part 'sopro_database.g.dart';
     ActivityLogEntries,
     WeatherCacheEntries,
     WeatherForecastCache,
+    AgendaEventTable,
   ],
   daos: [
     EnvironmentsDao,
@@ -86,6 +92,7 @@ part 'sopro_database.g.dart';
     ScheduledRemindersDao,
     ActivityLogDao,
     WeatherCacheDao,
+    AgendaEventDao,
   ],
 )
 class SoproDatabase extends _$SoproDatabase {
@@ -95,7 +102,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 17;
+  int get schemaVersion => 19;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -210,6 +217,18 @@ class SoproDatabase extends _$SoproDatabase {
               await customStatement(
                   'UPDATE $t SET updated_at = updated_at / 1000 WHERE updated_at > 100000000000');
             }
+          }
+          if (from < 18) {
+            // v18 (Agenda): tabela de eventos exclusivos Sopro (IA, etc).
+            await m.createTable(agendaEventTable);
+          }
+          if (from < 19) {
+            // v19 (Fase 3): ownerId nas tabelas compartilháveis. Nullable — linhas
+            // existentes ficam null (= própria). Preenchido só no PULL, quando a
+            // linha vem de um ambiente compartilhado por OUTRO dono (cópia read-only).
+            await m.addColumn(environments, environments.ownerId);
+            await m.addColumn(triggers, triggers.ownerId);
+            await m.addColumn(shoppingListItems, shoppingListItems.ownerId);
           }
         },
       );

@@ -22,12 +22,16 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../data/database/sopro_database.dart';
 import '../auth/auth_service.dart';
+import '../geofence/native_geofence_service.dart';
 import '../logging/core/logger.dart';
-import 'package:drift/drift.dart' show Value;
+// Import completo do drift: além de Value, traz os operadores de Expression
+// (&, isNull, isNotNull) usados nas queries de reconciliação/detach da Fase 3.
+import 'package:drift/drift.dart';
 
 class SyncEngine {
   SyncEngine._();
@@ -45,6 +49,9 @@ class SyncEngine {
   StreamSubscription<AuthSession?>? _authSub;
   bool _running = false;
   DateTime? _lastRun;
+  // Usado na reconciliação de compartilhamento (Fase 3) para trocar o geofence de
+  // um ambiente compartilhado revogado pelo geofence do novo ambiente próprio.
+  final _geofence = NativeGeofenceService();
 
   // Inicializa uma vez (AppInitializer). Guarda o banco e, a cada login (sessão
   // passa a não-nula), reconcilia a conta (detecta troca → wipe + PULL). Idempotente.
@@ -136,20 +143,28 @@ class SyncEngine {
   // ── Tabelas (cada uma: PULL depois PUSH) ─────────────────────────────────────
 
   Future<void> _syncEnvironments(SoproDatabase db, AuthSession s) async {
-    await _pullEnvironments(db);
+    await _pullEnvironments(db, s);
     await _pushEnvironments(db, s);
   }
 
-  Future<void> _pullEnvironments(SoproDatabase db) async {
+  Future<void> _pullEnvironments(SoproDatabase db, AuthSession s) async {
     final dao = db.environmentsDao;
     final remote = await _get('environments');
     if (remote == null) return;
     final localById = {for (final r in await dao.allForSync()) r.id: r};
+    final remoteIds = <String>{};
     for (final m in remote) {
       final id = m['id'] as String;
+      remoteIds.add(id);
       final rUpd = _parseTs(m['updated_at']);
       final local = localById[id];
       if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
+        // ownerId: null se a linha é minha; user_id remoto quando é cópia de um
+        // ambiente compartilhado por OUTRO dono (read-only). Distingue o que o
+        // PUSH pode reenviar e o que a reconciliação pode descartar/detachar.
+        final remoteOwner = m['user_id'] as String?;
+        final ownerId =
+            (remoteOwner != null && remoteOwner != s.userId) ? remoteOwner : null;
         // SEM pinImagePath: foto é local-only (não migra) — upsert não a toca.
         await dao.applyRemote(EnvironmentsCompanion(
           id: Value(id),
@@ -161,14 +176,22 @@ class SyncEngine {
           createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
           updatedAt: Value(rUpd),
           deletedAt: Value(_parseTs(m['deleted_at'])),
+          ownerId: Value(ownerId),
         ));
       }
     }
+    // Reconciliação (Fase 3): cópia read-only (ownerId != null) que não veio mais
+    // no remoto = compartilhamento revogado/removido → vira ambiente próprio do
+    // convidado (decisão #2), sem apagar as contribuições dele.
+    await _reconcileSharedEnvironments(db, remoteIds);
   }
 
   Future<bool> _pushEnvironments(SoproDatabase db, AuthSession s) async {
     final dao = db.environmentsDao;
-    final rows = (await dao.allForSync()).where((r) => r.updatedAt != null);
+    // ownerId != null = cópia read-only do dono → o convidado nunca a reenvia
+    // (RLS do servidor rejeitaria o UPDATE do id alheio e quebraria o lote).
+    final rows = (await dao.allForSync())
+        .where((r) => r.updatedAt != null && r.ownerId == null);
     final payload = [
       for (final r in rows)
         {
@@ -189,20 +212,25 @@ class SyncEngine {
   }
 
   Future<void> _syncTriggers(SoproDatabase db, AuthSession s) async {
-    await _pullTriggers(db);
+    await _pullTriggers(db, s);
     await _pushTriggers(db, s);
   }
 
-  Future<void> _pullTriggers(SoproDatabase db) async {
+  Future<void> _pullTriggers(SoproDatabase db, AuthSession s) async {
     final dao = db.triggersDao;
     final remote = await _get('triggers');
     if (remote == null) return;
     final localById = {for (final r in await dao.allForSync()) r.id: r};
+    final remoteIds = <String>{};
     for (final m in remote) {
       final id = m['id'] as String;
+      remoteIds.add(id);
       final rUpd = _parseTs(m['updated_at']);
       final local = localById[id];
       if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
+        final remoteOwner = m['user_id'] as String?;
+        final ownerId =
+            (remoteOwner != null && remoteOwner != s.userId) ? remoteOwner : null;
         await dao.applyRemote(TriggersCompanion(
           id: Value(id),
           environmentId: Value(m['environment_id'] as String),
@@ -212,14 +240,20 @@ class SyncEngine {
           createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
           updatedAt: Value(rUpd),
           deletedAt: Value(_parseTs(m['deleted_at'])),
+          ownerId: Value(ownerId),
         ));
       }
     }
+    // Gatilho read-only do dono (ownerId != null) que sumiu do PULL = opção
+    // "compartilhar gatilhos" desligada ou share revogado → remove localmente.
+    await _reconcileSharedTriggers(db, remoteIds);
   }
 
   Future<bool> _pushTriggers(SoproDatabase db, AuthSession s) async {
     final dao = db.triggersDao;
-    final rows = (await dao.allForSync()).where((r) => r.updatedAt != null);
+    // Só os gatilhos próprios (ownerId null) sobem — nunca a cópia do dono.
+    final rows = (await dao.allForSync())
+        .where((r) => r.updatedAt != null && r.ownerId == null);
     final payload = [
       for (final r in rows)
         {
@@ -295,11 +329,11 @@ class SyncEngine {
   }
 
   Future<void> _syncShopping(SoproDatabase db, AuthSession s) async {
-    await _pullShopping(db);
+    await _pullShopping(db, s);
     await _pushShopping(db, s);
   }
 
-  Future<void> _pullShopping(SoproDatabase db) async {
+  Future<void> _pullShopping(SoproDatabase db, AuthSession s) async {
     final dao = db.shoppingListItemsDao;
     final remote = await _get('shopping_list_items');
     if (remote == null) return;
@@ -309,6 +343,10 @@ class SyncEngine {
       final rUpd = _parseTs(m['updated_at']);
       final local = localById[id];
       if (_remoteWins(rUpd, local?.updatedAt, isNew: local == null)) {
+        // ownerId marca o autor do item (usado só ao revogar, p/ separar os meus).
+        final remoteOwner = m['user_id'] as String?;
+        final ownerId =
+            (remoteOwner != null && remoteOwner != s.userId) ? remoteOwner : null;
         await dao.applyRemote(ShoppingListItemsCompanion(
           id: Value(id),
           environmentId: Value(m['environment_id'] as String),
@@ -317,11 +355,14 @@ class SyncEngine {
           createdAt: Value(_parseTs(m['created_at']) ?? DateTime.now()),
           updatedAt: Value(rUpd),
           deletedAt: Value(_parseTs(m['deleted_at'])),
+          ownerId: Value(ownerId),
         ));
       }
     }
   }
 
+  // Lista de compras é sempre colaborativa: sobe TODOS os itens (o trigger
+  // BEFORE UPDATE no servidor preserva a autoria). ownerId não filtra aqui.
   Future<bool> _pushShopping(SoproDatabase db, AuthSession s) async {
     final dao = db.shoppingListItemsDao;
     final rows = (await dao.allForSync()).where((r) => r.updatedAt != null);
@@ -350,6 +391,121 @@ class SyncEngine {
     if (remoteUpd == null) return false;
     if (localUpd == null) return true;
     return remoteUpd.isAfter(localUpd);
+  }
+
+  // ── Reconciliação de compartilhamento (Fase 3) ──────────────────────────────
+
+  // Ambientes que eram cópia read-only (ownerId != null) e sumiram do PULL têm o
+  // compartilhamento revogado/removido. Decisão #2: não apagar as contribuições do
+  // convidado — o ambiente vira uma cópia PRÓPRIA e independente dele.
+  Future<void> _reconcileSharedEnvironments(
+      SoproDatabase db, Set<String> remoteIds) async {
+    final locals = await db.environmentsDao.allForSync();
+    for (final e in locals) {
+      if (e.ownerId != null && e.deletedAt == null && !remoteIds.contains(e.id)) {
+        await _detachSharedEnvironment(db, e);
+      }
+    }
+  }
+
+  // Re-chaveia o ambiente compartilhado revogado para um id NOVO, próprio do
+  // convidado. Um id novo evita colisão de RLS no PUSH (o id antigo pertence ao
+  // dono no servidor). Migra as contribuições do convidado (gatilhos e itens que
+  // ELE criou, ownerId null) e descarta os artefatos read-only do dono. Troca o
+  // geofence registrado — o motor nativo dispara igual, pois lê qualquer ambiente
+  // local independentemente de dono.
+  Future<void> _detachSharedEnvironment(SoproDatabase db, Environment old) async {
+    const uuid = Uuid();
+    final newId = uuid.v4();
+    final now = DateTime.now();
+
+    // 1. Novo ambiente próprio (ownerId null → sobe no PUSH sob a conta do convidado).
+    await db.into(db.environments).insert(EnvironmentsCompanion.insert(
+          id: newId,
+          name: old.name,
+          latitude: old.latitude,
+          longitude: old.longitude,
+          radiusMeters: old.radiusMeters,
+          createdAt: old.createdAt,
+          isMarket: Value(old.isMarket),
+          updatedAt: Value(now),
+        ));
+
+    // 2a. Gatilhos PRÓPRIOS do convidado: re-parenta mantendo o mesmo id (o
+    //     convidado é dono da linha no servidor → RLS permite o UPDATE do env).
+    await (db.update(db.triggers)
+          ..where((t) =>
+              t.environmentId.equals(old.id) &
+              t.ownerId.isNull() &
+              t.deletedAt.isNull()))
+        .write(TriggersCompanion(
+            environmentId: Value(newId), updatedAt: Value(now)));
+
+    // 2b. Itens de compra PRÓPRIOS do convidado: re-cria com id NOVO. A RLS de
+    //     shopping valida por pertencer ao ambiente; como o ambiente antigo já foi
+    //     revogado, um UPDATE do id existente seria bloqueado — INSERT novo no
+    //     ambiente próprio passa. As linhas antigas são descartadas no passo 3.
+    final myItems = await (db.select(db.shoppingListItems)
+          ..where((i) =>
+              i.environmentId.equals(old.id) &
+              i.ownerId.isNull() &
+              i.deletedAt.isNull()))
+        .get();
+    for (final it in myItems) {
+      await db.into(db.shoppingListItems).insert(ShoppingListItemsCompanion.insert(
+            id: uuid.v4(),
+            environmentId: newId,
+            name: it.name,
+            isChecked: Value(it.isChecked),
+            createdAt: it.createdAt,
+            updatedAt: Value(now),
+          ));
+    }
+
+    // 3. Descarta os artefatos ligados ao ambiente compartilhado antigo: itens
+    //    (do dono + as cópias antigas dos meus, já recriadas) e gatilhos read-only
+    //    do dono; por fim o ambiente. Hard delete local — não vira tombstone nem
+    //    sobe no PUSH (não são do convidado).
+    await (db.delete(db.shoppingListItems)
+          ..where((i) => i.environmentId.equals(old.id)))
+        .go();
+    await (db.delete(db.triggers)
+          ..where((t) => t.environmentId.equals(old.id) & t.ownerId.isNotNull()))
+        .go();
+    await (db.delete(db.environments)..where((e) => e.id.equals(old.id))).go();
+
+    // 4. Geofence: remove o id antigo e registra o novo.
+    try {
+      await _geofence.removeGeofence(old.id);
+      await _geofence.addGeofence(
+        id: newId,
+        lat: old.latitude,
+        lng: old.longitude,
+        radiusMeters: old.radiusMeters,
+        name: old.name,
+      );
+    } catch (_) {
+      // MethodChannel indisponível (ex.: sync sem engine de UI) — ignora; o
+      // BootReceiver/registro do Home re-registra o geofence do novo id depois.
+    }
+
+    Logger.info('share_revoked_detached',
+        feature: 'sync',
+        action: 'detach',
+        payload: {'old_env': old.id, 'new_env': newId});
+  }
+
+  // Gatilhos read-only do dono (ownerId != null) que sumiram do PULL → remoção
+  // local (hard delete). Cobre "compartilhar gatilhos" desligado num ambiente que
+  // continua compartilhado. Nunca toca os gatilhos próprios do convidado (ownerId null).
+  Future<void> _reconcileSharedTriggers(
+      SoproDatabase db, Set<String> remoteIds) async {
+    final locals = await db.triggersDao.allForSync();
+    for (final t in locals) {
+      if (t.ownerId != null && !remoteIds.contains(t.id)) {
+        await (db.delete(db.triggers)..where((x) => x.id.equals(t.id))).go();
+      }
+    }
   }
 
   // ── HTTP (PostgREST) ───────────────────────────────────────────────────────

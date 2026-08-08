@@ -32,16 +32,24 @@ import '../../providers/ble_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/settings_providers.dart';
 import '../../widgets/sopro_primary_button.dart';
+import '../../widgets/sopro_text_field.dart';
 import '../../../infrastructure/overlay/floating_voice_service_manager.dart';
+import '../../../infrastructure/personalization/user_name_store.dart';
+
+// Tipo de cada passo — usado no lugar de índices crus para as ações do rodapé,
+// assim inserir/remover um passo não quebra os switches (robusto a mudanças).
+enum _StepKind { welcome, name, location, notif, ble, overlay }
 
 // Dados imutáveis de cada passo do onboarding
 class _Step {
+  final _StepKind kind;
   final IconData icon;
   final Color iconColor;
   final String title;
   final String body;
 
   const _Step({
+    required this.kind,
     required this.icon,
     required this.iconColor,
     required this.title,
@@ -53,30 +61,43 @@ class _Step {
 // Passo 4 é opcional/informativo (sem permissão obrigatória), antecipa V3.
 const _steps = [
   _Step(
+    kind: _StepKind.welcome,
     icon: Icons.air,
     iconColor: AppTheme.accent,
     title: AppStrings.obWelcomeTitle,
     body: AppStrings.obWelcomeBody,
   ),
+  // Passo acolhedor (tom diferente dos de permissão): pede o nome, sempre opcional.
   _Step(
+    kind: _StepKind.name,
+    icon: Icons.waving_hand_outlined,
+    iconColor: AppTheme.accent,
+    title: AppStrings.nameStepTitle,
+    body: AppStrings.nameStepBody,
+  ),
+  _Step(
+    kind: _StepKind.location,
     icon: Icons.location_on_outlined,
     iconColor: AppColors.onboardingLocation, // verde — segurança de localização
     title: AppStrings.obLocationTitle,
     body: AppStrings.obLocationBody,
   ),
   _Step(
+    kind: _StepKind.notif,
     icon: Icons.notifications_none_outlined,
     iconColor: AppColors.onboardingNotification, // laranja — notificações discretas
     title: AppStrings.obNotifTitle,
     body: AppStrings.obNotifBody,
   ),
   _Step(
+    kind: _StepKind.ble,
     icon: Icons.bluetooth_outlined,
     iconColor: AppColors.onboardingBle, // azul — Bluetooth
     title: AppStrings.obBleTitle,
     body: AppStrings.obBleBody,
   ),
   _Step(
+    kind: _StepKind.overlay,
     icon: Icons.mic_external_on_outlined,
     iconColor: AppTheme.accent, // accent — botão de voz
     title: AppStrings.obOverlayTitle,
@@ -97,6 +118,8 @@ const _overlayChannel = MethodChannel('com.sopro.sopro/overlay');
 class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
     with WidgetsBindingObserver {
   final _pageController = PageController();
+  // Controller do campo de nome (passo acolhedor). Opcional — pode ficar vazio.
+  final _nameCtrl = TextEditingController();
   int _currentStep = 0;
   bool _actionInProgress = false; // true enquanto aguarda resposta do SO de permissão
   bool _finishing = false;        // true enquanto salva SharedPreferences antes de navegar
@@ -119,6 +142,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _pageController.dispose();
+    _nameCtrl.dispose();
     super.dispose();
   }
 
@@ -151,6 +175,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
   Future<void> _goHome() async {
     if (_finishing) return; // evita chamadas duplicadas (double-tap)
     setState(() => _finishing = true);
+
+    // Não descarta o nome digitado ao "Pular tudo" — pular dispensa a
+    // obrigatoriedade, não o que o usuário já escreveu.
+    await _saveNameIfPresent();
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -221,6 +249,30 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
     _goHome();
   }
 
+  // Passo de nome: salva o nome (se informado) e avança. Nunca bloqueia — nome
+  // vazio segue igual a pular. Persistência local, independente de conta.
+  Future<void> _saveNameAndNext() async {
+    await UserNameStore.save(_nameCtrl.text);
+    if (mounted) _nextPage();
+  }
+
+  // Persiste o nome só se houver texto — usado nos caminhos de "Pular", para não
+  // perder o que o usuário digitou. Vazio = não mexe (pular limpo).
+  Future<void> _saveNameIfPresent() async {
+    if (_nameCtrl.text.trim().isNotEmpty) {
+      await UserNameStore.save(_nameCtrl.text);
+    }
+  }
+
+  // Ação do botão secundário ("Pular"): no passo do nome, salva o texto digitado
+  // antes de avançar; nos demais passos apenas avança.
+  Future<void> _skipStep() async {
+    if (_steps[_currentStep].kind == _StepKind.name) {
+      await _saveNameIfPresent();
+    }
+    if (mounted) _nextPage();
+  }
+
   // Solicita permissão de localização → avança independentemente do resultado
   Future<void> _requestLocation() async {
     setState(() => _actionInProgress = true);
@@ -282,13 +334,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
   // Quando uma permissão foi negada, muda para "Continuar assim mesmo".
   String get _primaryLabel {
     if (_denialMessage != null) return AppStrings.obContinueAnyway;
-    switch (_currentStep) {
-      case 1:  return AppStrings.obLocationBtn;
-      case 2:  return AppStrings.obNotifBtn;
-      case 3:  return AppStrings.obBleBtn;
-      // Passo 4: solicita permissão de overlay para ativar o botão flutuante
-      case 4:  return AppStrings.obOverlayBtn;
-      default: return AppStrings.obNext;
+    switch (_steps[_currentStep].kind) {
+      case _StepKind.name:     return AppStrings.nameStepContinue;
+      case _StepKind.location: return AppStrings.obLocationBtn;
+      case _StepKind.notif:    return AppStrings.obNotifBtn;
+      case _StepKind.ble:      return AppStrings.obBleBtn;
+      case _StepKind.overlay:  return AppStrings.obOverlayBtn;
+      case _StepKind.welcome:  return AppStrings.obNext;
     }
   }
 
@@ -300,21 +352,27 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
       // Avança após o usuário reconhecer o impacto da permissão negada
       return _currentStep == _steps.length - 1 ? _goHome : _nextPage;
     }
-    switch (_currentStep) {
-      case 0:  return _nextPage;
-      case 1:  return _requestLocation;
-      case 2:  return _requestNotifications;
-      case 3:  return _requestBle;
-      // Passo 4: solicita permissão SYSTEM_ALERT_WINDOW e ativa o botão flutuante
-      case 4:  return _requestOverlayPermission;
-      default: return _nextPage;
+    switch (_steps[_currentStep].kind) {
+      case _StepKind.welcome:  return _nextPage;
+      case _StepKind.name:     return _saveNameAndNext;
+      case _StepKind.location: return _requestLocation;
+      case _StepKind.notif:    return _requestNotifications;
+      case _StepKind.ble:      return _requestBle;
+      case _StepKind.overlay:  return _requestOverlayPermission;
     }
   }
 
   // Botão secundário: "Pular" nos passos 1-3; "Agora não" no passo 4 (overlay).
   // Oculto quando há mensagem de negação ativa (o primário já oferece avanço).
-  String get _secondaryLabel =>
-      _currentStep == _steps.length - 1 ? AppStrings.obOverlaySkip : AppStrings.obSkip;
+  String get _secondaryLabel {
+    // Passo de nome: rótulo acolhedor de pular. Demais: "Pular" (ou overlay skip).
+    if (_steps[_currentStep].kind == _StepKind.name) {
+      return AppStrings.nameStepSkip;
+    }
+    return _currentStep == _steps.length - 1
+        ? AppStrings.obOverlaySkip
+        : AppStrings.obSkip;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -351,7 +409,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
                   _denialMessage = null; // limpa aviso ao mudar de passo
                 }),
                 itemCount: _steps.length,
-                itemBuilder: (_, i) => _StepPage(step: _steps[i]),
+                itemBuilder: (_, i) {
+                  final step = _steps[i];
+                  // Passo de nome tem campo de texto; demais são só ícone+texto.
+                  return step.kind == _StepKind.name
+                      ? _NameStepPage(step: step, controller: _nameCtrl)
+                      : _StepPage(step: step);
+                },
               ),
             ),
 
@@ -441,7 +505,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
                     TextButton(
                       // Nos passos 1-2: avança sem pedir permissão
                       // No passo 3: conclui o onboarding e vai para /home
-                      onPressed: (_actionInProgress || _finishing) ? null : _nextPage,
+                      // No passo do nome: salva o texto digitado antes de pular.
+                      onPressed: (_actionInProgress || _finishing) ? null : _skipStep,
                       child: Text(
                         _secondaryLabel,
                         style: const TextStyle(color: AppTheme.textSecondary),
@@ -453,6 +518,63 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// Passo acolhedor de personalização: ícone + título + descrição + campo de nome.
+// Scrollável para não estourar quando o teclado sobe. Nunca obrigatório.
+class _NameStepPage extends StatelessWidget {
+  final _Step step;
+  final TextEditingController controller;
+  const _NameStepPage({required this.step, required this.controller});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xxl),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(height: AppSpacing.xl),
+          Container(
+            width: 88,
+            height: 88,
+            decoration: BoxDecoration(
+              // ignore: deprecated_member_use
+              color: step.iconColor.withOpacity(0.12),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(step.icon, size: 44, color: step.iconColor),
+          ),
+          const SizedBox(height: AppSpacing.gap36),
+          Text(
+            step.title,
+            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  color: AppTheme.textPrimary,
+                  fontWeight: FontWeight.bold,
+                  height: 1.2,
+                ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            step.body,
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: AppTheme.textSecondary,
+                  height: 1.6,
+                ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          SoproTextField(
+            controller: controller,
+            label: AppStrings.nameStepFieldLabel,
+            hint: AppStrings.nameStepFieldHint,
+            textCapitalization: TextCapitalization.words,
+            textInputAction: TextInputAction.done,
+          ),
+        ],
       ),
     );
   }

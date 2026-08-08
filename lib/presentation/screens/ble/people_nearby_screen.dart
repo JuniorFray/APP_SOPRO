@@ -14,6 +14,7 @@ import '../../../infrastructure/ble/discovered_sopro_user.dart';
 import '../../providers/ble_providers.dart';
 import '../../providers/database_provider.dart';
 import '../../providers/settings_providers.dart';
+import '../../widgets/device_requirements_guard.dart';
 import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_card.dart';
 import '../encounters/encounters_screen.dart';
@@ -76,6 +77,11 @@ class _PeopleNearbyScreenState extends ConsumerState<PeopleNearbyScreen> {
     // 2. Verifica se o Bluetooth está ligado via MethodChannel nativo
     final isBtOn = await service.isBluetoothOn();
     if (!isBtOn) {
+      // Momento de uso real: dispara o mesmo diálogo "Ative o Bluetooth" que
+      // antes rodava proativo no app_open (guard). Mantém a flag "avisar 1x".
+      if (mounted) {
+        await DeviceRequirementsGuard.promptBluetoothDisabled(context, service);
+      }
       if (mounted) {
         setState(() {
           _isStarting = false;

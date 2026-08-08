@@ -37,6 +37,7 @@ import '../../../domain/entities/scheduled_reminder_entity.dart';
 import '../../../domain/entities/trigger_entity.dart';
 import '../../../infrastructure/location/location_guard.dart';
 import '../../../infrastructure/logging/app_logger.dart';
+import '../../../infrastructure/personalization/user_name_store.dart';
 import '../../../infrastructure/weather/weather_service.dart';
 import '../../../infrastructure/voice/voice_service.dart';
 import '../../../infrastructure/voice/groq_stt_service.dart'; // GroqUnavailableException (aviso reativo sem internet)
@@ -173,7 +174,10 @@ class _HomeDashboard extends ConsumerWidget {
         ref.watch(environmentsProvider).valueOrNull ?? const [];
     final activity = ref.watch(recentActivityProvider).valueOrNull ?? const [];
 
-    final name = card?.displayName.trim() ?? '';
+    // Nome da saudação: prioriza o do Perfil (ContextCard); se ainda não há,
+    // cai no nome do onboarding (UserNameStore) — aparece na Home sem editar Perfil.
+    final cardName = card?.displayName.trim() ?? '';
+    final name = cardName.isNotEmpty ? cardName : (UserNameStore.current ?? '');
     final todayCount = reminders.where((r) => _isToday(r.scheduledAt)).length;
 
     // Ritmo fixo: 32px entre seções (AppSpacing.section), 12px entre título de

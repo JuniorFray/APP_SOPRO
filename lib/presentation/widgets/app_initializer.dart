@@ -13,7 +13,9 @@ import '../../infrastructure/overlay/floating_voice_service_manager.dart';
 import '../../infrastructure/logging/app_logger.dart';
 import '../../infrastructure/logging/core/logger.dart';
 import '../../infrastructure/notifications/notification_service.dart';
+import '../../infrastructure/personalization/user_name_store.dart';
 import '../../infrastructure/sync/sync_engine.dart';
+import '../providers/ble_providers.dart';
 import '../providers/database_provider.dart';
 import '../providers/location_providers.dart';
 import '../providers/settings_providers.dart';
@@ -184,6 +186,10 @@ class _AppInitializerState extends ConsumerState<AppInitializer>
     final groqKey = AppConstants.groqApiKey;
     if (groqKey.isNotEmpty) await prefs.setString('groq_api_key', groqKey);
 
+    // Nome de exibição (personalização — Fase 3): hidrata o cache em RAM que a
+    // persona lê de forma síncrona. Sem nome definido → fica null (persona neutra).
+    UserNameStore.hydrate(prefs);
+
     // Restaura a sessão de conta (Fase 1 — Supabase Auth) e faz refresh se o
     // token estiver vencido. Mantém o usuário logado entre aberturas e reescreve
     // os tokens frescos em SharedPreferences para o Overlay nativo consumir.
@@ -224,6 +230,13 @@ class _AppInitializerState extends ConsumerState<AppInitializer>
     final shareWhatsApp = prefs.getBool('share_whatsapp') ?? true;
     if (!shareWhatsApp) {
       ref.read(shareWhatsAppProvider.notifier).state = false;
+    }
+
+    // Restaura a visibilidade BLE (default true). Sem esta restauração o
+    // StateProvider volta a true a cada boot, ignorando o toggle desativado.
+    final bleVisible = prefs.getBool('ble_visible') ?? true;
+    if (!bleVisible) {
+      ref.read(bleVisibleProvider.notifier).state = false;
     }
 
     // Restaura preferências de voz (Sprint V2-Voz)

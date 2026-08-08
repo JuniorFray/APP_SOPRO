@@ -32,6 +32,11 @@ class Triggers extends Table {
   DateTimeColumn get updatedAt => dateTime().nullable()();
   DateTimeColumn get deletedAt => dateTime().nullable()();
 
+  // Sync (Fase 3) — dono do gatilho quando é cópia read-only de OUTRO usuário
+  // (gatilho do dono visível ao convidado, ou gatilho do convidado visível ao dono).
+  // null = meu. Nunca sobe no PUSH quando != null.
+  TextColumn get ownerId => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

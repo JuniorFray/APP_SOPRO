@@ -226,6 +226,7 @@ class AppStrings {
   static const profileVisibleDesc    =
       'Outros usuários Sopro próximos poderão ver seu cartão.';
   static const profileSave           = 'Salvar perfil';
+  static const profileEdit           = 'Editar perfil';
   static const profileSaved          = 'Perfil salvo com sucesso!';
   static const profileNameRequired   = 'Informe pelo menos um nome';
   static const profileSectionIdentity   = 'Identidade';
@@ -641,4 +642,87 @@ class AppStrings {
   static const authRecoverCta       = 'Enviar link';
   static const authRecoverSent      =
       'Se existir uma conta com esse e-mail, o link de recuperação foi enviado.';
+
+  // ── Compartilhamento (Fase 3) ────────────────────────────────────────────
+  // Entrada na tela de detalhe do ambiente.
+  static const sharingShareTooltip   = 'Compartilhar ambiente';
+  static const sharingReadOnly        = 'Somente leitura';
+
+  // Bottom-sheet de compartilhar.
+  static const sharingSheetTitle      = 'Compartilhar ambiente';
+  static const sharingEmailLabel      = 'E-mail de quem vai receber';
+  static const sharingEmailHint       = 'conta@exemplo.com';
+  static const sharingIncludeTriggers = 'Compartilhar gatilhos também';
+  static const sharingIncludeTriggersDesc =
+      'A pessoa vê seus gatilhos deste ambiente e é lembrada quando chega aqui';
+  static const sharingInviteCta       = 'Convidar';
+  static const sharingWhoHasAccess    = 'Quem tem acesso';
+  static const sharingNoOneYet        = 'Ninguém ainda';
+  static const sharingRevoke          = 'Revogar';
+  static const sharingInviteSentSnack = 'Convite enviado';
+  static const sharingInviteFailed    = 'Não foi possível convidar agora.';
+  static const sharingNoAccountForEmail =
+      'Esse e-mail ainda não tem conta no Sopro.';
+  static const sharingSelfInvite      = 'Você não pode compartilhar com você mesmo.';
+
+  // Aviso de transparência ANTES de confirmar o convite.
+  static const sharingConfirmTitle    = 'Confirmar compartilhamento';
+  static String sharingTransparencyBody(String email) =>
+      'Ao compartilhar, $email poderá ver a localização deste ambiente e receber '
+      'notificações quando entrar nele. Você pode revogar o acesso quando quiser.';
+  static const sharingConfirmCta      = 'Compartilhar';
+
+  // Aviso ao revogar.
+  static const sharingRevokeTitle     = 'Revogar acesso';
+  static String sharingRevokeBody(String who) =>
+      'Os gatilhos e itens que $who criou nesse ambiente continuam com ela, '
+      'agora como um ambiente próprio e independente.';
+
+  // CTA quando quem não tem conta tenta compartilhar.
+  static const sharingNeedsAccountTitle =
+      'Compartilhar exige uma conta gratuita';
+  static const sharingNeedsAccountBody =
+      'Crie uma conta grátis para compartilhar seus ambientes com quem você cuida.';
+  static const sharingCreateAccountCta = 'Criar agora';
+
+  // Tela "Compartilhamentos" (Configurações).
+  static const sharesListTitle        = 'Compartilhamentos';
+  static const sharesSectionMine      = 'Compartilhei';
+  static const sharesSectionIncoming  = 'Compartilharam comigo';
+  static const sharesEmptyMine        = 'Você ainda não compartilhou nenhum ambiente.';
+  static const sharesEmptyIncoming    =
+      'Ninguém compartilhou um ambiente com você ainda.';
+  static const sharesSharedFallback   = '(ambiente)';
+  static const sharesSharedWithYou    = 'Compartilhado com você';
+  static const sharesLeave            = 'Sair';
+  static const sharesLeaveTitle       = 'Sair do compartilhamento';
+  static const sharesLeaveBody =
+      'Você deixa de ver este ambiente compartilhado. O que você criou aqui '
+      'continua com você, como um ambiente próprio.';
+
+  // Entrada + card em Configurações.
+  static const settingsSharingSection   = 'Compartilhamento';
+  static const settingsSharingEntry      = 'Meus compartilhamentos';
+  static const settingsSharingEntryDesc  = 'Ver e gerenciar acesso compartilhado';
+  static const sharingPromoCard =
+      '🔗 Compartilhe o Sopro com quem você cuida — crie uma conta grátis e '
+      'sincronize seus ambientes, lembretes e listas entre aparelhos.';
+
+  // ── Personalização (passo de nome no onboarding — Fase 3) ─────────────────
+  static const nameStepTitle      = 'Como posso te chamar?';
+  static const nameStepBody =
+      'Assim posso deixar tudo mais com a sua cara. Se preferir, pode pular — '
+      'dá pra definir depois.';
+  static const nameStepFieldLabel = 'Seu nome';
+  static const nameStepFieldHint  = 'Como prefere ser chamado';
+  static const nameStepContinue   = 'Continuar';
+  static const nameStepSkip       = 'Pular por agora';
+  // Rótulo do campo nome na tela de conta (cadastro). Obrigatório no cadastro.
+  static const authNameLabel      = 'Seu nome';
+  static const authNameHint       = 'Como prefere ser chamado';
+  static const authNameRequired   = 'Informe seu nome';
+  // Telefone no cadastro (obrigatório, só dígitos → profiles.phone via trigger).
+  static const authPhoneLabel     = 'Telefone';
+  static const authPhoneHint      = 'DDD + número';
+  static const authPhoneRequired  = 'Informe um telefone válido';
 }

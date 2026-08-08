@@ -27,7 +27,9 @@ import '../../providers/voice_providers.dart';
 import '../../widgets/glass_surface.dart';
 import '../../widgets/sopro_card.dart';
 import '../../widgets/sopro_primary_button.dart';
+import '../../widgets/sopro_switch.dart';
 import '../../widgets/sopro_text_field.dart';
+import '../sharing/share_environment_sheet.dart';
 import 'add_environment_screen.dart';
 
 // Tela de detalhe de um Environment.
@@ -70,16 +72,26 @@ class EnvironmentDetailScreen extends ConsumerWidget {
           child: SizedBox.expand(),
         ),
         actions: [
-          // Botão para editar o ambiente (nome, raio, localização)
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            tooltip: AppStrings.editTooltip,
-            onPressed: () => pushScreen(
-              context,
-              AddEnvironmentScreen(environment: currentEnv),
+          // Compartilhar: só no ambiente PRÓPRIO (o convidado não re-compartilha).
+          if (!currentEnv.isShared)
+            IconButton(
+              icon: const Icon(LucideIcons.share2),
+              tooltip: AppStrings.sharingShareTooltip,
+              onPressed: () => showShareEnvironmentSheet(context, currentEnv),
             ),
-          ),
-          // Adicionar trigger só faz sentido em ambiente comum (não-mercado).
+          // Editar geometria (nome, raio, localização): só o dono. Ambiente
+          // compartilhado é read-only pro convidado.
+          if (!currentEnv.isShared)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: AppStrings.editTooltip,
+              onPressed: () => pushScreen(
+                context,
+                AddEnvironmentScreen(environment: currentEnv),
+              ),
+            ),
+          // Adicionar trigger — permitido também no ambiente compartilhado (o
+          // convidado cria os PRÓPRIOS gatilhos), só não em mercado.
           if (!currentEnv.isMarket)
             IconButton(
               icon: const Icon(Icons.add),
@@ -94,9 +106,9 @@ class EnvironmentDetailScreen extends ConsumerWidget {
           // Card com informações geográficas do ambiente
           _EnvironmentInfoCard(environment: currentEnv),
 
-          // Toggle discreto: corrige o tipo (mercado ↔ comum) a qualquer momento.
-          // Cobre falso positivo E falso negativo da classificação automática.
-          _MarketToggle(environment: currentEnv),
+          // Toggle discreto: corrige o tipo (mercado ↔ comum). Só no ambiente
+          // próprio — no compartilhado a classificação é do dono (read-only).
+          if (!currentEnv.isShared) _MarketToggle(environment: currentEnv),
 
           // Foto do pin deste ambiente (usada na plaquinha 3D no mapa).
           _PinImageTile(environment: currentEnv),
@@ -406,6 +418,9 @@ class _TriggerTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Gatilho de outra pessoa (do dono, ou do convidado visto pelo dono) →
+    // somente leitura: sem swipe-excluir, sem editar, sem alternar ativo.
+    if (trigger.isReadOnly) return _readOnlyCard();
     return Dismissible(
       key: ValueKey(trigger.id),
       direction: DismissDirection.endToStart,
@@ -461,8 +476,9 @@ class _TriggerTile extends ConsumerWidget {
                 onPressed: () => _showEditSheet(context),
               ),
 
-              // Switch de ativo/inativo com feedback háptico
-              Switch(
+              // Switch de ativo/inativo com feedback háptico (SoproSwitch: estilo
+              // e tamanho padronizados do app)
+              SoproSwitch(
                 value: trigger.isActive,
                 onChanged: (active) {
                   // Vibração sutil ao resolver ou suspender um trigger
@@ -471,11 +487,63 @@ class _TriggerTile extends ConsumerWidget {
                       .read(triggerRepositoryProvider)
                       .setActive(trigger.id, active: active);
                 },
-                activeColor: AppTheme.accent,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  // Card estático de um gatilho de outra pessoa (somente leitura). Mesmo visual,
+  // mas sem swipe/editar/switch — só um cadeado sinalizando que não é editável.
+  Widget _readOnlyCard() {
+    return Card(
+      color: AppTheme.backgroundSurface,
+      elevation: 0,
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppTheme.radiusIcon),
+        side: const BorderSide(color: AppTheme.borderColor, width: 0.5),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md, AppSpacing.gap10, AppSpacing.md, AppSpacing.gap10),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    trigger.title,
+                    style: AppTypography.titleSmall.copyWith(
+                      color: trigger.isActive
+                          ? AppTheme.textPrimary
+                          : AppTheme.textDisabled,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    trigger.content,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.bodySmall.copyWith(
+                      color: trigger.isActive
+                          ? AppTheme.textSecondary
+                          : AppTheme.textDisabled,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: AppSpacing.sm),
+            const Tooltip(
+              message: AppStrings.sharingReadOnly,
+              child: Icon(LucideIcons.lock,
+                  size: 16, color: AppTheme.textDisabled),
+            ),
+          ],
         ),
       ),
     );

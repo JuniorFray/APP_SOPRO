@@ -5,9 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/constants/strings.dart';
+import '../../infrastructure/ble/ble_service.dart';
 import '../../infrastructure/logging/core/logger.dart';
 import '../../infrastructure/reminders/reminder_scheduler.dart';
-import '../providers/ble_providers.dart';
 import '../providers/database_provider.dart';
 import '../providers/location_providers.dart';
 
@@ -19,12 +19,20 @@ import '../providers/location_providers.dart';
 // Sequência obrigatória — um requisito por vez, nunca em paralelo:
 //   1. Permissão ACCESS_FINE_LOCATION
 //   2. GPS habilitado (isLocationEnabled)
-//   3. Permissões Bluetooth (BLE_SCAN, BLE_CONNECT, BLE_ADVERTISE)
-//   4. Bluetooth habilitado (isBluetoothEnabled)
-//   5. Overlay (somente se floating_voice_enabled == true)
+//   3. Overlay (somente se floating_voice_enabled == true)
+//   4. Alarme exato (somente se houver lembrete ativo)
+//   5. Autostart/bateria do fabricante (heurístico, avisa 1x)
 //
 // Cada falha exibe AlertDialog com Cancelar / Abrir Configurações.
 // O usuário pode cancelar — o guard não é bloqueante.
+//
+// Bluetooth e tela cheia NÃO rodam mais aqui (eram proativos a cada app_open,
+// incomodando quem não usava a feature). Migraram para o momento de uso real,
+// reaproveitando os mesmos diálogos/flags via helpers estáticos deste guard:
+//   - Bluetooth ligado: promptBluetoothDisabled(), disparado por
+//     PeopleNearbyScreen ao abrir a busca de pessoas próximas.
+//   - Tela cheia + alarme exato: promptAlarmPermissions(), disparado por
+//     ScheduledReminderRepository.upsert() ao salvar lembrete em modo alarme.
 class DeviceRequirementsGuard {
   DeviceRequirementsGuard._();
 
@@ -35,7 +43,6 @@ class DeviceRequirementsGuard {
         feature: 'device_guard', action: 'check');
 
     final locService = ref.read(nativeLocationServiceProvider);
-    final bleService = ref.read(bleServiceProvider);
 
     // ── 1. Permissão de localização ────────────────────────────────────────
     bool hasLocation = await locService.checkPermission();
@@ -66,52 +73,7 @@ class DeviceRequirementsGuard {
       }
     }
 
-    // ── 3. Permissões Bluetooth ────────────────────────────────────────────
-    bool hasBle = false;
-    if (context.mounted) {
-      hasBle = await bleService.checkPermissions();
-      if (!hasBle) hasBle = await bleService.requestPermissions();
-      if (!hasBle && context.mounted) {
-        await _showDialog(
-          context,
-          title: AppStrings.reqPermBleTitle,
-          body: AppStrings.reqPermBleBody,
-          onOpenSettings: locService.openAppSettings,
-        );
-      }
-    }
-
-    // ── 4. Bluetooth habilitado ────────────────────────────────────────────
-    // Mesmo padrão do autostart: só avisa se desligado E ainda não avisamos
-    // antes. Concedido = resolvido (o check de estado já barra o diálogo).
-    // Se cancelar o diálogo, marca a flag e não repete a cada cold start.
-    bool btOk = false;
-    if (context.mounted) {
-      btOk = await bleService.isBluetoothEnabled();
-      final prefs = await SharedPreferences.getInstance();
-      var btWarned = prefs.getBool('bluetooth_warning_shown') ?? false;
-      // Desligado agora mas já avisado antes: no caminho ficou concedido e
-      // voltou a desligar. Reseta a flag para o aviso reaparecer.
-      if (!btOk && btWarned) {
-        await prefs.setBool('bluetooth_warning_shown', false);
-        btWarned = false;
-      }
-      if (!btOk && !btWarned && context.mounted) {
-        Logger.debug('bluetooth_disabled', feature: 'device_guard', action: 'check');
-        final opened = await _showDialog(
-          context,
-          title: AppStrings.btDisabledTitle,
-          body: AppStrings.btDisabledBody,
-          onOpenSettings: bleService.openBluetoothSettings,
-        );
-        // Cancelou (não foi às configurações): não incomodar de novo.
-        if (!opened) await prefs.setBool('bluetooth_warning_shown', true);
-      } else if (btOk) {
-        Logger.debug('bluetooth_enabled', feature: 'device_guard', action: 'check');
-      }
-    }
-
-    // ── 5. Overlay (somente se botão flutuante habilitado) ─────────────────
+    // ── 3. Overlay (somente se botão flutuante habilitado) ─────────────────
     bool overlayOk = true;
     if (context.mounted) {
       final prefs = await SharedPreferences.getInstance();
@@ -136,7 +98,7 @@ class DeviceRequirementsGuard {
       }
     }
 
-    // ── 6. Alarme exato (Android 12+) — só se houver lembrete ativo ─────────
+    // ── 4. Alarme exato (Android 12+) — só se houver lembrete ativo ─────────
     // Não incomoda quem não usa a feature: só verifica se existe ≥1 lembrete
     // ativo no banco.
     bool exactAlarmOk = true;
@@ -164,45 +126,7 @@ class DeviceRequirementsGuard {
       }
     }
 
-    // ── 7. Tela cheia (Android 14+) — sempre ───────────────────────────────
-    // A permissão USE_FULL_SCREEN_INTENT precisa ser concedida em runtime no
-    // Android 14+; sem ela o alarme não abre sozinho sobre a tela bloqueada.
-    // Roda no fluxo padrão como os demais itens (não depende de já existir
-    // lembrete configurado). No-op (sempre concedida) em Android < 14.
-    bool fsIntentOk = true;
-    if (context.mounted) {
-      final scheduler = ReminderScheduler();
-      fsIntentOk = await scheduler.hasFullScreenIntentPermission();
-      final prefs = await SharedPreferences.getInstance();
-      var fsWarned = prefs.getBool('fullscreen_warning_shown') ?? false;
-      // Desligado agora mas já avisado antes: ficou concedido e voltou a
-      // desligar. Reseta a flag para o aviso reaparecer.
-      if (!fsIntentOk && fsWarned) {
-        await prefs.setBool('fullscreen_warning_shown', false);
-        fsWarned = false;
-      }
-      // Exceção ao "avisar só uma vez": o botão flutuante depende da tela-cheia
-      // para o alarme abrir sobre a tela bloqueada. Se ele está ligado, reavisa
-      // sempre que faltar a permissão — é o recurso que precisa dela agora.
-      final floatingEnabled = prefs.getBool('floating_voice_enabled') ?? false;
-      if (!fsIntentOk && (!fsWarned || floatingEnabled) && context.mounted) {
-        Logger.debug('fullscreen_intent_disabled',
-            feature: 'device_guard', action: 'check');
-        final opened = await _showDialog(
-          context,
-          title: AppStrings.reqFullScreenIntentTitle,
-          body: AppStrings.reqFullScreenIntentBody,
-          onOpenSettings: scheduler.openFullScreenIntentSettings,
-        );
-        // Cancelou sem o botão flutuante ligado: não repetir no app_start geral.
-        if (!opened) await prefs.setBool('fullscreen_warning_shown', true);
-      } else if (fsIntentOk) {
-        Logger.debug('fullscreen_intent_enabled',
-            feature: 'device_guard', action: 'check');
-      }
-    }
-
-    // ── 8. Autostart / bateria do fabricante — HEURÍSTICO (melhor esforço) ──
+    // ── 5. Autostart / bateria do fabricante — HEURÍSTICO (melhor esforço) ──
     // Xiaomi "Autostart", Samsung "Apps em hibernação", etc. NÃO têm API
     // oficial: não dá pra checar se está concedido, só abrir a tela e pedir
     // pro usuário verificar manualmente. Por isso este passo:
@@ -252,7 +176,9 @@ class DeviceRequirementsGuard {
     }
 
     // ── Log resultado ──────────────────────────────────────────────────────
-    final allOk = hasLocation && gpsOk && hasBle && btOk && overlayOk;
+    // Bluetooth e tela cheia saíram deste fluxo (agora reativos): não entram
+    // mais no allOk nem no payload.
+    final allOk = hasLocation && gpsOk && overlayOk;
     final event =
         allOk ? 'device_requirements_completed' : 'device_requirements_failed';
     final logFn = allOk ? Logger.info : Logger.warn;
@@ -262,14 +188,85 @@ class DeviceRequirementsGuard {
       action: 'check',
       payload: {
         'gps': gpsOk.toString(),
-        'bluetooth': btOk.toString(),
         'overlay': overlayOk.toString(),
         'exact_alarm': exactAlarmOk.toString(),
-        'fullscreen_intent': fsIntentOk.toString(),
         'location_permission': hasLocation.toString(),
-        'ble_permission': hasBle.toString(),
       },
     );
+  }
+
+  // ── Helpers reativos (disparados no momento de uso, não no app_open) ──────
+
+  // Bluetooth ligado — chamado por PeopleNearbyScreen quando o usuário abre a
+  // busca de pessoas próximas. Reaproveita o mesmo diálogo/flag do antigo passo
+  // proativo (bluetooth_warning_shown): avisa 1x se cancelar, reseta a flag se
+  // voltou a desligar depois de concedido. Só muda o MOMENTO do disparo.
+  // Assume que as permissões BLE já foram tratadas pelo chamador.
+  static Future<void> promptBluetoothDisabled(
+      BuildContext context, BleService bleService) async {
+    final btOk = await bleService.isBluetoothEnabled();
+    if (btOk) return;
+    final prefs = await SharedPreferences.getInstance();
+    var btWarned = prefs.getBool('bluetooth_warning_shown') ?? false;
+    if (btWarned) {
+      // Voltou a desligar após conceder: reseta para o aviso reaparecer.
+      await prefs.setBool('bluetooth_warning_shown', false);
+      btWarned = false;
+    }
+    if (!btWarned && context.mounted) {
+      Logger.debug('bluetooth_disabled', feature: 'device_guard', action: 'check');
+      final opened = await _showDialog(
+        context,
+        title: AppStrings.btDisabledTitle,
+        body: AppStrings.btDisabledBody,
+        onOpenSettings: bleService.openBluetoothSettings,
+      );
+      if (!opened) await prefs.setBool('bluetooth_warning_shown', true);
+    }
+  }
+
+  // Alarme exato + tela cheia — chamado por ScheduledReminderRepository.upsert
+  // ao salvar um lembrete em modo alarme (cobre voz e UI no mesmo chokepoint).
+  // Não bloqueia o agendamento: só exibe o diálogo se faltar permissão.
+  //   - Alarme exato: sem flag (o usuário está criando um alarme agora → sempre).
+  //   - Tela cheia: mesma flag "avisar 1x" + reset do antigo passo proativo;
+  //     com o botão flutuante ligado, reavisa sempre.
+  static Future<void> promptAlarmPermissions(BuildContext context) async {
+    final scheduler = ReminderScheduler();
+    final prefs = await SharedPreferences.getInstance();
+
+    final exactOk = await scheduler.hasExactAlarmPermission();
+    if (!exactOk && context.mounted) {
+      Logger.debug('exact_alarm_disabled',
+          feature: 'device_guard', action: 'check');
+      await _showDialog(
+        context,
+        title: AppStrings.reqExactAlarmTitle,
+        body: AppStrings.reqExactAlarmBody,
+        onOpenSettings: scheduler.openExactAlarmSettings,
+      );
+    }
+
+    if (!context.mounted) return;
+    final fsOk = await scheduler.hasFullScreenIntentPermission();
+    var fsWarned = prefs.getBool('fullscreen_warning_shown') ?? false;
+    if (!fsOk && fsWarned) {
+      // Voltou a desligar após conceder: reseta para o aviso reaparecer.
+      await prefs.setBool('fullscreen_warning_shown', false);
+      fsWarned = false;
+    }
+    final floatingEnabled = prefs.getBool('floating_voice_enabled') ?? false;
+    if (!fsOk && (!fsWarned || floatingEnabled) && context.mounted) {
+      Logger.debug('fullscreen_intent_disabled',
+          feature: 'device_guard', action: 'check');
+      final opened = await _showDialog(
+        context,
+        title: AppStrings.reqFullScreenIntentTitle,
+        body: AppStrings.reqFullScreenIntentBody,
+        onOpenSettings: scheduler.openFullScreenIntentSettings,
+      );
+      if (!opened) await prefs.setBool('fullscreen_warning_shown', true);
+    }
   }
 
   // Exibe diálogo de requisito. Abre configurações se usuário aceitar.

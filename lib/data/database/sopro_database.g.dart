@@ -74,6 +74,12 @@ class $EnvironmentsTable extends Environments
   late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
       'deleted_at', aliasedName, true,
       type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _ownerIdMeta =
+      const VerificationMeta('ownerId');
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+      'owner_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -85,7 +91,8 @@ class $EnvironmentsTable extends Environments
         isMarket,
         pinImagePath,
         updatedAt,
-        deletedAt
+        deletedAt,
+        ownerId
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -152,6 +159,10 @@ class $EnvironmentsTable extends Environments
       context.handle(_deletedAtMeta,
           deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta));
     }
+    if (data.containsKey('owner_id')) {
+      context.handle(_ownerIdMeta,
+          ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta));
+    }
     return context;
   }
 
@@ -181,6 +192,8 @@ class $EnvironmentsTable extends Environments
           .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at']),
       deletedAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}deleted_at']),
+      ownerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}owner_id']),
     );
   }
 
@@ -201,6 +214,7 @@ class Environment extends DataClass implements Insertable<Environment> {
   final String? pinImagePath;
   final DateTime? updatedAt;
   final DateTime? deletedAt;
+  final String? ownerId;
   const Environment(
       {required this.id,
       required this.name,
@@ -211,7 +225,8 @@ class Environment extends DataClass implements Insertable<Environment> {
       required this.isMarket,
       this.pinImagePath,
       this.updatedAt,
-      this.deletedAt});
+      this.deletedAt,
+      this.ownerId});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -230,6 +245,9 @@ class Environment extends DataClass implements Insertable<Environment> {
     }
     if (!nullToAbsent || deletedAt != null) {
       map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
     }
     return map;
   }
@@ -252,6 +270,9 @@ class Environment extends DataClass implements Insertable<Environment> {
       deletedAt: deletedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(deletedAt),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
     );
   }
 
@@ -269,6 +290,7 @@ class Environment extends DataClass implements Insertable<Environment> {
       pinImagePath: serializer.fromJson<String?>(json['pinImagePath']),
       updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
       deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
     );
   }
   @override
@@ -285,6 +307,7 @@ class Environment extends DataClass implements Insertable<Environment> {
       'pinImagePath': serializer.toJson<String?>(pinImagePath),
       'updatedAt': serializer.toJson<DateTime?>(updatedAt),
       'deletedAt': serializer.toJson<DateTime?>(deletedAt),
+      'ownerId': serializer.toJson<String?>(ownerId),
     };
   }
 
@@ -298,7 +321,8 @@ class Environment extends DataClass implements Insertable<Environment> {
           bool? isMarket,
           Value<String?> pinImagePath = const Value.absent(),
           Value<DateTime?> updatedAt = const Value.absent(),
-          Value<DateTime?> deletedAt = const Value.absent()}) =>
+          Value<DateTime?> deletedAt = const Value.absent(),
+          Value<String?> ownerId = const Value.absent()}) =>
       Environment(
         id: id ?? this.id,
         name: name ?? this.name,
@@ -311,6 +335,7 @@ class Environment extends DataClass implements Insertable<Environment> {
             pinImagePath.present ? pinImagePath.value : this.pinImagePath,
         updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
         deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+        ownerId: ownerId.present ? ownerId.value : this.ownerId,
       );
   Environment copyWithCompanion(EnvironmentsCompanion data) {
     return Environment(
@@ -328,6 +353,7 @@ class Environment extends DataClass implements Insertable<Environment> {
           : this.pinImagePath,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
     );
   }
 
@@ -343,14 +369,15 @@ class Environment extends DataClass implements Insertable<Environment> {
           ..write('isMarket: $isMarket, ')
           ..write('pinImagePath: $pinImagePath, ')
           ..write('updatedAt: $updatedAt, ')
-          ..write('deletedAt: $deletedAt')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('ownerId: $ownerId')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode => Object.hash(id, name, latitude, longitude, radiusMeters,
-      createdAt, isMarket, pinImagePath, updatedAt, deletedAt);
+      createdAt, isMarket, pinImagePath, updatedAt, deletedAt, ownerId);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -364,7 +391,8 @@ class Environment extends DataClass implements Insertable<Environment> {
           other.isMarket == this.isMarket &&
           other.pinImagePath == this.pinImagePath &&
           other.updatedAt == this.updatedAt &&
-          other.deletedAt == this.deletedAt);
+          other.deletedAt == this.deletedAt &&
+          other.ownerId == this.ownerId);
 }
 
 class EnvironmentsCompanion extends UpdateCompanion<Environment> {
@@ -378,6 +406,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
   final Value<String?> pinImagePath;
   final Value<DateTime?> updatedAt;
   final Value<DateTime?> deletedAt;
+  final Value<String?> ownerId;
   final Value<int> rowid;
   const EnvironmentsCompanion({
     this.id = const Value.absent(),
@@ -390,6 +419,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     this.pinImagePath = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   EnvironmentsCompanion.insert({
@@ -403,6 +433,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     this.pinImagePath = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         name = Value(name),
@@ -421,6 +452,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     Expression<String>? pinImagePath,
     Expression<DateTime>? updatedAt,
     Expression<DateTime>? deletedAt,
+    Expression<String>? ownerId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -434,6 +466,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       if (pinImagePath != null) 'pin_image_path': pinImagePath,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (deletedAt != null) 'deleted_at': deletedAt,
+      if (ownerId != null) 'owner_id': ownerId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -449,6 +482,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       Value<String?>? pinImagePath,
       Value<DateTime?>? updatedAt,
       Value<DateTime?>? deletedAt,
+      Value<String?>? ownerId,
       Value<int>? rowid}) {
     return EnvironmentsCompanion(
       id: id ?? this.id,
@@ -461,6 +495,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
       pinImagePath: pinImagePath ?? this.pinImagePath,
       updatedAt: updatedAt ?? this.updatedAt,
       deletedAt: deletedAt ?? this.deletedAt,
+      ownerId: ownerId ?? this.ownerId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -498,6 +533,9 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
     if (deletedAt.present) {
       map['deleted_at'] = Variable<DateTime>(deletedAt.value);
     }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -517,6 +555,7 @@ class EnvironmentsCompanion extends UpdateCompanion<Environment> {
           ..write('pinImagePath: $pinImagePath, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
+          ..write('ownerId: $ownerId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -584,6 +623,12 @@ class $TriggersTable extends Triggers
   late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
       'deleted_at', aliasedName, true,
       type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _ownerIdMeta =
+      const VerificationMeta('ownerId');
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+      'owner_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -593,7 +638,8 @@ class $TriggersTable extends Triggers
         isActive,
         createdAt,
         updatedAt,
-        deletedAt
+        deletedAt,
+        ownerId
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -648,6 +694,10 @@ class $TriggersTable extends Triggers
       context.handle(_deletedAtMeta,
           deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta));
     }
+    if (data.containsKey('owner_id')) {
+      context.handle(_ownerIdMeta,
+          ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta));
+    }
     return context;
   }
 
@@ -673,6 +723,8 @@ class $TriggersTable extends Triggers
           .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at']),
       deletedAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}deleted_at']),
+      ownerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}owner_id']),
     );
   }
 
@@ -691,6 +743,7 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
   final DateTime createdAt;
   final DateTime? updatedAt;
   final DateTime? deletedAt;
+  final String? ownerId;
   const TriggerRow(
       {required this.id,
       required this.environmentId,
@@ -699,7 +752,8 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       required this.isActive,
       required this.createdAt,
       this.updatedAt,
-      this.deletedAt});
+      this.deletedAt,
+      this.ownerId});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -714,6 +768,9 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
     }
     if (!nullToAbsent || deletedAt != null) {
       map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
     }
     return map;
   }
@@ -732,6 +789,9 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       deletedAt: deletedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(deletedAt),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
     );
   }
 
@@ -747,6 +807,7 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
       deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
     );
   }
   @override
@@ -761,6 +822,7 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime?>(updatedAt),
       'deletedAt': serializer.toJson<DateTime?>(deletedAt),
+      'ownerId': serializer.toJson<String?>(ownerId),
     };
   }
 
@@ -772,7 +834,8 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
           bool? isActive,
           DateTime? createdAt,
           Value<DateTime?> updatedAt = const Value.absent(),
-          Value<DateTime?> deletedAt = const Value.absent()}) =>
+          Value<DateTime?> deletedAt = const Value.absent(),
+          Value<String?> ownerId = const Value.absent()}) =>
       TriggerRow(
         id: id ?? this.id,
         environmentId: environmentId ?? this.environmentId,
@@ -782,6 +845,7 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
         createdAt: createdAt ?? this.createdAt,
         updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
         deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+        ownerId: ownerId.present ? ownerId.value : this.ownerId,
       );
   TriggerRow copyWithCompanion(TriggersCompanion data) {
     return TriggerRow(
@@ -795,6 +859,7 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
     );
   }
 
@@ -808,14 +873,15 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
           ..write('isActive: $isActive, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
-          ..write('deletedAt: $deletedAt')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('ownerId: $ownerId')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode => Object.hash(id, environmentId, title, content, isActive,
-      createdAt, updatedAt, deletedAt);
+      createdAt, updatedAt, deletedAt, ownerId);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -827,7 +893,8 @@ class TriggerRow extends DataClass implements Insertable<TriggerRow> {
           other.isActive == this.isActive &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt &&
-          other.deletedAt == this.deletedAt);
+          other.deletedAt == this.deletedAt &&
+          other.ownerId == this.ownerId);
 }
 
 class TriggersCompanion extends UpdateCompanion<TriggerRow> {
@@ -839,6 +906,7 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
   final Value<DateTime> createdAt;
   final Value<DateTime?> updatedAt;
   final Value<DateTime?> deletedAt;
+  final Value<String?> ownerId;
   final Value<int> rowid;
   const TriggersCompanion({
     this.id = const Value.absent(),
@@ -849,6 +917,7 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   TriggersCompanion.insert({
@@ -860,6 +929,7 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
     required DateTime createdAt,
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         environmentId = Value(environmentId),
@@ -875,6 +945,7 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
     Expression<DateTime>? deletedAt,
+    Expression<String>? ownerId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -886,6 +957,7 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (deletedAt != null) 'deleted_at': deletedAt,
+      if (ownerId != null) 'owner_id': ownerId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -899,6 +971,7 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
       Value<DateTime>? createdAt,
       Value<DateTime?>? updatedAt,
       Value<DateTime?>? deletedAt,
+      Value<String?>? ownerId,
       Value<int>? rowid}) {
     return TriggersCompanion(
       id: id ?? this.id,
@@ -909,6 +982,7 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       deletedAt: deletedAt ?? this.deletedAt,
+      ownerId: ownerId ?? this.ownerId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -940,6 +1014,9 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
     if (deletedAt.present) {
       map['deleted_at'] = Variable<DateTime>(deletedAt.value);
     }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -957,6 +1034,7 @@ class TriggersCompanion extends UpdateCompanion<TriggerRow> {
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
+          ..write('ownerId: $ownerId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2364,9 +2442,23 @@ class $ShoppingListItemsTable extends ShoppingListItems
   late final GeneratedColumn<DateTime> deletedAt = GeneratedColumn<DateTime>(
       'deleted_at', aliasedName, true,
       type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _ownerIdMeta =
+      const VerificationMeta('ownerId');
   @override
-  List<GeneratedColumn> get $columns =>
-      [id, environmentId, name, isChecked, createdAt, updatedAt, deletedAt];
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+      'owner_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        environmentId,
+        name,
+        isChecked,
+        createdAt,
+        updatedAt,
+        deletedAt,
+        ownerId
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -2414,6 +2506,10 @@ class $ShoppingListItemsTable extends ShoppingListItems
       context.handle(_deletedAtMeta,
           deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta));
     }
+    if (data.containsKey('owner_id')) {
+      context.handle(_ownerIdMeta,
+          ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta));
+    }
     return context;
   }
 
@@ -2437,6 +2533,8 @@ class $ShoppingListItemsTable extends ShoppingListItems
           .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at']),
       deletedAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}deleted_at']),
+      ownerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}owner_id']),
     );
   }
 
@@ -2455,6 +2553,7 @@ class ShoppingListItem extends DataClass
   final DateTime createdAt;
   final DateTime? updatedAt;
   final DateTime? deletedAt;
+  final String? ownerId;
   const ShoppingListItem(
       {required this.id,
       required this.environmentId,
@@ -2462,7 +2561,8 @@ class ShoppingListItem extends DataClass
       required this.isChecked,
       required this.createdAt,
       this.updatedAt,
-      this.deletedAt});
+      this.deletedAt,
+      this.ownerId});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -2476,6 +2576,9 @@ class ShoppingListItem extends DataClass
     }
     if (!nullToAbsent || deletedAt != null) {
       map['deleted_at'] = Variable<DateTime>(deletedAt);
+    }
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
     }
     return map;
   }
@@ -2493,6 +2596,9 @@ class ShoppingListItem extends DataClass
       deletedAt: deletedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(deletedAt),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
     );
   }
 
@@ -2507,6 +2613,7 @@ class ShoppingListItem extends DataClass
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime?>(json['updatedAt']),
       deletedAt: serializer.fromJson<DateTime?>(json['deletedAt']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
     );
   }
   @override
@@ -2520,6 +2627,7 @@ class ShoppingListItem extends DataClass
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime?>(updatedAt),
       'deletedAt': serializer.toJson<DateTime?>(deletedAt),
+      'ownerId': serializer.toJson<String?>(ownerId),
     };
   }
 
@@ -2530,7 +2638,8 @@ class ShoppingListItem extends DataClass
           bool? isChecked,
           DateTime? createdAt,
           Value<DateTime?> updatedAt = const Value.absent(),
-          Value<DateTime?> deletedAt = const Value.absent()}) =>
+          Value<DateTime?> deletedAt = const Value.absent(),
+          Value<String?> ownerId = const Value.absent()}) =>
       ShoppingListItem(
         id: id ?? this.id,
         environmentId: environmentId ?? this.environmentId,
@@ -2539,6 +2648,7 @@ class ShoppingListItem extends DataClass
         createdAt: createdAt ?? this.createdAt,
         updatedAt: updatedAt.present ? updatedAt.value : this.updatedAt,
         deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+        ownerId: ownerId.present ? ownerId.value : this.ownerId,
       );
   ShoppingListItem copyWithCompanion(ShoppingListItemsCompanion data) {
     return ShoppingListItem(
@@ -2551,6 +2661,7 @@ class ShoppingListItem extends DataClass
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
     );
   }
 
@@ -2563,14 +2674,15 @@ class ShoppingListItem extends DataClass
           ..write('isChecked: $isChecked, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
-          ..write('deletedAt: $deletedAt')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('ownerId: $ownerId')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
-      id, environmentId, name, isChecked, createdAt, updatedAt, deletedAt);
+  int get hashCode => Object.hash(id, environmentId, name, isChecked, createdAt,
+      updatedAt, deletedAt, ownerId);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -2581,7 +2693,8 @@ class ShoppingListItem extends DataClass
           other.isChecked == this.isChecked &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt &&
-          other.deletedAt == this.deletedAt);
+          other.deletedAt == this.deletedAt &&
+          other.ownerId == this.ownerId);
 }
 
 class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
@@ -2592,6 +2705,7 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
   final Value<DateTime> createdAt;
   final Value<DateTime?> updatedAt;
   final Value<DateTime?> deletedAt;
+  final Value<String?> ownerId;
   final Value<int> rowid;
   const ShoppingListItemsCompanion({
     this.id = const Value.absent(),
@@ -2601,6 +2715,7 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ShoppingListItemsCompanion.insert({
@@ -2611,6 +2726,7 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
     required DateTime createdAt,
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         environmentId = Value(environmentId),
@@ -2624,6 +2740,7 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
     Expression<DateTime>? deletedAt,
+    Expression<String>? ownerId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2634,6 +2751,7 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (deletedAt != null) 'deleted_at': deletedAt,
+      if (ownerId != null) 'owner_id': ownerId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2646,6 +2764,7 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
       Value<DateTime>? createdAt,
       Value<DateTime?>? updatedAt,
       Value<DateTime?>? deletedAt,
+      Value<String?>? ownerId,
       Value<int>? rowid}) {
     return ShoppingListItemsCompanion(
       id: id ?? this.id,
@@ -2655,6 +2774,7 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       deletedAt: deletedAt ?? this.deletedAt,
+      ownerId: ownerId ?? this.ownerId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2683,6 +2803,9 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
     if (deletedAt.present) {
       map['deleted_at'] = Variable<DateTime>(deletedAt.value);
     }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2699,6 +2822,7 @@ class ShoppingListItemsCompanion extends UpdateCompanion<ShoppingListItem> {
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
+          ..write('ownerId: $ownerId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4435,6 +4559,451 @@ class WeatherForecastCacheCompanion
   }
 }
 
+class $AgendaEventTableTable extends AgendaEventTable
+    with TableInfo<$AgendaEventTableTable, AgendaEventEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AgendaEventTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _titleMeta = const VerificationMeta('title');
+  @override
+  late final GeneratedColumn<String> title = GeneratedColumn<String>(
+      'title', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 255),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _descriptionMeta =
+      const VerificationMeta('description');
+  @override
+  late final GeneratedColumn<String> description = GeneratedColumn<String>(
+      'description', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _startTimeMeta =
+      const VerificationMeta('startTime');
+  @override
+  late final GeneratedColumn<int> startTime = GeneratedColumn<int>(
+      'start_time', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _endTimeMeta =
+      const VerificationMeta('endTime');
+  @override
+  late final GeneratedColumn<int> endTime = GeneratedColumn<int>(
+      'end_time', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+      'source', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('sopro'));
+  static const VerificationMeta _externalEventIdMeta =
+      const VerificationMeta('externalEventId');
+  @override
+  late final GeneratedColumn<String> externalEventId = GeneratedColumn<String>(
+      'external_event_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _calendarIdMeta =
+      const VerificationMeta('calendarId');
+  @override
+  late final GeneratedColumn<String> calendarId = GeneratedColumn<String>(
+      'calendar_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        title,
+        description,
+        startTime,
+        endTime,
+        source,
+        externalEventId,
+        calendarId
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'agenda_event_table';
+  @override
+  VerificationContext validateIntegrity(Insertable<AgendaEventEntry> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('title')) {
+      context.handle(
+          _titleMeta, title.isAcceptableOrUnknown(data['title']!, _titleMeta));
+    } else if (isInserting) {
+      context.missing(_titleMeta);
+    }
+    if (data.containsKey('description')) {
+      context.handle(
+          _descriptionMeta,
+          description.isAcceptableOrUnknown(
+              data['description']!, _descriptionMeta));
+    }
+    if (data.containsKey('start_time')) {
+      context.handle(_startTimeMeta,
+          startTime.isAcceptableOrUnknown(data['start_time']!, _startTimeMeta));
+    } else if (isInserting) {
+      context.missing(_startTimeMeta);
+    }
+    if (data.containsKey('end_time')) {
+      context.handle(_endTimeMeta,
+          endTime.isAcceptableOrUnknown(data['end_time']!, _endTimeMeta));
+    } else if (isInserting) {
+      context.missing(_endTimeMeta);
+    }
+    if (data.containsKey('source')) {
+      context.handle(_sourceMeta,
+          source.isAcceptableOrUnknown(data['source']!, _sourceMeta));
+    }
+    if (data.containsKey('external_event_id')) {
+      context.handle(
+          _externalEventIdMeta,
+          externalEventId.isAcceptableOrUnknown(
+              data['external_event_id']!, _externalEventIdMeta));
+    }
+    if (data.containsKey('calendar_id')) {
+      context.handle(
+          _calendarIdMeta,
+          calendarId.isAcceptableOrUnknown(
+              data['calendar_id']!, _calendarIdMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  AgendaEventEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AgendaEventEntry(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      title: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}title'])!,
+      description: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}description']),
+      startTime: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}start_time'])!,
+      endTime: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}end_time'])!,
+      source: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}source'])!,
+      externalEventId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}external_event_id']),
+      calendarId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}calendar_id']),
+    );
+  }
+
+  @override
+  $AgendaEventTableTable createAlias(String alias) {
+    return $AgendaEventTableTable(attachedDatabase, alias);
+  }
+}
+
+class AgendaEventEntry extends DataClass
+    implements Insertable<AgendaEventEntry> {
+  final String id;
+  final String title;
+  final String? description;
+  final int startTime;
+  final int endTime;
+  final String source;
+  final String? externalEventId;
+  final String? calendarId;
+  const AgendaEventEntry(
+      {required this.id,
+      required this.title,
+      this.description,
+      required this.startTime,
+      required this.endTime,
+      required this.source,
+      this.externalEventId,
+      this.calendarId});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['title'] = Variable<String>(title);
+    if (!nullToAbsent || description != null) {
+      map['description'] = Variable<String>(description);
+    }
+    map['start_time'] = Variable<int>(startTime);
+    map['end_time'] = Variable<int>(endTime);
+    map['source'] = Variable<String>(source);
+    if (!nullToAbsent || externalEventId != null) {
+      map['external_event_id'] = Variable<String>(externalEventId);
+    }
+    if (!nullToAbsent || calendarId != null) {
+      map['calendar_id'] = Variable<String>(calendarId);
+    }
+    return map;
+  }
+
+  AgendaEventTableCompanion toCompanion(bool nullToAbsent) {
+    return AgendaEventTableCompanion(
+      id: Value(id),
+      title: Value(title),
+      description: description == null && nullToAbsent
+          ? const Value.absent()
+          : Value(description),
+      startTime: Value(startTime),
+      endTime: Value(endTime),
+      source: Value(source),
+      externalEventId: externalEventId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(externalEventId),
+      calendarId: calendarId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(calendarId),
+    );
+  }
+
+  factory AgendaEventEntry.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AgendaEventEntry(
+      id: serializer.fromJson<String>(json['id']),
+      title: serializer.fromJson<String>(json['title']),
+      description: serializer.fromJson<String?>(json['description']),
+      startTime: serializer.fromJson<int>(json['startTime']),
+      endTime: serializer.fromJson<int>(json['endTime']),
+      source: serializer.fromJson<String>(json['source']),
+      externalEventId: serializer.fromJson<String?>(json['externalEventId']),
+      calendarId: serializer.fromJson<String?>(json['calendarId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'title': serializer.toJson<String>(title),
+      'description': serializer.toJson<String?>(description),
+      'startTime': serializer.toJson<int>(startTime),
+      'endTime': serializer.toJson<int>(endTime),
+      'source': serializer.toJson<String>(source),
+      'externalEventId': serializer.toJson<String?>(externalEventId),
+      'calendarId': serializer.toJson<String?>(calendarId),
+    };
+  }
+
+  AgendaEventEntry copyWith(
+          {String? id,
+          String? title,
+          Value<String?> description = const Value.absent(),
+          int? startTime,
+          int? endTime,
+          String? source,
+          Value<String?> externalEventId = const Value.absent(),
+          Value<String?> calendarId = const Value.absent()}) =>
+      AgendaEventEntry(
+        id: id ?? this.id,
+        title: title ?? this.title,
+        description: description.present ? description.value : this.description,
+        startTime: startTime ?? this.startTime,
+        endTime: endTime ?? this.endTime,
+        source: source ?? this.source,
+        externalEventId: externalEventId.present
+            ? externalEventId.value
+            : this.externalEventId,
+        calendarId: calendarId.present ? calendarId.value : this.calendarId,
+      );
+  AgendaEventEntry copyWithCompanion(AgendaEventTableCompanion data) {
+    return AgendaEventEntry(
+      id: data.id.present ? data.id.value : this.id,
+      title: data.title.present ? data.title.value : this.title,
+      description:
+          data.description.present ? data.description.value : this.description,
+      startTime: data.startTime.present ? data.startTime.value : this.startTime,
+      endTime: data.endTime.present ? data.endTime.value : this.endTime,
+      source: data.source.present ? data.source.value : this.source,
+      externalEventId: data.externalEventId.present
+          ? data.externalEventId.value
+          : this.externalEventId,
+      calendarId:
+          data.calendarId.present ? data.calendarId.value : this.calendarId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AgendaEventEntry(')
+          ..write('id: $id, ')
+          ..write('title: $title, ')
+          ..write('description: $description, ')
+          ..write('startTime: $startTime, ')
+          ..write('endTime: $endTime, ')
+          ..write('source: $source, ')
+          ..write('externalEventId: $externalEventId, ')
+          ..write('calendarId: $calendarId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, title, description, startTime, endTime,
+      source, externalEventId, calendarId);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AgendaEventEntry &&
+          other.id == this.id &&
+          other.title == this.title &&
+          other.description == this.description &&
+          other.startTime == this.startTime &&
+          other.endTime == this.endTime &&
+          other.source == this.source &&
+          other.externalEventId == this.externalEventId &&
+          other.calendarId == this.calendarId);
+}
+
+class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
+  final Value<String> id;
+  final Value<String> title;
+  final Value<String?> description;
+  final Value<int> startTime;
+  final Value<int> endTime;
+  final Value<String> source;
+  final Value<String?> externalEventId;
+  final Value<String?> calendarId;
+  final Value<int> rowid;
+  const AgendaEventTableCompanion({
+    this.id = const Value.absent(),
+    this.title = const Value.absent(),
+    this.description = const Value.absent(),
+    this.startTime = const Value.absent(),
+    this.endTime = const Value.absent(),
+    this.source = const Value.absent(),
+    this.externalEventId = const Value.absent(),
+    this.calendarId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AgendaEventTableCompanion.insert({
+    required String id,
+    required String title,
+    this.description = const Value.absent(),
+    required int startTime,
+    required int endTime,
+    this.source = const Value.absent(),
+    this.externalEventId = const Value.absent(),
+    this.calendarId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        title = Value(title),
+        startTime = Value(startTime),
+        endTime = Value(endTime);
+  static Insertable<AgendaEventEntry> custom({
+    Expression<String>? id,
+    Expression<String>? title,
+    Expression<String>? description,
+    Expression<int>? startTime,
+    Expression<int>? endTime,
+    Expression<String>? source,
+    Expression<String>? externalEventId,
+    Expression<String>? calendarId,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (title != null) 'title': title,
+      if (description != null) 'description': description,
+      if (startTime != null) 'start_time': startTime,
+      if (endTime != null) 'end_time': endTime,
+      if (source != null) 'source': source,
+      if (externalEventId != null) 'external_event_id': externalEventId,
+      if (calendarId != null) 'calendar_id': calendarId,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AgendaEventTableCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? title,
+      Value<String?>? description,
+      Value<int>? startTime,
+      Value<int>? endTime,
+      Value<String>? source,
+      Value<String?>? externalEventId,
+      Value<String?>? calendarId,
+      Value<int>? rowid}) {
+    return AgendaEventTableCompanion(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      description: description ?? this.description,
+      startTime: startTime ?? this.startTime,
+      endTime: endTime ?? this.endTime,
+      source: source ?? this.source,
+      externalEventId: externalEventId ?? this.externalEventId,
+      calendarId: calendarId ?? this.calendarId,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (title.present) {
+      map['title'] = Variable<String>(title.value);
+    }
+    if (description.present) {
+      map['description'] = Variable<String>(description.value);
+    }
+    if (startTime.present) {
+      map['start_time'] = Variable<int>(startTime.value);
+    }
+    if (endTime.present) {
+      map['end_time'] = Variable<int>(endTime.value);
+    }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
+    if (externalEventId.present) {
+      map['external_event_id'] = Variable<String>(externalEventId.value);
+    }
+    if (calendarId.present) {
+      map['calendar_id'] = Variable<String>(calendarId.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AgendaEventTableCompanion(')
+          ..write('id: $id, ')
+          ..write('title: $title, ')
+          ..write('description: $description, ')
+          ..write('startTime: $startTime, ')
+          ..write('endTime: $endTime, ')
+          ..write('source: $source, ')
+          ..write('externalEventId: $externalEventId, ')
+          ..write('calendarId: $calendarId, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$SoproDatabase extends GeneratedDatabase {
   _$SoproDatabase(QueryExecutor e) : super(e);
   $SoproDatabaseManager get managers => $SoproDatabaseManager(this);
@@ -4453,6 +5022,8 @@ abstract class _$SoproDatabase extends GeneratedDatabase {
       $WeatherCacheEntriesTable(this);
   late final $WeatherForecastCacheTable weatherForecastCache =
       $WeatherForecastCacheTable(this);
+  late final $AgendaEventTableTable agendaEventTable =
+      $AgendaEventTableTable(this);
   late final EnvironmentsDao environmentsDao =
       EnvironmentsDao(this as SoproDatabase);
   late final TriggersDao triggersDao = TriggersDao(this as SoproDatabase);
@@ -4470,6 +5041,8 @@ abstract class _$SoproDatabase extends GeneratedDatabase {
       ActivityLogDao(this as SoproDatabase);
   late final WeatherCacheDao weatherCacheDao =
       WeatherCacheDao(this as SoproDatabase);
+  late final AgendaEventDao agendaEventDao =
+      AgendaEventDao(this as SoproDatabase);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -4484,7 +5057,8 @@ abstract class _$SoproDatabase extends GeneratedDatabase {
         scheduledReminders,
         activityLogEntries,
         weatherCacheEntries,
-        weatherForecastCache
+        weatherForecastCache,
+        agendaEventTable
       ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
@@ -4512,6 +5086,7 @@ typedef $$EnvironmentsTableCreateCompanionBuilder = EnvironmentsCompanion
   Value<String?> pinImagePath,
   Value<DateTime?> updatedAt,
   Value<DateTime?> deletedAt,
+  Value<String?> ownerId,
   Value<int> rowid,
 });
 typedef $$EnvironmentsTableUpdateCompanionBuilder = EnvironmentsCompanion
@@ -4526,6 +5101,7 @@ typedef $$EnvironmentsTableUpdateCompanionBuilder = EnvironmentsCompanion
   Value<String?> pinImagePath,
   Value<DateTime?> updatedAt,
   Value<DateTime?> deletedAt,
+  Value<String?> ownerId,
   Value<int> rowid,
 });
 
@@ -4587,6 +5163,9 @@ class $$EnvironmentsTableFilterComposer
 
   ColumnFilters<DateTime> get deletedAt => $composableBuilder(
       column: $table.deletedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+      column: $table.ownerId, builder: (column) => ColumnFilters(column));
 
   Expression<bool> triggersRefs(
       Expression<bool> Function($$TriggersTableFilterComposer f) f) {
@@ -4650,6 +5229,9 @@ class $$EnvironmentsTableOrderingComposer
 
   ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
       column: $table.deletedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+      column: $table.ownerId, builder: (column) => ColumnOrderings(column));
 }
 
 class $$EnvironmentsTableAnnotationComposer
@@ -4690,6 +5272,9 @@ class $$EnvironmentsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get deletedAt =>
       $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
 
   Expression<T> triggersRefs<T extends Object>(
       Expression<T> Function($$TriggersTableAnnotationComposer a) f) {
@@ -4746,6 +5331,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             Value<String?> pinImagePath = const Value.absent(),
             Value<DateTime?> updatedAt = const Value.absent(),
             Value<DateTime?> deletedAt = const Value.absent(),
+            Value<String?> ownerId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EnvironmentsCompanion(
@@ -4759,6 +5345,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             pinImagePath: pinImagePath,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            ownerId: ownerId,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4772,6 +5359,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             Value<String?> pinImagePath = const Value.absent(),
             Value<DateTime?> updatedAt = const Value.absent(),
             Value<DateTime?> deletedAt = const Value.absent(),
+            Value<String?> ownerId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               EnvironmentsCompanion.insert(
@@ -4785,6 +5373,7 @@ class $$EnvironmentsTableTableManager extends RootTableManager<
             pinImagePath: pinImagePath,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            ownerId: ownerId,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -4840,6 +5429,7 @@ typedef $$TriggersTableCreateCompanionBuilder = TriggersCompanion Function({
   required DateTime createdAt,
   Value<DateTime?> updatedAt,
   Value<DateTime?> deletedAt,
+  Value<String?> ownerId,
   Value<int> rowid,
 });
 typedef $$TriggersTableUpdateCompanionBuilder = TriggersCompanion Function({
@@ -4851,6 +5441,7 @@ typedef $$TriggersTableUpdateCompanionBuilder = TriggersCompanion Function({
   Value<DateTime> createdAt,
   Value<DateTime?> updatedAt,
   Value<DateTime?> deletedAt,
+  Value<String?> ownerId,
   Value<int> rowid,
 });
 
@@ -4901,6 +5492,9 @@ class $$TriggersTableFilterComposer
 
   ColumnFilters<DateTime> get deletedAt => $composableBuilder(
       column: $table.deletedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+      column: $table.ownerId, builder: (column) => ColumnFilters(column));
 
   $$EnvironmentsTableFilterComposer get environmentId {
     final $$EnvironmentsTableFilterComposer composer = $composerBuilder(
@@ -4953,6 +5547,9 @@ class $$TriggersTableOrderingComposer
   ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
       column: $table.deletedAt, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+      column: $table.ownerId, builder: (column) => ColumnOrderings(column));
+
   $$EnvironmentsTableOrderingComposer get environmentId {
     final $$EnvironmentsTableOrderingComposer composer = $composerBuilder(
         composer: this,
@@ -5003,6 +5600,9 @@ class $$TriggersTableAnnotationComposer
 
   GeneratedColumn<DateTime> get deletedAt =>
       $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
 
   $$EnvironmentsTableAnnotationComposer get environmentId {
     final $$EnvironmentsTableAnnotationComposer composer = $composerBuilder(
@@ -5056,6 +5656,7 @@ class $$TriggersTableTableManager extends RootTableManager<
             Value<DateTime> createdAt = const Value.absent(),
             Value<DateTime?> updatedAt = const Value.absent(),
             Value<DateTime?> deletedAt = const Value.absent(),
+            Value<String?> ownerId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               TriggersCompanion(
@@ -5067,6 +5668,7 @@ class $$TriggersTableTableManager extends RootTableManager<
             createdAt: createdAt,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            ownerId: ownerId,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -5078,6 +5680,7 @@ class $$TriggersTableTableManager extends RootTableManager<
             required DateTime createdAt,
             Value<DateTime?> updatedAt = const Value.absent(),
             Value<DateTime?> deletedAt = const Value.absent(),
+            Value<String?> ownerId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               TriggersCompanion.insert(
@@ -5089,6 +5692,7 @@ class $$TriggersTableTableManager extends RootTableManager<
             createdAt: createdAt,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            ownerId: ownerId,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -5842,6 +6446,7 @@ typedef $$ShoppingListItemsTableCreateCompanionBuilder
   required DateTime createdAt,
   Value<DateTime?> updatedAt,
   Value<DateTime?> deletedAt,
+  Value<String?> ownerId,
   Value<int> rowid,
 });
 typedef $$ShoppingListItemsTableUpdateCompanionBuilder
@@ -5853,6 +6458,7 @@ typedef $$ShoppingListItemsTableUpdateCompanionBuilder
   Value<DateTime> createdAt,
   Value<DateTime?> updatedAt,
   Value<DateTime?> deletedAt,
+  Value<String?> ownerId,
   Value<int> rowid,
 });
 
@@ -5885,6 +6491,9 @@ class $$ShoppingListItemsTableFilterComposer
 
   ColumnFilters<DateTime> get deletedAt => $composableBuilder(
       column: $table.deletedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+      column: $table.ownerId, builder: (column) => ColumnFilters(column));
 }
 
 class $$ShoppingListItemsTableOrderingComposer
@@ -5917,6 +6526,9 @@ class $$ShoppingListItemsTableOrderingComposer
 
   ColumnOrderings<DateTime> get deletedAt => $composableBuilder(
       column: $table.deletedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+      column: $table.ownerId, builder: (column) => ColumnOrderings(column));
 }
 
 class $$ShoppingListItemsTableAnnotationComposer
@@ -5948,6 +6560,9 @@ class $$ShoppingListItemsTableAnnotationComposer
 
   GeneratedColumn<DateTime> get deletedAt =>
       $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
 }
 
 class $$ShoppingListItemsTableTableManager extends RootTableManager<
@@ -5985,6 +6600,7 @@ class $$ShoppingListItemsTableTableManager extends RootTableManager<
             Value<DateTime> createdAt = const Value.absent(),
             Value<DateTime?> updatedAt = const Value.absent(),
             Value<DateTime?> deletedAt = const Value.absent(),
+            Value<String?> ownerId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ShoppingListItemsCompanion(
@@ -5995,6 +6611,7 @@ class $$ShoppingListItemsTableTableManager extends RootTableManager<
             createdAt: createdAt,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            ownerId: ownerId,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -6005,6 +6622,7 @@ class $$ShoppingListItemsTableTableManager extends RootTableManager<
             required DateTime createdAt,
             Value<DateTime?> updatedAt = const Value.absent(),
             Value<DateTime?> deletedAt = const Value.absent(),
+            Value<String?> ownerId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               ShoppingListItemsCompanion.insert(
@@ -6015,6 +6633,7 @@ class $$ShoppingListItemsTableTableManager extends RootTableManager<
             createdAt: createdAt,
             updatedAt: updatedAt,
             deletedAt: deletedAt,
+            ownerId: ownerId,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -6934,6 +7553,227 @@ typedef $$WeatherForecastCacheTableProcessedTableManager
         ),
         WeatherForecastCacheData,
         PrefetchHooks Function()>;
+typedef $$AgendaEventTableTableCreateCompanionBuilder
+    = AgendaEventTableCompanion Function({
+  required String id,
+  required String title,
+  Value<String?> description,
+  required int startTime,
+  required int endTime,
+  Value<String> source,
+  Value<String?> externalEventId,
+  Value<String?> calendarId,
+  Value<int> rowid,
+});
+typedef $$AgendaEventTableTableUpdateCompanionBuilder
+    = AgendaEventTableCompanion Function({
+  Value<String> id,
+  Value<String> title,
+  Value<String?> description,
+  Value<int> startTime,
+  Value<int> endTime,
+  Value<String> source,
+  Value<String?> externalEventId,
+  Value<String?> calendarId,
+  Value<int> rowid,
+});
+
+class $$AgendaEventTableTableFilterComposer
+    extends Composer<_$SoproDatabase, $AgendaEventTableTable> {
+  $$AgendaEventTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get description => $composableBuilder(
+      column: $table.description, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get startTime => $composableBuilder(
+      column: $table.startTime, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get endTime => $composableBuilder(
+      column: $table.endTime, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get externalEventId => $composableBuilder(
+      column: $table.externalEventId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get calendarId => $composableBuilder(
+      column: $table.calendarId, builder: (column) => ColumnFilters(column));
+}
+
+class $$AgendaEventTableTableOrderingComposer
+    extends Composer<_$SoproDatabase, $AgendaEventTableTable> {
+  $$AgendaEventTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get description => $composableBuilder(
+      column: $table.description, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get startTime => $composableBuilder(
+      column: $table.startTime, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get endTime => $composableBuilder(
+      column: $table.endTime, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get source => $composableBuilder(
+      column: $table.source, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get externalEventId => $composableBuilder(
+      column: $table.externalEventId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get calendarId => $composableBuilder(
+      column: $table.calendarId, builder: (column) => ColumnOrderings(column));
+}
+
+class $$AgendaEventTableTableAnnotationComposer
+    extends Composer<_$SoproDatabase, $AgendaEventTableTable> {
+  $$AgendaEventTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get title =>
+      $composableBuilder(column: $table.title, builder: (column) => column);
+
+  GeneratedColumn<String> get description => $composableBuilder(
+      column: $table.description, builder: (column) => column);
+
+  GeneratedColumn<int> get startTime =>
+      $composableBuilder(column: $table.startTime, builder: (column) => column);
+
+  GeneratedColumn<int> get endTime =>
+      $composableBuilder(column: $table.endTime, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+
+  GeneratedColumn<String> get externalEventId => $composableBuilder(
+      column: $table.externalEventId, builder: (column) => column);
+
+  GeneratedColumn<String> get calendarId => $composableBuilder(
+      column: $table.calendarId, builder: (column) => column);
+}
+
+class $$AgendaEventTableTableTableManager extends RootTableManager<
+    _$SoproDatabase,
+    $AgendaEventTableTable,
+    AgendaEventEntry,
+    $$AgendaEventTableTableFilterComposer,
+    $$AgendaEventTableTableOrderingComposer,
+    $$AgendaEventTableTableAnnotationComposer,
+    $$AgendaEventTableTableCreateCompanionBuilder,
+    $$AgendaEventTableTableUpdateCompanionBuilder,
+    (
+      AgendaEventEntry,
+      BaseReferences<_$SoproDatabase, $AgendaEventTableTable, AgendaEventEntry>
+    ),
+    AgendaEventEntry,
+    PrefetchHooks Function()> {
+  $$AgendaEventTableTableTableManager(
+      _$SoproDatabase db, $AgendaEventTableTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AgendaEventTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AgendaEventTableTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AgendaEventTableTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> title = const Value.absent(),
+            Value<String?> description = const Value.absent(),
+            Value<int> startTime = const Value.absent(),
+            Value<int> endTime = const Value.absent(),
+            Value<String> source = const Value.absent(),
+            Value<String?> externalEventId = const Value.absent(),
+            Value<String?> calendarId = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AgendaEventTableCompanion(
+            id: id,
+            title: title,
+            description: description,
+            startTime: startTime,
+            endTime: endTime,
+            source: source,
+            externalEventId: externalEventId,
+            calendarId: calendarId,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required String title,
+            Value<String?> description = const Value.absent(),
+            required int startTime,
+            required int endTime,
+            Value<String> source = const Value.absent(),
+            Value<String?> externalEventId = const Value.absent(),
+            Value<String?> calendarId = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              AgendaEventTableCompanion.insert(
+            id: id,
+            title: title,
+            description: description,
+            startTime: startTime,
+            endTime: endTime,
+            source: source,
+            externalEventId: externalEventId,
+            calendarId: calendarId,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$AgendaEventTableTableProcessedTableManager = ProcessedTableManager<
+    _$SoproDatabase,
+    $AgendaEventTableTable,
+    AgendaEventEntry,
+    $$AgendaEventTableTableFilterComposer,
+    $$AgendaEventTableTableOrderingComposer,
+    $$AgendaEventTableTableAnnotationComposer,
+    $$AgendaEventTableTableCreateCompanionBuilder,
+    $$AgendaEventTableTableUpdateCompanionBuilder,
+    (
+      AgendaEventEntry,
+      BaseReferences<_$SoproDatabase, $AgendaEventTableTable, AgendaEventEntry>
+    ),
+    AgendaEventEntry,
+    PrefetchHooks Function()>;
 
 class $SoproDatabaseManager {
   final _$SoproDatabase _db;
@@ -6958,4 +7798,6 @@ class $SoproDatabaseManager {
       $$WeatherCacheEntriesTableTableManager(_db, _db.weatherCacheEntries);
   $$WeatherForecastCacheTableTableManager get weatherForecastCache =>
       $$WeatherForecastCacheTableTableManager(_db, _db.weatherForecastCache);
+  $$AgendaEventTableTableTableManager get agendaEventTable =>
+      $$AgendaEventTableTableTableManager(_db, _db.agendaEventTable);
 }
