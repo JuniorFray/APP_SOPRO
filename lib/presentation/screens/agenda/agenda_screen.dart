@@ -56,15 +56,18 @@ class _AgendaScreenState extends ConsumerState<AgendaScreen> {
         ],
       ),
       body: _buildBody(state, notifier),
+      // Feature ainda não implementada: rotulada honestamente como "Em breve" e
+      // visualmente atenuada — sem SnackBar fingindo que processou algo.
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('IA Sopro: Analisando seus emails e rotina...')),
+            const SnackBar(content: Text('Organização automática por IA — em breve.')),
           );
         },
-        backgroundColor: AppColors.accent,
-        icon: const Icon(Icons.auto_awesome, color: Colors.white),
-        label: const Text('Organizar com IA', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        backgroundColor: AppColors.backgroundCardHighlight,
+        icon: const Icon(Icons.auto_awesome, color: AppColors.textSecondary),
+        label: const Text('Organizar com IA · Em breve',
+            style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.bold)),
       ),
     );
   }

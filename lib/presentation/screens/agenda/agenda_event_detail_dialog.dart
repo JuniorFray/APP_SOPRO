@@ -55,10 +55,13 @@ class AgendaEventDetailDialog extends ConsumerWidget {
 
   void _editEvent(BuildContext context, WidgetRef ref) {
     Navigator.pop(context); // Close detail dialog
-    // Open edit dialog (re-using AgendaEventDialog with initial date)
+    // Passa o evento existente → o dialog faz UPDATE no mesmo id (não duplica).
     showDialog(
       context: context,
-      builder: (_) => AgendaEventDialog(initialDate: event.startTime),
+      builder: (_) => AgendaEventDialog(
+        initialDate: event.startTime,
+        existingEvent: event,
+      ),
     );
   }
 

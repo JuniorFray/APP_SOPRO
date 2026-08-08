@@ -82,6 +82,7 @@ class _AgendaAccountsSheetState extends ConsumerState<AgendaAccountsSheet> {
     final isSoproEnabled = state.enabledSources.contains(EventSource.sopro);
     final isGoogleEnabled = state.enabledSources.contains(EventSource.google);
     final isOutlookEnabled = state.enabledSources.contains(EventSource.outlook);
+    final isOtherEnabled = state.enabledSources.contains(EventSource.other);
 
     return Container(
       decoration: const BoxDecoration(
@@ -199,6 +200,15 @@ class _AgendaAccountsSheetState extends ConsumerState<AgendaAccountsSheet> {
                           ),
                         ),
                       ),
+                      // Deixa claro que abre as Configurações de conta do Android,
+                      // não um login dentro do Sopro.
+                      const Padding(
+                        padding: EdgeInsets.only(left: 24, right: 24, bottom: 8),
+                        child: Text(
+                          'Abre as configurações de conta do Android. Adicione a conta lá; ela aparecerá aqui automaticamente.',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                        ),
+                      ),
                     ],
 
                     // 3. Outlook / Microsoft
@@ -242,15 +252,37 @@ class _AgendaAccountsSheetState extends ConsumerState<AgendaAccountsSheet> {
                           ),
                         ),
                       ),
+                      // Mesmo esclarecimento do Google: é a central de contas do SO.
+                      const Padding(
+                        padding: EdgeInsets.only(left: 24, right: 24, bottom: 8),
+                        child: Text(
+                          'Abre as configurações de conta do Android. Adicione a conta lá; ela aparecerá aqui automaticamente.',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                        ),
+                      ),
                     ],
 
-                    // 4. Outros calendários locais detectados no celular
+                    // 4. Outros calendários locais detectados no celular.
+                    //    Toggle único (EventSource.other) liga/desliga todos —
+                    //    sem ele esses eventos nunca apareciam.
                     if (otherCalendars.isNotEmpty) ...[
-                      const Padding(
-                        padding: EdgeInsets.only(left: 24, top: 12, bottom: 4),
-                        child: Text(
+                      ListTile(
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 2),
+                        leading: const CircleAvatar(
+                          backgroundColor: AppColors.backgroundCardHighlight,
+                          child: Icon(Icons.calendar_today, color: AppColors.textSecondary, size: 18),
+                        ),
+                        title: const Text(
                           'Outros Calendários Locais',
-                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.bold),
+                          style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600, fontSize: 15),
+                        ),
+                        subtitle: const Text(
+                          'Calendários do aparelho sem conta Google/Outlook',
+                          style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                        ),
+                        trailing: SoproSwitch(
+                          value: isOtherEnabled,
+                          onChanged: (_) => notifier.toggleSource(EventSource.other),
                         ),
                       ),
                       ...otherCalendars.map((cal) {

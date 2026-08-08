@@ -4603,6 +4603,12 @@ class $AgendaEventTableTable extends AgendaEventTable
       type: DriftSqlType.string,
       requiredDuringInsert: false,
       defaultValue: const Constant('sopro'));
+  static const VerificationMeta _categoryMeta =
+      const VerificationMeta('category');
+  @override
+  late final GeneratedColumn<String> category = GeneratedColumn<String>(
+      'category', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _externalEventIdMeta =
       const VerificationMeta('externalEventId');
   @override
@@ -4615,6 +4621,12 @@ class $AgendaEventTableTable extends AgendaEventTable
   late final GeneratedColumn<String> calendarId = GeneratedColumn<String>(
       'calendar_id', aliasedName, true,
       type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _deletedAtMeta =
+      const VerificationMeta('deletedAt');
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+      'deleted_at', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
   @override
   List<GeneratedColumn> get $columns => [
         id,
@@ -4623,8 +4635,10 @@ class $AgendaEventTableTable extends AgendaEventTable
         startTime,
         endTime,
         source,
+        category,
         externalEventId,
-        calendarId
+        calendarId,
+        deletedAt
       ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -4669,6 +4683,10 @@ class $AgendaEventTableTable extends AgendaEventTable
       context.handle(_sourceMeta,
           source.isAcceptableOrUnknown(data['source']!, _sourceMeta));
     }
+    if (data.containsKey('category')) {
+      context.handle(_categoryMeta,
+          category.isAcceptableOrUnknown(data['category']!, _categoryMeta));
+    }
     if (data.containsKey('external_event_id')) {
       context.handle(
           _externalEventIdMeta,
@@ -4680,6 +4698,10 @@ class $AgendaEventTableTable extends AgendaEventTable
           _calendarIdMeta,
           calendarId.isAcceptableOrUnknown(
               data['calendar_id']!, _calendarIdMeta));
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(_deletedAtMeta,
+          deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta));
     }
     return context;
   }
@@ -4702,10 +4724,14 @@ class $AgendaEventTableTable extends AgendaEventTable
           .read(DriftSqlType.int, data['${effectivePrefix}end_time'])!,
       source: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}source'])!,
+      category: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}category']),
       externalEventId: attachedDatabase.typeMapping.read(
           DriftSqlType.string, data['${effectivePrefix}external_event_id']),
       calendarId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}calendar_id']),
+      deletedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}deleted_at']),
     );
   }
 
@@ -4723,8 +4749,10 @@ class AgendaEventEntry extends DataClass
   final int startTime;
   final int endTime;
   final String source;
+  final String? category;
   final String? externalEventId;
   final String? calendarId;
+  final int? deletedAt;
   const AgendaEventEntry(
       {required this.id,
       required this.title,
@@ -4732,8 +4760,10 @@ class AgendaEventEntry extends DataClass
       required this.startTime,
       required this.endTime,
       required this.source,
+      this.category,
       this.externalEventId,
-      this.calendarId});
+      this.calendarId,
+      this.deletedAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -4745,11 +4775,17 @@ class AgendaEventEntry extends DataClass
     map['start_time'] = Variable<int>(startTime);
     map['end_time'] = Variable<int>(endTime);
     map['source'] = Variable<String>(source);
+    if (!nullToAbsent || category != null) {
+      map['category'] = Variable<String>(category);
+    }
     if (!nullToAbsent || externalEventId != null) {
       map['external_event_id'] = Variable<String>(externalEventId);
     }
     if (!nullToAbsent || calendarId != null) {
       map['calendar_id'] = Variable<String>(calendarId);
+    }
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
     }
     return map;
   }
@@ -4764,12 +4800,18 @@ class AgendaEventEntry extends DataClass
       startTime: Value(startTime),
       endTime: Value(endTime),
       source: Value(source),
+      category: category == null && nullToAbsent
+          ? const Value.absent()
+          : Value(category),
       externalEventId: externalEventId == null && nullToAbsent
           ? const Value.absent()
           : Value(externalEventId),
       calendarId: calendarId == null && nullToAbsent
           ? const Value.absent()
           : Value(calendarId),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
     );
   }
 
@@ -4783,8 +4825,10 @@ class AgendaEventEntry extends DataClass
       startTime: serializer.fromJson<int>(json['startTime']),
       endTime: serializer.fromJson<int>(json['endTime']),
       source: serializer.fromJson<String>(json['source']),
+      category: serializer.fromJson<String?>(json['category']),
       externalEventId: serializer.fromJson<String?>(json['externalEventId']),
       calendarId: serializer.fromJson<String?>(json['calendarId']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
     );
   }
   @override
@@ -4797,8 +4841,10 @@ class AgendaEventEntry extends DataClass
       'startTime': serializer.toJson<int>(startTime),
       'endTime': serializer.toJson<int>(endTime),
       'source': serializer.toJson<String>(source),
+      'category': serializer.toJson<String?>(category),
       'externalEventId': serializer.toJson<String?>(externalEventId),
       'calendarId': serializer.toJson<String?>(calendarId),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
     };
   }
 
@@ -4809,8 +4855,10 @@ class AgendaEventEntry extends DataClass
           int? startTime,
           int? endTime,
           String? source,
+          Value<String?> category = const Value.absent(),
           Value<String?> externalEventId = const Value.absent(),
-          Value<String?> calendarId = const Value.absent()}) =>
+          Value<String?> calendarId = const Value.absent(),
+          Value<int?> deletedAt = const Value.absent()}) =>
       AgendaEventEntry(
         id: id ?? this.id,
         title: title ?? this.title,
@@ -4818,10 +4866,12 @@ class AgendaEventEntry extends DataClass
         startTime: startTime ?? this.startTime,
         endTime: endTime ?? this.endTime,
         source: source ?? this.source,
+        category: category.present ? category.value : this.category,
         externalEventId: externalEventId.present
             ? externalEventId.value
             : this.externalEventId,
         calendarId: calendarId.present ? calendarId.value : this.calendarId,
+        deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
       );
   AgendaEventEntry copyWithCompanion(AgendaEventTableCompanion data) {
     return AgendaEventEntry(
@@ -4832,11 +4882,13 @@ class AgendaEventEntry extends DataClass
       startTime: data.startTime.present ? data.startTime.value : this.startTime,
       endTime: data.endTime.present ? data.endTime.value : this.endTime,
       source: data.source.present ? data.source.value : this.source,
+      category: data.category.present ? data.category.value : this.category,
       externalEventId: data.externalEventId.present
           ? data.externalEventId.value
           : this.externalEventId,
       calendarId:
           data.calendarId.present ? data.calendarId.value : this.calendarId,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
     );
   }
 
@@ -4849,15 +4901,17 @@ class AgendaEventEntry extends DataClass
           ..write('startTime: $startTime, ')
           ..write('endTime: $endTime, ')
           ..write('source: $source, ')
+          ..write('category: $category, ')
           ..write('externalEventId: $externalEventId, ')
-          ..write('calendarId: $calendarId')
+          ..write('calendarId: $calendarId, ')
+          ..write('deletedAt: $deletedAt')
           ..write(')'))
         .toString();
   }
 
   @override
   int get hashCode => Object.hash(id, title, description, startTime, endTime,
-      source, externalEventId, calendarId);
+      source, category, externalEventId, calendarId, deletedAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -4868,8 +4922,10 @@ class AgendaEventEntry extends DataClass
           other.startTime == this.startTime &&
           other.endTime == this.endTime &&
           other.source == this.source &&
+          other.category == this.category &&
           other.externalEventId == this.externalEventId &&
-          other.calendarId == this.calendarId);
+          other.calendarId == this.calendarId &&
+          other.deletedAt == this.deletedAt);
 }
 
 class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
@@ -4879,8 +4935,10 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
   final Value<int> startTime;
   final Value<int> endTime;
   final Value<String> source;
+  final Value<String?> category;
   final Value<String?> externalEventId;
   final Value<String?> calendarId;
+  final Value<int?> deletedAt;
   final Value<int> rowid;
   const AgendaEventTableCompanion({
     this.id = const Value.absent(),
@@ -4889,8 +4947,10 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
     this.startTime = const Value.absent(),
     this.endTime = const Value.absent(),
     this.source = const Value.absent(),
+    this.category = const Value.absent(),
     this.externalEventId = const Value.absent(),
     this.calendarId = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   AgendaEventTableCompanion.insert({
@@ -4900,8 +4960,10 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
     required int startTime,
     required int endTime,
     this.source = const Value.absent(),
+    this.category = const Value.absent(),
     this.externalEventId = const Value.absent(),
     this.calendarId = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         title = Value(title),
@@ -4914,8 +4976,10 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
     Expression<int>? startTime,
     Expression<int>? endTime,
     Expression<String>? source,
+    Expression<String>? category,
     Expression<String>? externalEventId,
     Expression<String>? calendarId,
+    Expression<int>? deletedAt,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -4925,8 +4989,10 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
       if (startTime != null) 'start_time': startTime,
       if (endTime != null) 'end_time': endTime,
       if (source != null) 'source': source,
+      if (category != null) 'category': category,
       if (externalEventId != null) 'external_event_id': externalEventId,
       if (calendarId != null) 'calendar_id': calendarId,
+      if (deletedAt != null) 'deleted_at': deletedAt,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -4938,8 +5004,10 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
       Value<int>? startTime,
       Value<int>? endTime,
       Value<String>? source,
+      Value<String?>? category,
       Value<String?>? externalEventId,
       Value<String?>? calendarId,
+      Value<int?>? deletedAt,
       Value<int>? rowid}) {
     return AgendaEventTableCompanion(
       id: id ?? this.id,
@@ -4948,8 +5016,10 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
       startTime: startTime ?? this.startTime,
       endTime: endTime ?? this.endTime,
       source: source ?? this.source,
+      category: category ?? this.category,
       externalEventId: externalEventId ?? this.externalEventId,
       calendarId: calendarId ?? this.calendarId,
+      deletedAt: deletedAt ?? this.deletedAt,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -4975,11 +5045,17 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
     if (source.present) {
       map['source'] = Variable<String>(source.value);
     }
+    if (category.present) {
+      map['category'] = Variable<String>(category.value);
+    }
     if (externalEventId.present) {
       map['external_event_id'] = Variable<String>(externalEventId.value);
     }
     if (calendarId.present) {
       map['calendar_id'] = Variable<String>(calendarId.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
     }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
@@ -4996,8 +5072,10 @@ class AgendaEventTableCompanion extends UpdateCompanion<AgendaEventEntry> {
           ..write('startTime: $startTime, ')
           ..write('endTime: $endTime, ')
           ..write('source: $source, ')
+          ..write('category: $category, ')
           ..write('externalEventId: $externalEventId, ')
           ..write('calendarId: $calendarId, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -7561,8 +7639,10 @@ typedef $$AgendaEventTableTableCreateCompanionBuilder
   required int startTime,
   required int endTime,
   Value<String> source,
+  Value<String?> category,
   Value<String?> externalEventId,
   Value<String?> calendarId,
+  Value<int?> deletedAt,
   Value<int> rowid,
 });
 typedef $$AgendaEventTableTableUpdateCompanionBuilder
@@ -7573,8 +7653,10 @@ typedef $$AgendaEventTableTableUpdateCompanionBuilder
   Value<int> startTime,
   Value<int> endTime,
   Value<String> source,
+  Value<String?> category,
   Value<String?> externalEventId,
   Value<String?> calendarId,
+  Value<int?> deletedAt,
   Value<int> rowid,
 });
 
@@ -7605,12 +7687,18 @@ class $$AgendaEventTableTableFilterComposer
   ColumnFilters<String> get source => $composableBuilder(
       column: $table.source, builder: (column) => ColumnFilters(column));
 
+  ColumnFilters<String> get category => $composableBuilder(
+      column: $table.category, builder: (column) => ColumnFilters(column));
+
   ColumnFilters<String> get externalEventId => $composableBuilder(
       column: $table.externalEventId,
       builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get calendarId => $composableBuilder(
       column: $table.calendarId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnFilters(column));
 }
 
 class $$AgendaEventTableTableOrderingComposer
@@ -7640,12 +7728,18 @@ class $$AgendaEventTableTableOrderingComposer
   ColumnOrderings<String> get source => $composableBuilder(
       column: $table.source, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get category => $composableBuilder(
+      column: $table.category, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get externalEventId => $composableBuilder(
       column: $table.externalEventId,
       builder: (column) => ColumnOrderings(column));
 
   ColumnOrderings<String> get calendarId => $composableBuilder(
       column: $table.calendarId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+      column: $table.deletedAt, builder: (column) => ColumnOrderings(column));
 }
 
 class $$AgendaEventTableTableAnnotationComposer
@@ -7675,11 +7769,17 @@ class $$AgendaEventTableTableAnnotationComposer
   GeneratedColumn<String> get source =>
       $composableBuilder(column: $table.source, builder: (column) => column);
 
+  GeneratedColumn<String> get category =>
+      $composableBuilder(column: $table.category, builder: (column) => column);
+
   GeneratedColumn<String> get externalEventId => $composableBuilder(
       column: $table.externalEventId, builder: (column) => column);
 
   GeneratedColumn<String> get calendarId => $composableBuilder(
       column: $table.calendarId, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 }
 
 class $$AgendaEventTableTableTableManager extends RootTableManager<
@@ -7715,8 +7815,10 @@ class $$AgendaEventTableTableTableManager extends RootTableManager<
             Value<int> startTime = const Value.absent(),
             Value<int> endTime = const Value.absent(),
             Value<String> source = const Value.absent(),
+            Value<String?> category = const Value.absent(),
             Value<String?> externalEventId = const Value.absent(),
             Value<String?> calendarId = const Value.absent(),
+            Value<int?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               AgendaEventTableCompanion(
@@ -7726,8 +7828,10 @@ class $$AgendaEventTableTableTableManager extends RootTableManager<
             startTime: startTime,
             endTime: endTime,
             source: source,
+            category: category,
             externalEventId: externalEventId,
             calendarId: calendarId,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -7737,8 +7841,10 @@ class $$AgendaEventTableTableTableManager extends RootTableManager<
             required int startTime,
             required int endTime,
             Value<String> source = const Value.absent(),
+            Value<String?> category = const Value.absent(),
             Value<String?> externalEventId = const Value.absent(),
             Value<String?> calendarId = const Value.absent(),
+            Value<int?> deletedAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               AgendaEventTableCompanion.insert(
@@ -7748,8 +7854,10 @@ class $$AgendaEventTableTableTableManager extends RootTableManager<
             startTime: startTime,
             endTime: endTime,
             source: source,
+            category: category,
             externalEventId: externalEventId,
             calendarId: calendarId,
+            deletedAt: deletedAt,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0

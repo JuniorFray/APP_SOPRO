@@ -18,6 +18,7 @@ class CalendarEvent {
   final EventSource source;
   final String? calendarName;
   final Color? color;
+  final String? category;
 
   CalendarEvent({
     required this.id,
@@ -28,5 +29,6 @@ class CalendarEvent {
     required this.source,
     this.calendarName,
     this.color,
+    this.category,
   });
 }

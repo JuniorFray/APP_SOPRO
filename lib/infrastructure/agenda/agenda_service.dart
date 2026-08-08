@@ -58,31 +58,60 @@ class AgendaService {
       debugPrint('Erro ao ler calendário nativo: $e');
     }
 
-    // 2. Obter eventos exclusivos do Sopro (Drift)
+    // 2. Obter eventos exclusivos do Sopro (Drift). Datas gravadas em SEGUNDOS
+    //    (convenção do banco) → *1000 para reconstruir o DateTime.
     try {
       final soproEvents = await _agendaDao.getEventsInRange(
-        start.millisecondsSinceEpoch,
-        end.millisecondsSinceEpoch,
+        start.millisecondsSinceEpoch ~/ 1000,
+        end.millisecondsSinceEpoch ~/ 1000,
       );
-      
+
       for (final s in soproEvents) {
         allEvents.add(CalendarEvent(
           id: s.id,
           title: s.title,
           description: s.description,
-          startTime: DateTime.fromMillisecondsSinceEpoch(s.startTime),
-          endTime: DateTime.fromMillisecondsSinceEpoch(s.endTime),
+          startTime: DateTime.fromMillisecondsSinceEpoch(s.startTime * 1000),
+          endTime: DateTime.fromMillisecondsSinceEpoch(s.endTime * 1000),
           source: s.source == 'ai_suggestion' ? EventSource.soproAi : EventSource.sopro,
+          category: s.category,
         ));
       }
     } catch (e) {
       debugPrint('Erro ao ler agenda local Sopro: $e');
     }
-    
+
     // Sort chronologically
     allEvents.sort((a, b) => a.startTime.compareTo(b.startTime));
 
-    return allEvents;
+    // Deduplicação: um mesmo compromisso pode aparecer duas vezes (ex.: evento do
+    // Google importado que o usuário recriou como evento Sopro). Chave: mesmo
+    // título (normalizado) + mesmo minuto de início. Em colisão, mantém a versão
+    // Sopro (editável) sobre a nativa (read-only).
+    // (externalEventId ainda não é populado nos eventos Sopro; quando for, entra
+    // como chave preferencial aqui.)
+    return _dedup(allEvents);
+  }
+
+  List<CalendarEvent> _dedup(List<CalendarEvent> events) {
+    final Map<String, CalendarEvent> byKey = {};
+    for (final e in events) {
+      final startMinute = e.startTime.millisecondsSinceEpoch ~/ 60000;
+      final key = '${e.title.trim().toLowerCase()}|$startMinute';
+      final existing = byKey[key];
+      if (existing == null) {
+        byKey[key] = e;
+      } else {
+        final existingIsSopro =
+            existing.source == EventSource.sopro || existing.source == EventSource.soproAi;
+        final currentIsSopro =
+            e.source == EventSource.sopro || e.source == EventSource.soproAi;
+        if (currentIsSopro && !existingIsSopro) byKey[key] = e;
+      }
+    }
+    final result = byKey.values.toList()
+      ..sort((a, b) => a.startTime.compareTo(b.startTime));
+    return result;
   }
 
   EventSource _determineSourceFromCalendarName(String accountName, String calendarName) {

@@ -102,7 +102,7 @@ class SoproDatabase extends _$SoproDatabase {
   SoproDatabase.forTesting(super.connection);
 
   @override
-  int get schemaVersion => 19;
+  int get schemaVersion => 20;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -229,6 +229,21 @@ class SoproDatabase extends _$SoproDatabase {
             await m.addColumn(environments, environments.ownerId);
             await m.addColumn(triggers, triggers.ownerId);
             await m.addColumn(shoppingListItems, shoppingListItems.ownerId);
+          }
+          if (from < 20) {
+            // v20 (Agenda hardening): categoria + soft delete + timestamps em
+            // segundos. A tabela nasceu (v18) gravando start/end em MILISSEGUNDOS
+            // e com hard delete — divergente da convenção do resto do banco.
+            // Corrige agora para não repetir o bug ms→s (já visto no v17) quando a
+            // Agenda entrar no sync/compartilhamento.
+            await m.addColumn(agendaEventTable, agendaEventTable.category);
+            await m.addColumn(agendaEventTable, agendaEventTable.deletedAt);
+            // ms→s: divide só o que está inflado (guard > 1e11; segundos válidos
+            // até ~ano 5138). Idempotente — não afeta linhas já em segundos.
+            await customStatement(
+                'UPDATE agenda_event_table SET start_time = start_time / 1000 WHERE start_time > 100000000000');
+            await customStatement(
+                'UPDATE agenda_event_table SET end_time = end_time / 1000 WHERE end_time > 100000000000');
           }
         },
       );

@@ -1,8 +1,13 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../infrastructure/agenda/agenda_service.dart';
 import '../../domain/models/calendar_event.dart';
 import 'database_provider.dart';
+
+// Chave de persistência das fontes ativas (toggles do sheet de contas). Guarda a
+// lista de EventSource.name habilitados; ausente = todas ligadas (default).
+const _kEnabledSourcesPref = 'agenda_enabled_sources';
 
 final agendaServiceProvider = Provider<AgendaService>((ref) {
   final db = ref.watch(databaseProvider);
@@ -27,6 +32,7 @@ class AgendaState {
       EventSource.google,
       EventSource.apple,
       EventSource.outlook,
+      EventSource.other,
     },
   });
 
@@ -54,7 +60,36 @@ class AgendaNotifier extends StateNotifier<AgendaState> {
       : super(AgendaState(
           currentMonth: DateTime.now(),
         )) {
+    _restoreAndLoad();
+  }
+
+  // Restaura as fontes ativas persistidas ANTES do primeiro load (evita um flash
+  // com fontes que o usuário havia desligado). Persistência local no próprio
+  // notifier — não no AppInitializer — para não instanciar o provider cedo no boot
+  // (o que dispararia o pedido de permissão de calendário fora de hora).
+  Future<void> _restoreAndLoad() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getStringList(_kEnabledSourcesPref);
+      if (saved != null) {
+        final restored = <EventSource>{
+          for (final e in EventSource.values)
+            if (saved.contains(e.name)) e,
+        };
+        state = state.copyWith(enabledSources: restored);
+      }
+    } catch (_) {/* prefs indisponível — mantém o default (todas ligadas) */}
     loadEventsForMonth(DateTime.now());
+  }
+
+  Future<void> _persistEnabledSources(Set<EventSource> sources) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(
+        _kEnabledSourcesPref,
+        sources.map((e) => e.name).toList(),
+      );
+    } catch (_) {/* best-effort: falha de persistência não quebra o toggle */}
   }
 
   Future<void> loadEventsForMonth(DateTime month) async {
@@ -99,6 +134,7 @@ class AgendaNotifier extends StateNotifier<AgendaState> {
       current.add(source);
     }
     state = state.copyWith(enabledSources: current);
+    _persistEnabledSources(current); // fire-and-forget: sobrevive ao restart
     loadEventsForMonth(state.currentMonth);
   }
   

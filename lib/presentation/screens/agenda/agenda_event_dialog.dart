@@ -5,13 +5,18 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../data/database/sopro_database.dart';
+import '../../../domain/models/calendar_event.dart';
 import '../../providers/agenda_providers.dart';
 import '../../providers/database_provider.dart';
 
 class AgendaEventDialog extends ConsumerStatefulWidget {
   final DateTime initialDate;
 
-  const AgendaEventDialog({super.key, required this.initialDate});
+  // Evento a editar. Null = criação de um novo evento. Quando preenchido, o
+  // formulário é pré-populado e o salvar faz UPDATE (mesmo id) em vez de INSERT.
+  final CalendarEvent? existingEvent;
+
+  const AgendaEventDialog({super.key, required this.initialDate, this.existingEvent});
 
   @override
   ConsumerState<AgendaEventDialog> createState() => _AgendaEventDialogState();
@@ -28,10 +33,18 @@ class _AgendaEventDialogState extends ConsumerState<AgendaEventDialog> {
   @override
   void initState() {
     super.initState();
-    _titleController = TextEditingController();
-    _descriptionController = TextEditingController();
-    _startTime = TimeOfDay.now();
-    _endTime = TimeOfDay(hour: (_startTime.hour + 1) % 24, minute: _startTime.minute);
+    final e = widget.existingEvent;
+    _titleController = TextEditingController(text: e?.title ?? '');
+    _descriptionController = TextEditingController(text: e?.description ?? '');
+    if (e != null) {
+      // Modo edição: pré-popula horários e categoria do evento existente.
+      _startTime = TimeOfDay.fromDateTime(e.startTime);
+      _endTime = TimeOfDay.fromDateTime(e.endTime);
+      if (e.category != null) _category = e.category!;
+    } else {
+      _startTime = TimeOfDay.now();
+      _endTime = TimeOfDay(hour: (_startTime.hour + 1) % 24, minute: _startTime.minute);
+    }
   }
 
   @override
@@ -60,27 +73,62 @@ class _AgendaEventDialogState extends ConsumerState<AgendaEventDialog> {
       _endTime.minute,
     );
 
+    // Validação: fim precisa ser posterior ao início (mesmo dia).
+    if (!endDateTime.isAfter(startDateTime)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('O horário de término deve ser depois do início.')),
+      );
+      return;
+    }
+
+    // Datas em SEGUNDOS (convenção do banco).
+    final startSec = startDateTime.millisecondsSinceEpoch ~/ 1000;
+    final endSec = endDateTime.millisecondsSinceEpoch ~/ 1000;
+    final desc = _descriptionController.text.trim();
+    final descValue = Value(desc.isEmpty ? null : desc);
+
     final db = ref.read(databaseProvider);
     final dao = db.agendaEventDao;
-    final id = const Uuid().v4();
+    final existing = widget.existingEvent;
 
-    await dao.insertEvent(
-      AgendaEventTableCompanion.insert(
-        id: id,
-        title: _titleController.text.trim(),
-        description: Value(_descriptionController.text.trim().isEmpty ? null : _descriptionController.text.trim()),
-        startTime: startDateTime.millisecondsSinceEpoch,
-        endTime: endDateTime.millisecondsSinceEpoch,
-        source: const Value('sopro'),
-      ),
-    );
+    if (existing != null) {
+      // Edição: UPDATE no MESMO id — não gera duplicata. Preserva a origem
+      // (sopro/ai_suggestion) do evento editado.
+      final sourceStr = existing.source == EventSource.soproAi ? 'ai_suggestion' : 'sopro';
+      await dao.updateEvent(
+        AgendaEventTableCompanion(
+          id: Value(existing.id),
+          title: Value(_titleController.text.trim()),
+          description: descValue,
+          startTime: Value(startSec),
+          endTime: Value(endSec),
+          source: Value(sourceStr),
+          category: Value(_category),
+        ),
+      );
+    } else {
+      // Criação: novo UUID.
+      await dao.insertEvent(
+        AgendaEventTableCompanion.insert(
+          id: const Uuid().v4(),
+          title: _titleController.text.trim(),
+          description: descValue,
+          startTime: startSec,
+          endTime: endSec,
+          source: const Value('sopro'),
+          category: Value(_category),
+        ),
+      );
+    }
 
     ref.read(agendaProvider.notifier).loadEventsForMonth(widget.initialDate);
 
     if (mounted) {
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Evento adicionado à Agenda Sopro!')),
+        SnackBar(content: Text(existing != null
+            ? 'Evento atualizado!'
+            : 'Evento adicionado à Agenda Sopro!')),
       );
     }
   }
@@ -102,9 +150,9 @@ class _AgendaEventDialogState extends ConsumerState<AgendaEventDialog> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      'Novo Evento Sopro',
-                      style: TextStyle(color: AppColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
+                    Text(
+                      widget.existingEvent != null ? 'Editar Evento' : 'Novo Evento Sopro',
+                      style: const TextStyle(color: AppColors.textPrimary, fontSize: 18, fontWeight: FontWeight.bold),
                     ),
                     IconButton(
                       icon: const Icon(Icons.close, color: AppColors.textSecondary),
